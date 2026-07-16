@@ -1,0 +1,1036 @@
+{
+  "meta": {
+    "title": "HMDA Modified Loan/Application Register (MLAR) -- Schema Catalog",
+    "version": "2025",
+    "generatedAt": "2026-07-16",
+    "source": "CFPB Home Mortgage Disclosure Act (HMDA) public data",
+    "fileFormat": "pipe-delimited (|) flat file",
+    "totalFields": 85,
+    "totalRecords": "~13.5M",
+    "description": "Schema catalog for the HMDA MLAR dataset. Contains field-level data contracts, HMDA code definitions, and 2 real sample records (one originated loan, one denied application)."
+  },
+  "entities": {
+    "MortgageLoanApplication": {
+      "description": "Individual mortgage loan application or origination record filed under HMDA",
+      "source": "CFPB/FFIEC",
+      "fieldGroups": ["loan_identification", "property_location", "applicant_demographics", "co_applicant_demographics", "financial", "loan_features", "processing", "automated_underwriting"],
+      "dataContract": {
+        "required": [
+          "activity_year", "lei", "loan_type", "loan_purpose", "preapproval",
+          "construction_method", "occupancy_type", "loan_amount", "action_taken",
+          "applicant_ethnicity_1", "co_applicant_ethnicity_1",
+          "applicant_ethnicity_observed", "co_applicant_ethnicity_observed",
+          "applicant_race_1", "co_applicant_race_1",
+          "applicant_race_observed", "co_applicant_race_observed",
+          "applicant_sex", "co_applicant_sex",
+          "applicant_sex_observed", "co_applicant_sex_observed",
+          "applicant_age", "applicant_age_above_62",
+          "co_applicant_age", "co_applicant_age_above_62",
+          "hoepa_status", "lien_status",
+          "applicant_credit_scoring_model", "co_applicant_credit_scoring_model",
+          "denial_reason_1", "loan_term",
+          "balloon_payment", "interest_only_payment",
+          "negative_amortization", "other_non_amortizing_features",
+          "manufactured_home_secured_property_type", "manufactured_home_land_property_interest",
+          "total_units", "submission_of_application", "initially_payable_to_institution",
+          "aus_1", "reverse_mortgage", "open_end_line_of_credit", "business_or_commercial_purpose"
+        ],
+        "fields": {
+          "activity_year": {
+            "type": "integer",
+            "description": "Calendar year of data submission",
+            "constraints": ["4-digit year"],
+            "group": "loan_identification"
+          },
+          "lei": {
+            "type": "string",
+            "format": "LEI",
+            "description": "Legal Entity Identifier of the reporting institution",
+            "constraints": ["20-character alphanumeric ISO 17442"],
+            "group": "loan_identification"
+          },
+          "loan_type": {
+            "type": "enum",
+            "description": "Type of loan or application",
+            "enum": {
+              "1": "Conventional",
+              "2": "FHA",
+              "3": "VA",
+              "4": "USDA/RHS"
+            },
+            "group": "loan_identification"
+          },
+          "loan_purpose": {
+            "type": "enum",
+            "description": "Purpose of the loan",
+            "enum": {
+              "1": "Home purchase",
+              "2": "Home improvement",
+              "31": "Refinancing",
+              "32": "Cash-out refinancing",
+              "4": "Other purpose",
+              "5": "Not applicable"
+            },
+            "group": "loan_identification"
+          },
+          "preapproval": {
+            "type": "enum",
+            "description": "Whether preapproval was requested",
+            "enum": {
+              "1": "Preapproval requested",
+              "2": "Preapproval not requested"
+            },
+            "group": "loan_identification"
+          },
+          "construction_method": {
+            "type": "enum",
+            "description": "Construction method of the dwelling",
+            "enum": {
+              "1": "Site-built",
+              "2": "Manufactured home"
+            },
+            "group": "loan_identification"
+          },
+          "occupancy_type": {
+            "type": "enum",
+            "description": "Occupancy type of the property",
+            "enum": {
+              "1": "Principal residence",
+              "2": "Second residence",
+              "3": "Investment property"
+            },
+            "group": "loan_identification"
+          },
+          "loan_amount": {
+            "type": "integer",
+            "description": "Loan amount in thousands of dollars (rounded to nearest $1,000)",
+            "constraints": ["positive integer", "in whole dollars"],
+            "group": "financial"
+          },
+          "action_taken": {
+            "type": "enum",
+            "description": "Action taken on the application",
+            "enum": {
+              "1": "Loan originated",
+              "2": "Application approved but not accepted",
+              "3": "Application denied",
+              "4": "Application withdrawn by applicant",
+              "5": "File closed for incompleteness",
+              "6": "Purchased loan",
+              "7": "Preapproval request denied",
+              "8": "Preapproval request approved but not accepted"
+            },
+            "group": "processing"
+          },
+          "state_code": {
+            "type": "string",
+            "format": "US state abbreviation",
+            "description": "Two-letter state code where property is located",
+            "constraints": ["2-character USPS abbreviation", "NA if not applicable"],
+            "group": "property_location"
+          },
+          "county_code": {
+            "type": "string",
+            "format": "FIPS",
+            "description": "Five-digit FIPS county code",
+            "constraints": ["5-digit numeric string", "NA if not applicable"],
+            "group": "property_location"
+          },
+          "census_tract": {
+            "type": "string",
+            "format": "FIPS census tract",
+            "description": "Eleven-digit census tract number (state + county + tract)",
+            "constraints": ["11-digit numeric string", "NA if not applicable"],
+            "group": "property_location"
+          },
+          "applicant_ethnicity_1": {
+            "type": "enum",
+            "description": "Ethnicity of applicant (primary)",
+            "enum": {
+              "1": "Hispanic or Latino",
+              "11": "Mexican",
+              "12": "Puerto Rican",
+              "13": "Cuban",
+              "14": "Other Hispanic or Latino",
+              "2": "Not Hispanic or Latino",
+              "3": "Information not provided by applicant",
+              "4": "Not applicable"
+            },
+            "group": "applicant_demographics"
+          },
+          "applicant_ethnicity_2": {
+            "type": "enum",
+            "description": "Ethnicity of applicant (secondary)",
+            "enum": "Same as applicant_ethnicity_1 sub-codes; blank if not collected",
+            "constraints": ["blank if single ethnicity reported"],
+            "group": "applicant_demographics"
+          },
+          "applicant_ethnicity_3": {
+            "type": "enum",
+            "description": "Ethnicity of applicant (tertiary)",
+            "enum": "Same as applicant_ethnicity_1 sub-codes; blank if not collected",
+            "group": "applicant_demographics"
+          },
+          "applicant_ethnicity_4": {
+            "type": "enum",
+            "description": "Ethnicity of applicant (4th)",
+            "enum": "Same as applicant_ethnicity_1 sub-codes; blank if not collected",
+            "group": "applicant_demographics"
+          },
+          "applicant_ethnicity_5": {
+            "type": "enum",
+            "description": "Ethnicity of applicant (5th)",
+            "enum": "Same as applicant_ethnicity_1 sub-codes; blank if not collected",
+            "group": "applicant_demographics"
+          },
+          "co_applicant_ethnicity_1": {
+            "type": "enum",
+            "description": "Ethnicity of co-applicant (primary)",
+            "enum": {
+              "1": "Hispanic or Latino",
+              "11": "Mexican",
+              "12": "Puerto Rican",
+              "13": "Cuban",
+              "14": "Other Hispanic or Latino",
+              "2": "Not Hispanic or Latino",
+              "3": "Information not provided by applicant",
+              "4": "Not applicable",
+              "5": "No co-applicant"
+            },
+            "group": "co_applicant_demographics"
+          },
+          "co_applicant_ethnicity_2": {
+            "type": "enum",
+            "description": "Ethnicity of co-applicant (secondary)",
+            "enum": "Same as co_applicant_ethnicity_1 sub-codes; blank if not collected",
+            "group": "co_applicant_demographics"
+          },
+          "co_applicant_ethnicity_3": {
+            "type": "enum",
+            "description": "Ethnicity of co-applicant (tertiary)",
+            "enum": "Same as co_applicant_ethnicity_1 sub-codes; blank if not collected",
+            "group": "co_applicant_demographics"
+          },
+          "co_applicant_ethnicity_4": {
+            "type": "enum",
+            "description": "Ethnicity of co-applicant (4th)",
+            "enum": "Same as co_applicant_ethnicity_1 sub-codes; blank if not collected",
+            "group": "co_applicant_demographics"
+          },
+          "co_applicant_ethnicity_5": {
+            "type": "enum",
+            "description": "Ethnicity of co-applicant (5th)",
+            "enum": "Same as co_applicant_ethnicity_1 sub-codes; blank if not collected",
+            "group": "co_applicant_demographics"
+          },
+          "applicant_ethnicity_observed": {
+            "type": "enum",
+            "description": "Whether applicant ethnicity was collected on basis of visual observation or surname",
+            "enum": {
+              "1": "Collected on the basis of visual observation or surname",
+              "2": "Not collected on the basis of visual observation or surname",
+              "3": "Not applicable"
+            },
+            "group": "applicant_demographics"
+          },
+          "co_applicant_ethnicity_observed": {
+            "type": "enum",
+            "description": "Whether co-applicant ethnicity was collected on basis of visual observation or surname",
+            "enum": {
+              "1": "Collected on the basis of visual observation or surname",
+              "2": "Not collected on the basis of visual observation or surname",
+              "3": "Not applicable",
+              "4": "No co-applicant"
+            },
+            "group": "co_applicant_demographics"
+          },
+          "applicant_race_1": {
+            "type": "enum",
+            "description": "Race of applicant (primary)",
+            "enum": {
+              "1": "American Indian or Alaska Native",
+              "2": "Asian",
+              "21": "Asian Indian",
+              "22": "Chinese",
+              "23": "Filipino",
+              "24": "Japanese",
+              "25": "Korean",
+              "26": "Vietnamese",
+              "27": "Other Asian",
+              "3": "Black or African American",
+              "4": "Native Hawaiian or Other Pacific Islander",
+              "41": "Native Hawaiian",
+              "42": "Guamanian or Chamorro",
+              "43": "Samoan",
+              "44": "Other Pacific Islander",
+              "5": "White",
+              "6": "Information not provided by applicant",
+              "7": "Not applicable"
+            },
+            "group": "applicant_demographics"
+          },
+          "applicant_race_2": {
+            "type": "enum",
+            "description": "Race of applicant (secondary)",
+            "enum": "Same as applicant_race_1; blank if single race",
+            "group": "applicant_demographics"
+          },
+          "applicant_race_3": {
+            "type": "enum",
+            "description": "Race of applicant (tertiary)",
+            "enum": "Same as applicant_race_1; blank if not collected",
+            "group": "applicant_demographics"
+          },
+          "applicant_race_4": {
+            "type": "enum",
+            "description": "Race of applicant (4th)",
+            "enum": "Same as applicant_race_1; blank if not collected",
+            "group": "applicant_demographics"
+          },
+          "applicant_race_5": {
+            "type": "enum",
+            "description": "Race of applicant (5th)",
+            "enum": "Same as applicant_race_1; blank if not collected",
+            "group": "applicant_demographics"
+          },
+          "co_applicant_race_1": {
+            "type": "enum",
+            "description": "Race of co-applicant (primary)",
+            "enum": {
+              "1": "American Indian or Alaska Native",
+              "2": "Asian",
+              "21": "Asian Indian",
+              "22": "Chinese",
+              "23": "Filipino",
+              "24": "Japanese",
+              "25": "Korean",
+              "26": "Vietnamese",
+              "27": "Other Asian",
+              "3": "Black or African American",
+              "4": "Native Hawaiian or Other Pacific Islander",
+              "41": "Native Hawaiian",
+              "42": "Guamanian or Chamorro",
+              "43": "Samoan",
+              "44": "Other Pacific Islander",
+              "5": "White",
+              "6": "Information not provided by applicant",
+              "7": "Not applicable",
+              "8": "No co-applicant"
+            },
+            "group": "co_applicant_demographics"
+          },
+          "co_applicant_race_2": {
+            "type": "enum",
+            "description": "Race of co-applicant (secondary)",
+            "enum": "Same as co_applicant_race_1; blank if single race",
+            "group": "co_applicant_demographics"
+          },
+          "co_applicant_race_3": {
+            "type": "enum",
+            "description": "Race of co-applicant (tertiary)",
+            "enum": "Same as co_applicant_race_1; blank if not collected",
+            "group": "co_applicant_demographics"
+          },
+          "co_applicant_race_4": {
+            "type": "enum",
+            "description": "Race of co-applicant (4th)",
+            "enum": "Same as co_applicant_race_1; blank if not collected",
+            "group": "co_applicant_demographics"
+          },
+          "co_applicant_race_5": {
+            "type": "enum",
+            "description": "Race of co-applicant (5th)",
+            "enum": "Same as co_applicant_race_1; blank if not collected",
+            "group": "co_applicant_demographics"
+          },
+          "applicant_race_observed": {
+            "type": "enum",
+            "description": "Whether applicant race was collected on basis of visual observation or surname",
+            "enum": {
+              "1": "Collected on the basis of visual observation or surname",
+              "2": "Not collected on the basis of visual observation or surname",
+              "3": "Not applicable"
+            },
+            "group": "applicant_demographics"
+          },
+          "co_applicant_race_observed": {
+            "type": "enum",
+            "description": "Whether co-applicant race was collected on basis of visual observation or surname",
+            "enum": {
+              "1": "Collected on the basis of visual observation or surname",
+              "2": "Not collected on the basis of visual observation or surname",
+              "3": "Not applicable",
+              "4": "No co-applicant"
+            },
+            "group": "co_applicant_demographics"
+          },
+          "applicant_sex": {
+            "type": "enum",
+            "description": "Sex of the applicant",
+            "enum": {
+              "1": "Male",
+              "2": "Female",
+              "3": "Information not provided by applicant",
+              "4": "Not applicable",
+              "6": "Applicant selected both male and female"
+            },
+            "group": "applicant_demographics"
+          },
+          "co_applicant_sex": {
+            "type": "enum",
+            "description": "Sex of the co-applicant",
+            "enum": {
+              "1": "Male",
+              "2": "Female",
+              "3": "Information not provided by applicant",
+              "4": "Not applicable",
+              "5": "No co-applicant",
+              "6": "Co-applicant selected both male and female"
+            },
+            "group": "co_applicant_demographics"
+          },
+          "applicant_sex_observed": {
+            "type": "enum",
+            "description": "Whether applicant sex was collected on basis of visual observation or surname",
+            "enum": {
+              "1": "Collected on the basis of visual observation or surname",
+              "2": "Not collected on the basis of visual observation or surname",
+              "3": "Not applicable"
+            },
+            "group": "applicant_demographics"
+          },
+          "co_applicant_sex_observed": {
+            "type": "enum",
+            "description": "Whether co-applicant sex was collected on basis of visual observation or surname",
+            "enum": {
+              "1": "Collected on the basis of visual observation or surname",
+              "2": "Not collected on the basis of visual observation or surname",
+              "3": "Not applicable",
+              "4": "No co-applicant"
+            },
+            "group": "co_applicant_demographics"
+          },
+          "applicant_age": {
+            "type": "string",
+            "format": "age-bracket",
+            "description": "Age of the applicant",
+            "enum": {
+              "<25": "Under 25",
+              "25-34": "25 to 34",
+              "35-44": "35 to 44",
+              "45-54": "45 to 54",
+              "55-64": "55 to 64",
+              "65-74": "65 to 74",
+              ">74": "Over 74",
+              "8888": "Not applicable"
+            },
+            "group": "applicant_demographics"
+          },
+          "applicant_age_above_62": {
+            "type": "enum",
+            "description": "Whether applicant is 62 or older",
+            "enum": {
+              "Yes": "62 or older",
+              "No": "Under 62",
+              "NA": "Not applicable"
+            },
+            "group": "applicant_demographics"
+          },
+          "co_applicant_age": {
+            "type": "string",
+            "format": "age-bracket",
+            "description": "Age of the co-applicant",
+            "enum": {
+              "<25": "Under 25",
+              "25-34": "25 to 34",
+              "35-44": "35 to 44",
+              "45-54": "45 to 54",
+              "55-64": "55 to 64",
+              "65-74": "65 to 74",
+              ">74": "Over 74",
+              "8888": "Not applicable",
+              "9999": "No co-applicant"
+            },
+            "group": "co_applicant_demographics"
+          },
+          "co_applicant_age_above_62": {
+            "type": "enum",
+            "description": "Whether co-applicant is 62 or older",
+            "enum": {
+              "Yes": "62 or older",
+              "No": "Under 62",
+              "NA": "Not applicable or no co-applicant"
+            },
+            "group": "co_applicant_demographics"
+          },
+          "income": {
+            "type": "integer",
+            "description": "Gross annual income in thousands of dollars relied on in making credit decision",
+            "constraints": ["in $1,000s", "NA if not applicable", "can be negative or zero"],
+            "group": "financial"
+          },
+          "purchaser_type": {
+            "type": "enum",
+            "description": "Type of entity purchasing the loan",
+            "enum": {
+              "0": "Not applicable",
+              "1": "Fannie Mae",
+              "2": "Ginnie Mae",
+              "3": "Freddie Mac",
+              "4": "Farmer Mac",
+              "5": "Private securitizer",
+              "6": "Commercial bank, savings bank, or savings association",
+              "71": "Credit union, mortgage company, or finance company",
+              "72": "Life insurance company",
+              "8": "Affiliate institution",
+              "9": "Other type of purchaser"
+            },
+            "group": "processing"
+          },
+          "rate_spread": {
+            "type": "decimal",
+            "description": "Difference between APR and average prime offer rate (percentage points)",
+            "constraints": ["decimal with up to 5 places", "NA if not applicable", "can be negative"],
+            "group": "financial"
+          },
+          "hoepa_status": {
+            "type": "enum",
+            "description": "Whether the loan is a high-cost mortgage under HOEPA",
+            "enum": {
+              "1": "High-cost mortgage",
+              "2": "Not a high-cost mortgage",
+              "3": "Not applicable"
+            },
+            "group": "loan_features"
+          },
+          "lien_status": {
+            "type": "enum",
+            "description": "Lien status of the property",
+            "enum": {
+              "1": "Secured by a first lien",
+              "2": "Secured by a subordinate lien"
+            },
+            "group": "loan_features"
+          },
+          "applicant_credit_scoring_model": {
+            "type": "enum",
+            "description": "Credit scoring model used for the applicant",
+            "enum": {
+              "1": "Equifax Beacon 5.0",
+              "2": "Experian Fair Isaac",
+              "3": "FICO Risk Score Classic 04",
+              "4": "FICO Risk Score Classic 98",
+              "5": "VantageScore 2.0",
+              "6": "VantageScore 3.0",
+              "7": "More than one credit scoring model",
+              "8": "Other credit scoring model",
+              "9": "Not applicable",
+              "1111": "Exempt",
+              "11": "FICO Score 10",
+              "12": "FICO Score 10T",
+              "13": "FICO Score XD",
+              "14": "VantageScore 4.0",
+              "15": "VantageScore Credit Score"
+            },
+            "group": "applicant_demographics"
+          },
+          "co_applicant_credit_scoring_model": {
+            "type": "enum",
+            "description": "Credit scoring model used for the co-applicant",
+            "enum": {
+              "1": "Equifax Beacon 5.0",
+              "2": "Experian Fair Isaac",
+              "3": "FICO Risk Score Classic 04",
+              "4": "FICO Risk Score Classic 98",
+              "5": "VantageScore 2.0",
+              "6": "VantageScore 3.0",
+              "7": "More than one credit scoring model",
+              "8": "Other credit scoring model",
+              "9": "Not applicable",
+              "10": "No co-applicant",
+              "1111": "Exempt",
+              "11": "FICO Score 10",
+              "12": "FICO Score 10T",
+              "14": "VantageScore 4.0",
+              "15": "VantageScore Credit Score"
+            },
+            "group": "co_applicant_demographics"
+          },
+          "denial_reason_1": {
+            "type": "enum",
+            "description": "Primary reason for denial",
+            "enum": {
+              "1": "Debt-to-income ratio",
+              "2": "Employment history",
+              "3": "Credit history",
+              "4": "Collateral",
+              "5": "Insufficient cash (downpayment, closing costs)",
+              "6": "Unverifiable information",
+              "7": "Credit application incomplete",
+              "8": "Mortgage insurance denied",
+              "9": "Other",
+              "10": "Not applicable",
+              "1111": "Exempt"
+            },
+            "group": "processing"
+          },
+          "denial_reason_2": {
+            "type": "enum",
+            "description": "Secondary reason for denial",
+            "enum": "Same as denial_reason_1; blank if not applicable",
+            "group": "processing"
+          },
+          "denial_reason_3": {
+            "type": "enum",
+            "description": "Tertiary reason for denial",
+            "enum": "Same as denial_reason_1; blank if not applicable",
+            "group": "processing"
+          },
+          "denial_reason_4": {
+            "type": "enum",
+            "description": "Fourth reason for denial",
+            "enum": "Same as denial_reason_1; blank if not applicable",
+            "group": "processing"
+          },
+          "total_loan_costs": {
+            "type": "decimal",
+            "description": "Total loan costs or total points and fees charged in dollar amount",
+            "constraints": ["decimal to 2 places", "NA if not applicable", "Exempt if exempt"],
+            "group": "financial"
+          },
+          "total_points_and_fees": {
+            "type": "decimal",
+            "description": "Total points and fees charged in dollar amount",
+            "constraints": ["decimal to 2 places", "NA if not applicable", "Exempt if exempt"],
+            "group": "financial"
+          },
+          "origination_charges": {
+            "type": "decimal",
+            "description": "Origination charges in dollar amount",
+            "constraints": ["decimal to 2 places", "NA if not applicable", "Exempt if exempt"],
+            "group": "financial"
+          },
+          "discount_points": {
+            "type": "decimal",
+            "description": "Discount points in dollar amount",
+            "constraints": ["decimal to 2 places", "NA if not applicable", "blank if none", "Exempt if exempt"],
+            "group": "financial"
+          },
+          "lender_credits": {
+            "type": "decimal",
+            "description": "Lender credits in dollar amount",
+            "constraints": ["decimal to 2 places", "NA if not applicable", "blank if none", "Exempt if exempt"],
+            "group": "financial"
+          },
+          "interest_rate": {
+            "type": "decimal",
+            "description": "Contract interest rate at closing or approval",
+            "constraints": ["percentage with up to 5 decimal places", "NA if not applicable", "Exempt if exempt"],
+            "group": "financial"
+          },
+          "prepayment_penalty_term": {
+            "type": "string",
+            "description": "Term in months of any prepayment penalty",
+            "constraints": ["integer months", "NA if not applicable", "Exempt if exempt"],
+            "group": "loan_features"
+          },
+          "debt_to_income_ratio": {
+            "type": "string",
+            "format": "DTI bracket or integer",
+            "description": "Debt-to-income ratio",
+            "enum": {
+              "<20%": "Under 20%",
+              "20%-<30%": "20% to less than 30%",
+              "30%-<36%": "30% to less than 36%",
+              "36-49": "Exact integer percentage (36-49)",
+              "50%-60%": "50% to 60%",
+              ">60%": "Over 60%",
+              "NA": "Not applicable",
+              "Exempt": "Exempt"
+            },
+            "constraints": ["brackets for low/high ranges, exact integer for 36-49%"],
+            "group": "financial"
+          },
+          "combined_loan_to_value_ratio": {
+            "type": "decimal",
+            "description": "Combined loan-to-value ratio as percentage",
+            "constraints": ["decimal to 3 places", "NA if not applicable", "Exempt if exempt"],
+            "group": "financial"
+          },
+          "loan_term": {
+            "type": "integer",
+            "description": "Loan term in months",
+            "constraints": ["positive integer", "NA if not applicable", "Exempt if exempt"],
+            "group": "loan_features"
+          },
+          "intro_rate_period": {
+            "type": "string",
+            "description": "Introductory rate period in months",
+            "constraints": ["integer months", "NA if not applicable", "Exempt if exempt"],
+            "group": "loan_features"
+          },
+          "balloon_payment": {
+            "type": "enum",
+            "description": "Whether the loan includes a balloon payment",
+            "enum": {
+              "1": "Balloon payment",
+              "2": "No balloon payment",
+              "1111": "Exempt"
+            },
+            "group": "loan_features"
+          },
+          "interest_only_payment": {
+            "type": "enum",
+            "description": "Whether the loan allows interest-only payments",
+            "enum": {
+              "1": "Interest-only payments",
+              "2": "No interest-only payments",
+              "1111": "Exempt"
+            },
+            "group": "loan_features"
+          },
+          "negative_amortization": {
+            "type": "enum",
+            "description": "Whether the loan allows negative amortization",
+            "enum": {
+              "1": "Negative amortization",
+              "2": "No negative amortization",
+              "1111": "Exempt"
+            },
+            "group": "loan_features"
+          },
+          "other_non_amortizing_features": {
+            "type": "enum",
+            "description": "Whether the loan has other non-amortizing features",
+            "enum": {
+              "1": "Other non-amortizing features",
+              "2": "No other non-amortizing features",
+              "1111": "Exempt"
+            },
+            "group": "loan_features"
+          },
+          "property_value": {
+            "type": "integer",
+            "description": "Property value in dollars (rounded to nearest $10,000)",
+            "constraints": ["positive integer", "NA if not applicable", "Exempt if exempt"],
+            "group": "financial"
+          },
+          "manufactured_home_secured_property_type": {
+            "type": "enum",
+            "description": "Whether manufactured home is secured by land, home, or both",
+            "enum": {
+              "1": "Manufactured home and land",
+              "2": "Manufactured home and not land",
+              "3": "Not applicable",
+              "1111": "Exempt"
+            },
+            "group": "loan_features"
+          },
+          "manufactured_home_land_property_interest": {
+            "type": "enum",
+            "description": "Type of land property interest for manufactured home",
+            "enum": {
+              "1": "Direct ownership",
+              "2": "Indirect ownership",
+              "3": "Paid leasehold",
+              "4": "Unpaid leasehold",
+              "5": "Not applicable",
+              "1111": "Exempt"
+            },
+            "group": "loan_features"
+          },
+          "total_units": {
+            "type": "string",
+            "description": "Total number of individual dwelling units in the property",
+            "enum": {
+              "1": "1 unit",
+              "2": "2 units",
+              "3": "3 units",
+              "4": "4 units",
+              "5-24": "5 to 24 units",
+              "25-49": "25 to 49 units",
+              "50-99": "50 to 99 units",
+              "100-149": "100 to 149 units",
+              ">149": "150 or more units"
+            },
+            "group": "loan_features"
+          },
+          "multifamily_affordable_units": {
+            "type": "string",
+            "description": "Number of individual dwelling units that are income-restricted",
+            "constraints": ["integer or percentage", "NA if not applicable", "Exempt if exempt"],
+            "group": "loan_features"
+          },
+          "submission_of_application": {
+            "type": "enum",
+            "description": "Whether the application was submitted directly to the institution",
+            "enum": {
+              "1": "Submitted directly to institution",
+              "2": "Not submitted directly to institution",
+              "3": "Not applicable",
+              "1111": "Exempt"
+            },
+            "group": "processing"
+          },
+          "initially_payable_to_institution": {
+            "type": "enum",
+            "description": "Whether the loan was initially payable to the reporting institution",
+            "enum": {
+              "1": "Initially payable to institution",
+              "2": "Not initially payable to institution",
+              "3": "Not applicable",
+              "1111": "Exempt"
+            },
+            "group": "processing"
+          },
+          "aus_1": {
+            "type": "enum",
+            "description": "Automated underwriting system (primary)",
+            "enum": {
+              "1": "Desktop Underwriter (DU)",
+              "2": "Loan Prospector (LP) / Loan Product Advisor",
+              "3": "Technology Open to Approved Lenders (TOTAL) Scorecard",
+              "4": "Guaranteed Underwriting System (GUS)",
+              "5": "Other",
+              "6": "Not applicable",
+              "1111": "Exempt"
+            },
+            "group": "automated_underwriting"
+          },
+          "aus_2": {
+            "type": "enum",
+            "description": "Automated underwriting system (secondary)",
+            "enum": "Same as aus_1; blank if single AUS used",
+            "group": "automated_underwriting"
+          },
+          "aus_3": {
+            "type": "enum",
+            "description": "Automated underwriting system (tertiary)",
+            "enum": "Same as aus_1; blank if not applicable",
+            "group": "automated_underwriting"
+          },
+          "aus_4": {
+            "type": "enum",
+            "description": "Automated underwriting system (4th)",
+            "enum": "Same as aus_1; blank if not applicable",
+            "group": "automated_underwriting"
+          },
+          "aus_5": {
+            "type": "enum",
+            "description": "Automated underwriting system (5th)",
+            "enum": "Same as aus_1; blank if not applicable",
+            "group": "automated_underwriting"
+          },
+          "reverse_mortgage": {
+            "type": "enum",
+            "description": "Whether the loan is a reverse mortgage",
+            "enum": {
+              "1": "Reverse mortgage",
+              "2": "Not a reverse mortgage",
+              "1111": "Exempt"
+            },
+            "group": "loan_features"
+          },
+          "open_end_line_of_credit": {
+            "type": "enum",
+            "description": "Whether the loan is an open-end line of credit",
+            "enum": {
+              "1": "Open-end line of credit",
+              "2": "Not an open-end line of credit",
+              "1111": "Exempt"
+            },
+            "group": "loan_features"
+          },
+          "business_or_commercial_purpose": {
+            "type": "enum",
+            "description": "Whether the loan is primarily for a business or commercial purpose",
+            "enum": {
+              "1": "Primarily for business/commercial purpose",
+              "2": "Not primarily for business/commercial purpose",
+              "1111": "Exempt"
+            },
+            "group": "loan_features"
+          }
+        }
+      },
+      "samples": [
+        {
+          "_label": "Originated conventional home purchase loan (action_taken=1)",
+          "activity_year": "2025",
+          "lei": "549300HN58ONH5KNJJ12",
+          "loan_type": "1",
+          "loan_purpose": "1",
+          "preapproval": "1",
+          "construction_method": "1",
+          "occupancy_type": "1",
+          "loan_amount": "195000",
+          "action_taken": "1",
+          "state_code": "WI",
+          "county_code": "55069",
+          "census_tract": "55069960600",
+          "applicant_ethnicity_1": "2",
+          "applicant_ethnicity_2": "",
+          "applicant_ethnicity_3": "",
+          "applicant_ethnicity_4": "",
+          "applicant_ethnicity_5": "",
+          "co_applicant_ethnicity_1": "2",
+          "co_applicant_ethnicity_2": "",
+          "co_applicant_ethnicity_3": "",
+          "co_applicant_ethnicity_4": "",
+          "co_applicant_ethnicity_5": "",
+          "applicant_ethnicity_observed": "3",
+          "co_applicant_ethnicity_observed": "3",
+          "applicant_race_1": "5",
+          "applicant_race_2": "",
+          "applicant_race_3": "",
+          "applicant_race_4": "",
+          "applicant_race_5": "",
+          "co_applicant_race_1": "5",
+          "co_applicant_race_2": "",
+          "co_applicant_race_3": "",
+          "co_applicant_race_4": "",
+          "co_applicant_race_5": "",
+          "applicant_race_observed": "3",
+          "co_applicant_race_observed": "3",
+          "applicant_sex": "1",
+          "co_applicant_sex": "2",
+          "applicant_sex_observed": "3",
+          "co_applicant_sex_observed": "3",
+          "applicant_age": "25-34",
+          "applicant_age_above_62": "No",
+          "co_applicant_age": "25-34",
+          "co_applicant_age_above_62": "No",
+          "income": "86",
+          "purchaser_type": "9",
+          "rate_spread": "0.166",
+          "hoepa_status": "2",
+          "lien_status": "1",
+          "applicant_credit_scoring_model": "2",
+          "co_applicant_credit_scoring_model": "3",
+          "denial_reason_1": "10",
+          "denial_reason_2": "",
+          "denial_reason_3": "",
+          "denial_reason_4": "",
+          "total_loan_costs": "3552.00",
+          "total_points_and_fees": "NA",
+          "origination_charges": "1497.00",
+          "discount_points": "NA",
+          "lender_credits": "NA",
+          "interest_rate": "6.125",
+          "prepayment_penalty_term": "NA",
+          "debt_to_income_ratio": "41",
+          "combined_loan_to_value_ratio": "95.000",
+          "loan_term": "360",
+          "intro_rate_period": "NA",
+          "balloon_payment": "2",
+          "interest_only_payment": "2",
+          "negative_amortization": "2",
+          "other_non_amortizing_features": "2",
+          "property_value": "215000",
+          "manufactured_home_secured_property_type": "3",
+          "manufactured_home_land_property_interest": "5",
+          "total_units": "1",
+          "multifamily_affordable_units": "NA",
+          "submission_of_application": "1",
+          "initially_payable_to_institution": "1",
+          "aus_1": "1",
+          "aus_2": "",
+          "aus_3": "",
+          "aus_4": "",
+          "aus_5": "",
+          "reverse_mortgage": "2",
+          "open_end_line_of_credit": "2",
+          "business_or_commercial_purpose": "2"
+        },
+        {
+          "_label": "Denied cash-out refinance on investment property (action_taken=3)",
+          "activity_year": "2025",
+          "lei": "549300HN58ONH5KNJJ12",
+          "loan_type": "1",
+          "loan_purpose": "32",
+          "preapproval": "2",
+          "construction_method": "1",
+          "occupancy_type": "3",
+          "loan_amount": "75000",
+          "action_taken": "3",
+          "state_code": "IL",
+          "county_code": "17001",
+          "census_tract": "17001000400",
+          "applicant_ethnicity_1": "2",
+          "applicant_ethnicity_2": "",
+          "applicant_ethnicity_3": "",
+          "applicant_ethnicity_4": "",
+          "applicant_ethnicity_5": "",
+          "co_applicant_ethnicity_1": "5",
+          "co_applicant_ethnicity_2": "",
+          "co_applicant_ethnicity_3": "",
+          "co_applicant_ethnicity_4": "",
+          "co_applicant_ethnicity_5": "",
+          "applicant_ethnicity_observed": "3",
+          "co_applicant_ethnicity_observed": "4",
+          "applicant_race_1": "6",
+          "applicant_race_2": "",
+          "applicant_race_3": "",
+          "applicant_race_4": "",
+          "applicant_race_5": "",
+          "co_applicant_race_1": "8",
+          "co_applicant_race_2": "",
+          "co_applicant_race_3": "",
+          "co_applicant_race_4": "",
+          "co_applicant_race_5": "",
+          "applicant_race_observed": "3",
+          "co_applicant_race_observed": "4",
+          "applicant_sex": "2",
+          "co_applicant_sex": "5",
+          "applicant_sex_observed": "3",
+          "co_applicant_sex_observed": "4",
+          "applicant_age": "45-54",
+          "applicant_age_above_62": "No",
+          "co_applicant_age": "9999",
+          "co_applicant_age_above_62": "NA",
+          "income": "61",
+          "purchaser_type": "0",
+          "rate_spread": "NA",
+          "hoepa_status": "3",
+          "lien_status": "1",
+          "applicant_credit_scoring_model": "2",
+          "co_applicant_credit_scoring_model": "10",
+          "denial_reason_1": "3",
+          "denial_reason_2": "5",
+          "denial_reason_3": "",
+          "denial_reason_4": "",
+          "total_loan_costs": "NA",
+          "total_points_and_fees": "NA",
+          "origination_charges": "NA",
+          "discount_points": "NA",
+          "lender_credits": "NA",
+          "interest_rate": "NA",
+          "prepayment_penalty_term": "NA",
+          "debt_to_income_ratio": "43",
+          "combined_loan_to_value_ratio": "75.000",
+          "loan_term": "360",
+          "intro_rate_period": "NA",
+          "balloon_payment": "2",
+          "interest_only_payment": "2",
+          "negative_amortization": "2",
+          "other_non_amortizing_features": "2",
+          "property_value": "105000",
+          "manufactured_home_secured_property_type": "3",
+          "manufactured_home_land_property_interest": "5",
+          "total_units": "1",
+          "multifamily_affordable_units": "NA",
+          "submission_of_application": "1",
+          "initially_payable_to_institution": "3",
+          "aus_1": "6",
+          "aus_2": "",
+          "aus_3": "",
+          "aus_4": "",
+          "aus_5": "",
+          "reverse_mortgage": "2",
+          "open_end_line_of_credit": "2",
+          "business_or_commercial_purpose": "2"
+        }
+      ]
+    }
+  }
+}
