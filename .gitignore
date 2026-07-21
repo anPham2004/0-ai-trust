@@ -3,7 +3,7 @@ __pycache__/
 *.pyc
 
 # Synthetic data output (upload to Databricks Volume manually, not via git)
-synthetic-data/output/
+# synthetic-data/output/
 
 # Parquet / Spark artefacts
 _SUCCESS
