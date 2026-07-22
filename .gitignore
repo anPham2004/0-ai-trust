@@ -1,5 +1,25 @@
-# Object file
-*.o
+.DS_Store
+__pycache__/
+*.pyc
 
-# Ada Library Information
-*.ali
+# Synthetic data output (upload to Databricks Volume manually, not via git)
+# synthetic-data/output/
+
+
+#databricks aitools skills
+.databricks
+
+
+# Parquet / Spark artefacts
+_SUCCESS
+._SUCCESS.crc
+*.parquet
+*.parquet.crc
+
+# Python virtual environments
+.venv/
+venv/
+
+# Internal planning / AI session files
+.claude/
+plans/
