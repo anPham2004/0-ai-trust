@@ -1,0 +1,25 @@
+product: organisations
+contract_status: DRAFT
+owner: business-customer-domain
+producer: organisation-master-platform
+consumers: [banker-assist, business-banking-operations]
+canonical_key: organisation_id
+customer_link_key: global_id
+critical_data_elements: [organisation_id, legal_name, organisation_type, kyb_status]
+sources:
+  - {type: DEBEZIUM_CDC, dataset: organisation_master.organisations}
+  - {type: DEBEZIUM_CDC, dataset: organisation_master.organisation_party_relationships}
+  - {type: DEBEZIUM_CDC, dataset: organisation_master.organisation_relationships}
+lineage_l1: organisation master DB -> Debezium -> S3/Volume Bronze; downstream lineage pending model approval
+lineage_l2_required: true
+future_context_requirements:
+  - organization overview and profile freshness
+  - active representatives, roles and authority
+  - related organizations
+  - KYB and document status
+  - accounts, arrangements, applications and service cases
+zero_trust_requirements:
+  - authorization must be evaluated for both organization and involved party
+  - inactive representatives must not inherit current authority
+  - raw ABN, ACN, contact and identity values require approved masking policy
+  - every AI answer must expose freshness, quality status and known limitations

@@ -1,0 +1,23 @@
+cde_lifecycle: [Activate, Trace, Assess, Monitor, Resolve, Maintain, Decommission]
+grace_system: GRACE
+products:
+  customers:
+    owner: customer-domain
+    producer: customer-master-platform
+    consumers: [banker-assist, lending-operations]
+    l1_lineage_required: true
+  loan_applications:
+    owner: lending-domain
+    producer: loan-origination-platform
+    consumers: [banker-assist, lending-operations]
+    l1_lineage_required: true
+  service_cases:
+    owner: customer-service-domain
+    producer: case-management-platform
+    consumers: [banker-assist]
+    l1_lineage_required: true
+  organisations:
+    owner: business-customer-domain
+    producer: organisation-master-platform
+    consumers: [banker-assist, business-banking-operations]
+    l1_lineage_required: true
