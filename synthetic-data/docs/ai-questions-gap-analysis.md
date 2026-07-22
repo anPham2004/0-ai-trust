@@ -463,3 +463,127 @@ The refusal categories confirm design constraints, not data gaps:
 | Application stage fields | BPI events | Derive from BPI event log + synthetic CRM stages |
 | `application_stage_history` | BPI LoanApplicationEvent | Transform BPI events → CRM stage records |
 | `status_change_history` | BPI LoanApplicationEvent | Transform BPI lifecycle transitions → change log |
+
+---
+
+## Post-Generation Coverage
+
+**Status:** Synthetic data generation pipeline implemented (`synthetic-data/run_all.py`)
+**Generated:** 2026-07-16
+
+### What Was Built
+
+| Deliverable | Location | Status |
+|-------------|----------|--------|
+| CRM schema (6 entities) | `ref-schema/crm-schema/crm-schema.json` | DONE |
+| CRM schema docs | `ref-schema/crm-schema/crm-schema.md` | DONE |
+| CDR generator | `synthetic-data/generate_cdr.py` | DONE |
+| BPI generator | `synthetic-data/generate_bpi.py` | DONE |
+| Lending Club generator | `synthetic-data/generate_lending_club.py` | DONE |
+| CRM preferences generator | `synthetic-data/generate_crm_preferences.py` | DONE |
+| CRM interactions generator | `synthetic-data/generate_crm_interactions.py` | DONE |
+| CRM documents generator | `synthetic-data/generate_crm_documents.py` | DONE |
+| CRM history generator | `synthetic-data/generate_crm_history.py` | DONE |
+| Pipeline orchestrator | `synthetic-data/run_all.py` | DONE |
+
+### global_id Linking Key
+
+All 13 tables carry `global_id` (UUID) — the single cross-dataset join key identifying a customer.
+
+```
+customers.global_id
+  ├── banking_accounts.global_id
+  ├── banking_transactions.global_id
+  ├── loan_applications.global_id
+  │     ├── loan_application_events.global_id
+  │     ├── missing_documents.global_id
+  │     ├── application_stage_history.global_id
+  │     └── status_change_history.global_id
+  ├── accepted_loans.global_id
+  ├── rejected_applications.global_id
+  ├── customer_preferences.global_id
+  ├── support_interactions.global_id
+  └── service_cases.global_id
+```
+
+### Updated Coverage
+
+| Level | Before | After |
+|-------|--------|-------|
+| MOSTLY COVERED | 1 | 37 |
+| DERIVABLE (BPI) | 6 | 0 (now explicit) |
+| PARTIAL | 12 | 0 |
+| NOT COVERED | 18 | **0** |
+
+**All 37 AI Questions are now answerable once `run_all.py` completes.**
+
+### Per-Question Resolution
+
+| ID | Question | Was | Now | Resolved By |
+|----|----------|-----|-----|-------------|
+| B1 | Customer summary | PARTIAL | COVERED | All 13 tables joinable via global_id |
+| B2 | Recent support contact? | NOT COVERED | COVERED | `support_interactions` |
+| B3 | Frequent issues? | NOT COVERED | COVERED | `service_cases.caseType` distribution |
+| B4 | Customer dissatisfied? | NOT COVERED | COVERED | `customer_preferences.satisfactionScore` + `service_cases` |
+| B5 | Communication channel? | PARTIAL | COVERED | `customer_preferences.preferredContactChannel` |
+| B6 | Apps waiting for doc verification? | PARTIAL | COVERED | `application_stage_history.stage` |
+| B7 | Customers with missing docs? | NOT COVERED | COVERED | `missing_documents.status=required` |
+| B8 | Application timeline | MOSTLY COVERED | COVERED | `application_stage_history` explicit |
+| B9 | Inactive >14 days? | DERIVABLE | COVERED | `application_stage_history.exitedAt` null + `enteredAt` |
+| B10 | Why returned to customer? | PARTIAL | COVERED | `status_change_history.reason` |
+| B11 | Follow-up needed today? | NOT COVERED | COVERED | `missing_documents.remindersSent` + `lastReminderAt` |
+| B12 | Pre-call briefing | PARTIAL | COVERED | All tables via global_id join |
+| B13 | Open case for missing doc? | PARTIAL | COVERED | `missing_documents` + `service_cases` |
+| B14 | Current app status? | PARTIAL | COVERED | `application_stage_history` latest stage |
+| B15 | Last status update? | PARTIAL | COVERED | `status_change_history.changedAt` |
+| B16 | Current stage? | DERIVABLE | COVERED | `application_stage_history` where exitedAt IS NULL |
+| B17 | Time in current stage? | DERIVABLE | COVERED | Current stage `enteredAt` vs now |
+| B18 | Previous stage? | DERIVABLE | COVERED | Second-to-last row in `application_stage_history` |
+| B19 | When moved to doc review? | DERIVABLE | COVERED | `stage=Document_Verification.enteredAt` |
+| B20 | Documents received? | NOT COVERED | COVERED | `missing_documents.status IN (received, verified)` |
+| B21 | Invalid/expired docs? | NOT COVERED | COVERED | `missing_documents.status IN (invalid, expired)` |
+| B22 | Waiting for customer or internal? | PARTIAL | COVERED | `application_stage_history.assignedTeam` |
+| B23 | Which team owns app? | PARTIAL | COVERED | `application_stage_history.assignedTeam` where exitedAt IS NULL |
+| B24 | Handover summary | PARTIAL | COVERED | All tables via global_id |
+| C1 | Preferred contact method | NOT COVERED | COVERED | `customer_preferences.preferredContactChannel` |
+| C2 | Preferred language | NOT COVERED | COVERED | `customer_preferences.preferredLanguage` |
+| C3 | Marketing opt-in? | NOT COVERED | COVERED | `customer_preferences.marketingOptIn` |
+| C4 | Open support cases? | NOT COVERED | COVERED | `service_cases.status=open` |
+| C5 | Previous support outcome? | NOT COVERED | COVERED | `service_cases.resolutionSummary` |
+| C6 | Last support contact? | NOT COVERED | COVERED | `support_interactions.timestamp` max per customer |
+| C7 | Support history summary | NOT COVERED | COVERED | `support_interactions` + `service_cases` |
+| C8 | Application status | PARTIAL | COVERED | `application_stage_history` latest stage |
+| C9 | Missing documents | NOT COVERED | COVERED | `missing_documents.status=required` |
+| C10 | When stage changed? | DERIVABLE | COVERED | `application_stage_history.enteredAt` |
+| C11 | Reminders received? | NOT COVERED | COVERED | `missing_documents.remindersSent` sum per customer |
+| C12 | Why delayed? | PARTIAL | COVERED | `status_change_history.reason` |
+| C13 | Next step? | PARTIAL | COVERED | `application_stage_history` current stage → known next stage |
+
+### How to Run
+
+```bash
+# Prerequisites
+pip install faker numpy pandas pyspark databricks-connect
+
+# Configure
+cd 0-ai-trust/synthetic-data
+# Edit config.py: set CATALOG, SCHEMA, OUTPUT_PATH
+
+# Run pipeline
+python3 run_all.py
+
+# Validate FK integrity
+python3 -c "
+import pandas as pd
+customers = pd.read_parquet('output/customers/')
+all_ids = set(customers['global_id'])
+for table in ['banking_accounts','banking_transactions','loan_applications',
+              'customer_preferences','support_interactions','service_cases',
+              'missing_documents','application_stage_history','status_change_history',
+              'accepted_loans','rejected_applications']:
+    df = pd.read_parquet(f'output/{table}/')
+    orphans = ~df['global_id'].isin(all_ids)
+    status = 'PASS' if orphans.sum() == 0 else f'FAIL ({orphans.sum()} orphans)'
+    print(f'{table}: {len(df):,} rows  FK {status}')
+"
+```
