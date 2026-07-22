@@ -5,6 +5,11 @@ __pycache__/
 # Synthetic data output (upload to Databricks Volume manually, not via git)
 # synthetic-data/output/
 
+
+#databricks aitools skills
+.databricks
+
+
 # Parquet / Spark artefacts
 _SUCCESS
 ._SUCCESS.crc
