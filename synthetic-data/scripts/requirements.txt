@@ -1,0 +1,6 @@
+faker==40.31.0
+numpy==2.4.6
+pandas==3.0.3
+pyspark==4.2.0
+pyarrow==25.0.0
+python-dateutil==2.9.0.post0

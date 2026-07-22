@@ -1,0 +1,562 @@
+{
+  "meta": {
+    "title": "CRM -- Customer Relationship Management Schema Catalog",
+    "version": "1.0.0",
+    "generatedAt": "2026-07-16",
+    "description": "Schema catalog for 6 CRM entity types covering customer preferences, support interactions, service cases, document tracking, application stage history, and status change audit logs. Designed to link with CDR CommonPerson via globalId and BPI LoanApplication via applicationId."
+  },
+  "entities": {
+    "CustomerPreferences": {
+      "description": "Customer communication preferences and satisfaction score, linked 1:1 to CDR CommonPerson",
+      "source": "crm",
+      "dataContract": {
+        "required": [
+          "globalId",
+          "customerId",
+          "preferredContactChannel",
+          "preferredLanguage",
+          "marketingOptIn"
+        ],
+        "fields": {
+          "globalId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Cross-dataset linking key — matches customerId in CDR customers table"
+          },
+          "customerId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Unique customer identifier, foreign key to CDR CommonPerson"
+          },
+          "preferredContactChannel": {
+            "type": "string",
+            "format": "enum",
+            "enum": ["phone", "email", "sms", "chat"],
+            "description": "Customer's preferred communication channel"
+          },
+          "preferredLanguage": {
+            "type": "string",
+            "description": "Preferred language for communications",
+            "constraints": ["ISO 639-1 language code"]
+          },
+          "marketingOptIn": {
+            "type": "boolean",
+            "description": "Whether customer consents to marketing communications"
+          },
+          "satisfactionScore": {
+            "type": "number",
+            "description": "Overall customer satisfaction score derived from service interactions",
+            "constraints": ["Range: 0.0–5.0", "One decimal place"]
+          }
+        }
+      },
+      "samples": [
+        {
+          "globalId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+          "customerId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+          "preferredContactChannel": "email",
+          "preferredLanguage": "en",
+          "marketingOptIn": true,
+          "satisfactionScore": 4.2
+        },
+        {
+          "globalId": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+          "customerId": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+          "preferredContactChannel": "phone",
+          "preferredLanguage": "es",
+          "marketingOptIn": false,
+          "satisfactionScore": 3.7
+        }
+      ]
+    },
+    "SupportInteraction": {
+      "description": "Record of every customer contact with support staff across all channels",
+      "source": "crm",
+      "dataContract": {
+        "required": [
+          "globalId",
+          "interactionId",
+          "customerId",
+          "channel",
+          "timestamp",
+          "topic",
+          "resolution",
+          "agentId",
+          "durationMinutes"
+        ],
+        "fields": {
+          "globalId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Cross-dataset linking key — matches customerId in CDR customers table"
+          },
+          "interactionId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Unique identifier for this support interaction"
+          },
+          "customerId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Customer who initiated the contact, foreign key to CDR CommonPerson"
+          },
+          "channel": {
+            "type": "string",
+            "format": "enum",
+            "enum": ["phone", "email", "chat", "branch"],
+            "description": "Contact channel used"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the interaction occurred"
+          },
+          "topic": {
+            "type": "string",
+            "format": "enum",
+            "enum": ["Account_Inquiry", "Application_Status", "Document_Upload", "Complaint", "General"],
+            "description": "Subject category of the interaction"
+          },
+          "resolution": {
+            "type": "string",
+            "format": "enum",
+            "enum": ["resolved", "escalated", "follow_up_required", "unresolved"],
+            "description": "Outcome of the interaction"
+          },
+          "agentId": {
+            "type": "string",
+            "description": "Identifier of the staff member who handled the interaction"
+          },
+          "durationMinutes": {
+            "type": "number",
+            "format": "integer",
+            "description": "Length of the interaction in minutes",
+            "constraints": ["Positive integer"]
+          }
+        }
+      },
+      "samples": [
+        {
+          "globalId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+          "interactionId": "c3d4e5f6-a7b8-9012-cdef-123456789012",
+          "customerId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+          "channel": "chat",
+          "timestamp": "2025-11-14T09:23:45.000Z",
+          "topic": "Application_Status",
+          "resolution": "resolved",
+          "agentId": "Agent_047",
+          "durationMinutes": 8
+        },
+        {
+          "globalId": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+          "interactionId": "d4e5f6a7-b8c9-0123-defa-234567890123",
+          "customerId": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+          "channel": "phone",
+          "timestamp": "2025-11-15T14:37:12.000Z",
+          "topic": "Complaint",
+          "resolution": "escalated",
+          "agentId": "Agent_012",
+          "durationMinutes": 22
+        }
+      ]
+    },
+    "ServiceCase": {
+      "description": "CRM service case record for complaints, disputes, requests, and inquiries",
+      "source": "crm",
+      "dataContract": {
+        "required": [
+          "globalId",
+          "caseId",
+          "customerId",
+          "caseType",
+          "subject",
+          "status",
+          "priority",
+          "createdAt",
+          "assignedTeam"
+        ],
+        "fields": {
+          "globalId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Cross-dataset linking key — matches customerId in CDR customers table"
+          },
+          "caseId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Unique case identifier"
+          },
+          "customerId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Customer this case belongs to, foreign key to CDR CommonPerson"
+          },
+          "caseType": {
+            "type": "string",
+            "format": "enum",
+            "enum": ["dispute", "complaint", "request", "inquiry"],
+            "description": "Category of service case"
+          },
+          "subject": {
+            "type": "string",
+            "description": "Brief description of the case subject"
+          },
+          "status": {
+            "type": "string",
+            "format": "enum",
+            "enum": ["open", "in_progress", "resolved", "closed"],
+            "description": "Current case status"
+          },
+          "priority": {
+            "type": "string",
+            "format": "enum",
+            "enum": ["low", "medium", "high", "critical"],
+            "description": "Case priority level"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the case was created"
+          },
+          "resolvedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the case was resolved; null if still open"
+          },
+          "resolutionSummary": {
+            "type": "string",
+            "description": "Summary of how the case was resolved; null if still open"
+          },
+          "assignedTeam": {
+            "type": "string",
+            "format": "enum",
+            "enum": ["Support", "Complaints", "Escalations", "Fraud"],
+            "description": "Team currently responsible for the case"
+          }
+        }
+      },
+      "samples": [
+        {
+          "globalId": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+          "caseId": "e5f6a7b8-c9d0-1234-efab-345678901234",
+          "customerId": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+          "caseType": "dispute",
+          "subject": "Incorrect fee charged on loan account",
+          "status": "in_progress",
+          "priority": "high",
+          "createdAt": "2025-11-15T15:02:00.000Z",
+          "resolvedAt": null,
+          "resolutionSummary": null,
+          "assignedTeam": "Escalations"
+        },
+        {
+          "globalId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+          "caseId": "f6a7b8c9-d0e1-2345-fabc-456789012345",
+          "customerId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+          "caseType": "inquiry",
+          "subject": "Question about interest rate on personal loan",
+          "status": "resolved",
+          "priority": "low",
+          "createdAt": "2025-11-10T08:45:00.000Z",
+          "resolvedAt": "2025-11-10T09:30:00.000Z",
+          "resolutionSummary": "Agent explained current interest rate structure and provided product disclosure statement link.",
+          "assignedTeam": "Support"
+        }
+      ]
+    },
+    "MissingDocument": {
+      "description": "Document checklist tracker per loan application — tracks required, received, and verified documents",
+      "source": "crm",
+      "dataContract": {
+        "required": [
+          "globalId",
+          "documentId",
+          "applicationId",
+          "customerId",
+          "documentType",
+          "status",
+          "requestedAt",
+          "remindersSent"
+        ],
+        "fields": {
+          "globalId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Cross-dataset linking key — matches customerId in CDR customers table"
+          },
+          "documentId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Unique document record identifier"
+          },
+          "applicationId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Loan application requiring this document, foreign key to BPI LoanApplication"
+          },
+          "customerId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Customer who must provide the document, foreign key to CDR CommonPerson"
+          },
+          "documentType": {
+            "type": "string",
+            "format": "enum",
+            "enum": ["payslip", "ID_proof", "address_proof", "bank_statement", "tax_return", "other"],
+            "description": "Type of document required"
+          },
+          "status": {
+            "type": "string",
+            "format": "enum",
+            "enum": ["required", "received", "invalid", "expired", "verified"],
+            "description": "Current document status"
+          },
+          "requestedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the document was first requested"
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the document was received; null if not yet submitted"
+          },
+          "expiryDate": {
+            "type": "string",
+            "format": "date",
+            "description": "Document expiry date; null if not applicable"
+          },
+          "remindersSent": {
+            "type": "number",
+            "format": "integer",
+            "description": "Number of reminder notifications sent to the customer",
+            "constraints": ["Range: 0–10"]
+          },
+          "lastReminderAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Timestamp of the most recent reminder; null if no reminders sent"
+          },
+          "rejectionReason": {
+            "type": "string",
+            "description": "Reason document was marked invalid; null unless status is invalid"
+          }
+        }
+      },
+      "samples": [
+        {
+          "globalId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+          "documentId": "a7b8c9d0-e1f2-3456-abcd-567890123456",
+          "applicationId": "c9d0e1f2-a3b4-5678-cdab-789012345678",
+          "customerId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+          "documentType": "payslip",
+          "status": "required",
+          "requestedAt": "2025-11-12T10:00:00.000Z",
+          "receivedAt": null,
+          "expiryDate": null,
+          "remindersSent": 2,
+          "lastReminderAt": "2025-11-14T10:00:00.000Z",
+          "rejectionReason": null
+        },
+        {
+          "globalId": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+          "documentId": "b8c9d0e1-f2a3-4567-bcde-678901234567",
+          "applicationId": "d0e1f2a3-b4c5-6789-dabc-890123456789",
+          "customerId": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+          "documentType": "ID_proof",
+          "status": "verified",
+          "requestedAt": "2025-11-08T09:00:00.000Z",
+          "receivedAt": "2025-11-09T11:30:00.000Z",
+          "expiryDate": "2030-06-15",
+          "remindersSent": 0,
+          "lastReminderAt": null,
+          "rejectionReason": null
+        }
+      ]
+    },
+    "ApplicationStageHistory": {
+      "description": "CRM stage timeline for loan applications — maps BPI process events to English CRM stages with SLA tracking",
+      "source": "crm",
+      "dataContract": {
+        "required": [
+          "globalId",
+          "historyId",
+          "applicationId",
+          "stage",
+          "enteredAt",
+          "assignedTeam",
+          "assignedTo",
+          "slaDeadline"
+        ],
+        "fields": {
+          "globalId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Cross-dataset linking key — matches customerId in CDR customers table"
+          },
+          "historyId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Unique history record identifier"
+          },
+          "applicationId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Application moving through stages, foreign key to BPI LoanApplication"
+          },
+          "stage": {
+            "type": "string",
+            "format": "enum",
+            "enum": [
+              "Submitted",
+              "Document_Verification",
+              "Assessment",
+              "Credit_Check",
+              "Approved",
+              "Conditionally_Approved",
+              "Denied",
+              "Withdrawn",
+              "Cancelled"
+            ],
+            "description": "CRM stage name. BPI mapping: W_Completeren_aanvraag→Document_Verification, W_Valideren_aanvraag→Assessment, A_Accepted→Approved, A_Denied→Denied"
+          },
+          "enteredAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the application entered this stage"
+          },
+          "exitedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the application left this stage; null if this is the current stage"
+          },
+          "assignedTeam": {
+            "type": "string",
+            "format": "enum",
+            "enum": ["Intake", "Review", "Underwriting", "Compliance"],
+            "description": "Team responsible at this stage"
+          },
+          "assignedTo": {
+            "type": "string",
+            "description": "Staff member assigned to this stage"
+          },
+          "slaDeadline": {
+            "type": "string",
+            "format": "date-time",
+            "description": "SLA deadline for completing this stage"
+          }
+        }
+      },
+      "samples": [
+        {
+          "globalId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+          "historyId": "e1f2a3b4-c5d6-7890-efab-901234567890",
+          "applicationId": "c9d0e1f2-a3b4-5678-cdab-789012345678",
+          "stage": "Document_Verification",
+          "enteredAt": "2025-11-12T08:00:00.000Z",
+          "exitedAt": "2025-11-14T16:45:00.000Z",
+          "assignedTeam": "Review",
+          "assignedTo": "User_031",
+          "slaDeadline": "2025-11-15T08:00:00.000Z"
+        },
+        {
+          "globalId": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+          "historyId": "f2a3b4c5-d6e7-8901-fabc-012345678901",
+          "applicationId": "d0e1f2a3-b4c5-6789-dabc-890123456789",
+          "stage": "Assessment",
+          "enteredAt": "2025-11-16T09:15:00.000Z",
+          "exitedAt": null,
+          "assignedTeam": "Underwriting",
+          "assignedTo": "User_058",
+          "slaDeadline": "2025-11-19T09:15:00.000Z"
+        }
+      ]
+    },
+    "StatusChangeHistory": {
+      "description": "Audit log of every application status transition with change reason",
+      "source": "crm",
+      "dataContract": {
+        "required": [
+          "globalId",
+          "changeId",
+          "applicationId",
+          "oldStatus",
+          "newStatus",
+          "changedAt",
+          "changedBy",
+          "reason"
+        ],
+        "fields": {
+          "globalId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Cross-dataset linking key — matches customerId in CDR customers table"
+          },
+          "changeId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Unique change record identifier"
+          },
+          "applicationId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Application that changed status, foreign key to BPI LoanApplication"
+          },
+          "oldStatus": {
+            "type": "string",
+            "description": "Previous stage or status value"
+          },
+          "newStatus": {
+            "type": "string",
+            "description": "New stage or status value"
+          },
+          "changedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the status change occurred"
+          },
+          "changedBy": {
+            "type": "string",
+            "description": "Staff member or system that triggered the change"
+          },
+          "reason": {
+            "type": "string",
+            "format": "enum",
+            "enum": [
+              "customer_request",
+              "document_rejected",
+              "credit_fail",
+              "additional_info_required",
+              "approved_by_officer",
+              "auto_progression",
+              "withdrawn_by_customer"
+            ],
+            "description": "Reason for the status change"
+          }
+        }
+      },
+      "samples": [
+        {
+          "globalId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+          "changeId": "a3b4c5d6-e7f8-9012-abcd-123456789012",
+          "applicationId": "c9d0e1f2-a3b4-5678-cdab-789012345678",
+          "oldStatus": "Submitted",
+          "newStatus": "Document_Verification",
+          "changedAt": "2025-11-12T08:00:00.000Z",
+          "changedBy": "system",
+          "reason": "auto_progression"
+        },
+        {
+          "globalId": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+          "changeId": "b4c5d6e7-f8a9-0123-bcde-234567890123",
+          "applicationId": "d0e1f2a3-b4c5-6789-dabc-890123456789",
+          "oldStatus": "Assessment",
+          "newStatus": "Denied",
+          "changedAt": "2025-11-18T11:22:00.000Z",
+          "changedBy": "User_058",
+          "reason": "credit_fail"
+        }
+      ]
+    }
+  }
+}
