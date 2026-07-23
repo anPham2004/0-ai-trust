@@ -261,8 +261,8 @@ DataGrip settings:
 ```text
 Host: 127.0.0.1
 Port: 15432
-Database: nab_sources
-User: nab_app
+Database: g3_sources
+User: g3_app
 Password: value from EC2 `/opt/0-ai-trust/source-simulator/.env`
 ```
 
@@ -296,6 +296,27 @@ Root folder: /Workspace/Shared/0-ai-trust/pipelines
 ```
 
 The `0-ai-trust-medallion-refresh` Lakeflow Job starts the triggered pipeline every 15 minutes. Each update processes all newly landed files using Structured Streaming checkpoints and then stops. Bronze files are already landed near-real-time by the source simulator; the scheduled update materialises queryable Bronze and, after modelling approval, the dependent Silver and Gold datasets.
+
+Useful Databricks CLI operations:
+
+```bash
+# Confirm the synchronized Git Folder and locate the pipeline/job IDs.
+databricks repos get 1237804683921450 --profile g3-databricks
+databricks pipelines list-pipelines --profile g3-databricks
+databricks jobs list --profile g3-databricks
+
+# Validate definitions without writing data.
+databricks pipelines start-update ba6a2d09-4d80-4b13-ac56-22e644411fe2 \
+  --validate-only --profile g3-databricks
+
+# Run one incremental update. Use --full-refresh only for an intentional rebuild.
+databricks pipelines start-update ba6a2d09-4d80-4b13-ac56-22e644411fe2 \
+  --profile g3-databricks
+
+# Inspect or manually trigger the scheduled orchestration job.
+databricks jobs get 190404689821954 --profile g3-databricks
+databricks jobs run-now 190404689821954 --profile g3-databricks
+```
 
 Validate Bronze:
 
