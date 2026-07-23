@@ -41,7 +41,7 @@ Business accounts are identified by a non-null `organisationId` FK on `banking_a
 
 ## Ingestion Source Allocation
 
-`contracts/source_inventory.yml` is authoritative for routing. There are exactly three ingestion source categories: `DATABASE`, `EVENT`, and `FILE`. Source allocation reflects the operational nature of each dataset, not its business domain. A customer-related question can therefore join data that arrived through different source categories after Silver modelling is approved.
+`contracts/source/source_inventory.yml` is authoritative for routing. There are exactly three ingestion source categories: `DATABASE`, `EVENT`, and `FILE`. Source allocation reflects the operational nature of each dataset, not its business domain. A customer-related question can therefore join data that arrived through different source categories after Silver modelling is approved.
 
 ### Database source -- 23 datasets
 

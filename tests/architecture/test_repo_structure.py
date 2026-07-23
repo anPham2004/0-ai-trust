@@ -16,25 +16,38 @@ class ArchitectureTests(unittest.TestCase):
         for legacy in ("datagen", "synthetic-data", "simulator", "databricks", "ref-schema"):
             self.assertFalse((ROOT / legacy).exists())
 
-        bundle_resource = (ROOT / "resources/pipelines/bronze.pipeline.yml").read_text(encoding="utf-8")
-        self.assertIn("../../pipelines/bronze/pipeline.py", bundle_resource)
+        self.assertFalse((ROOT / "databricks.yml").exists())
+        self.assertFalse((ROOT / "resources").exists())
 
     def test_repository_conventions_are_synchronised(self):
-        bundle = (ROOT / "databricks.yml").read_text(encoding="utf-8")
-        self.assertIn("resources/**/*.yml", bundle)
-
         migrations = list((ROOT / "pipelines/bootstrap").glob("*.sql"))
         self.assertTrue(migrations)
         for migration in migrations:
             self.assertRegex(migration.name, r"^v\d{3}_[a-z0-9_]+\.sql$")
 
-        workflow = (ROOT / ".github/workflows/deploy.yml").read_text(encoding="utf-8")
-        self.assertIn("databricks bundle deploy --target dev", workflow)
-        self.assertNotIn("databricks repos update", workflow)
+        workflow = (ROOT / ".github/workflows/sync-databricks.yml").read_text(encoding="utf-8")
+        self.assertIn("branches: [develop]", workflow)
+        self.assertIn("databricks repos update 1237804683921450 --branch develop", workflow)
 
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-        for target in ("sim-up:", "sim-down:", "test:", "validate:", "deploy:", "bootstrap:"):
+        for target in ("sim-up:", "sim-down:", "test:", "validate:", "bootstrap:"):
             self.assertIn(target, makefile)
+
+    def test_contracts_are_partitioned_by_lifecycle(self):
+        expected = {
+            "source": {"source_inventory.yml"},
+            "bronze": {".gitkeep"},
+            "silver": {
+                "customers.yml",
+                "loan_applications.yml",
+                "organisations.yml",
+                "service_cases.yml",
+            },
+            "gold": {"cde_registry.yml", "scope_registry.yml"},
+        }
+        for layer, filenames in expected.items():
+            actual = {path.name for path in (ROOT / "contracts" / layer).iterdir() if path.is_file()}
+            self.assertEqual(actual, filenames, layer)
 
     def test_runtime_configuration_has_no_example_files(self):
         self.assertFalse((ROOT / "source-simulator/.env.example").exists())
@@ -44,7 +57,9 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn("infrastructure/aws/terraform.tfvars", gitignore)
 
     def test_source_inventory_matches_generated_data(self):
-        inventory = yaml.safe_load((ROOT / "contracts/source_inventory.yml").read_text(encoding="utf-8"))
+        inventory = yaml.safe_load(
+            (ROOT / "contracts/source/source_inventory.yml").read_text(encoding="utf-8")
+        )
         generated = json.loads(
             (ROOT / "dev-tools/datagen/output/master-schema.json").read_text(encoding="utf-8")
         )
@@ -104,7 +119,7 @@ class ArchitectureTests(unittest.TestCase):
             "## Entity Relationship Diagram", 1
         )[0]
         inventory = yaml.safe_load(
-            (ROOT / "contracts/source_inventory.yml").read_text(encoding="utf-8")
+            (ROOT / "contracts/source/source_inventory.yml").read_text(encoding="utf-8")
         )
         for dataset in inventory["datasets"]:
             self.assertIn(f"`{dataset['table']}`", routing)

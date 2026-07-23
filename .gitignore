@@ -9,8 +9,6 @@ venv/
 .env
 *.tgz
 
-.databricks/
-
 infrastructure/aws/.terraform/
 infrastructure/aws/*.tfstate
 infrastructure/aws/*.tfstate.*

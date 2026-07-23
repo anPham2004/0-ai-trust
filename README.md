@@ -82,7 +82,7 @@ The 32 generated datasets are intentionally broader than the Banker Assist use c
 
 These are the only three ingestion source categories. CDC, Apache Kafka, and S3 micro-batch are mechanisms used by those categories, not additional source types.
 
-The authoritative routing mapping is `contracts/source_inventory.yml`. See [SCHEMA.md](SCHEMA.md) for the complete dataset reference, entity relationships, row counts, and the data carried by each ingestion source. The machine-generated physical schema remains in `dev-tools/datagen/output/master-schema.json`.
+The authoritative routing mapping is `contracts/source/source_inventory.yml`. See [SCHEMA.md](SCHEMA.md) for the complete dataset reference, entity relationships, row counts, and the data carried by each ingestion source. The machine-generated physical schema remains in `dev-tools/datagen/output/master-schema.json`.
 
 The simulator uses Debezium because HVR/Precisely is proprietary. It reproduces the relevant contract: initial snapshot, transaction-log CDC, source LSN, operation type, deletes, and continuous continuation. It must be described as an HVR analogue, not as HVR itself.
 
@@ -99,10 +99,13 @@ Databricks renamed the Delta Live Tables product to Lakeflow Spark Declarative P
 ├── README.md
 ├── SCHEMA.md                    dataset schema and ingestion source reference
 ├── Makefile                    single entry point for common operations
-├── databricks.yml
 ├── .github/workflows/
-│   └── deploy.yml              validated Bundle deployment from main
-├── contracts/                  shared data contracts, CDEs, and source inventory
+│   └── sync-databricks.yml     sync develop into the shared Databricks Git Folder
+├── contracts/
+│   ├── source/                 source routing and ingestion mechanism
+│   ├── bronze/                 intentionally empty; raw retention has no business contract
+│   ├── silver/                 domain schema, DQ, tolerance, and quarantine contracts
+│   └── gold/                   CDE classification, scope, masking, and AI consumption
 ├── dev-tools/
 │   └── datagen/
 │       ├── requirements.txt
@@ -124,9 +127,6 @@ Databricks renamed the Delta Live Tables product to Lakeflow Spark Declarative P
 │   ├── silver/                 modelling template only
 │   └── gold/                   modelling template only
 ├── infrastructure/aws/         Terraform for EC2, IAM, S3, and monitoring
-├── resources/
-│   ├── pipelines/              declarative pipeline resources
-│   └── jobs/                   reserved for scheduled jobs
 └── tests/
     ├── architecture/           repository and ingestion invariants
     ├── unit/                   isolated policy tests
@@ -134,7 +134,9 @@ Databricks renamed the Delta Live Tables product to Lakeflow Spark Declarative P
     └── integration/            reserved for pipeline smoke tests
 ```
 
-Naming is deterministic: deployable component directories use `kebab-case`; Python, test, contract, and Terraform identifiers use `snake_case`; Bundle resource files use `<layer>.pipeline.yml`; SQL migrations use `vNNN_description.sql` and run in lexical order. Do not introduce version suffixes such as `nab-v2` into resource names.
+Naming is deterministic: deployable component directories use `kebab-case`; Python, test, contract, and Terraform identifiers use `snake_case`; SQL migrations use `vNNN_description.sql` and run in lexical order. Do not introduce version suffixes such as `nab-v2` into resource names.
+
+Contract ownership follows the data lifecycle. `source/source_inventory.yml` routes all 32 datasets into ingestion. Bronze intentionally has no transform contract because it retains every native record. Silver owns the four draft domain contracts used for future validation and quarantine. Gold owns CDE classification and Banker Assist consumption scope.
 
 There are no PowerShell deployment scripts. Commands below use standard Terraform, Docker, AWS, Databricks, SSH, and Git CLIs and work from any operating system that provides those tools.
 
@@ -282,18 +284,16 @@ WHERE table_schema IN ('bronze', 'silver', 'gold')
 ORDER BY table_schema, table_name;
 ```
 
-## Deploy and run Bronze
+## Configure and run Bronze
 
-Validate the Git commit before deployment:
+After the repository changes are merged into `develop`, the GitHub workflow syncs them into `/Shared/0-ai-trust`. Configure the existing `0-ai-trust-bronze` pipeline once so its source file and root directory are:
 
-```bash
-databricks bundle validate -t dev -p g3-databricks
-databricks bundle plan -t dev -p g3-databricks
-databricks bundle deploy -t dev -p g3-databricks
-databricks bundle run bronze_ingestion -t dev -p g3-databricks
+```text
+Source file: /Workspace/Shared/0-ai-trust/pipelines/bronze/pipeline.py
+Root folder: /Workspace/Shared/0-ai-trust/pipelines/bronze
 ```
 
-The pipeline is triggered, not continuous. Each update processes all newly landed files using Structured Streaming checkpoints and then stops. This preserves NAB-style micro-batch semantics and avoids unnecessary Free Edition compute usage.
+Use the Databricks Jobs & Pipelines UI to start an update. The pipeline is triggered, not continuous. Each update processes all newly landed files using Structured Streaming checkpoints and then stops. This preserves NAB-style micro-batch semantics and avoids unnecessary Free Edition compute usage.
 
 Validate Bronze:
 
@@ -312,13 +312,13 @@ ORDER BY source_dataset;
 
 ## GitHub and Databricks collaboration
 
-GitHub is the source of truth. Each developer links GitHub through the Databricks GitHub App, creates a personal Git Folder and branch, and opens a pull request. Do not share one Git Folder and do not edit deployed Bundle files under `.bundle`.
+GitHub is the source of truth. Each developer works on a feature branch and opens a pull request into `develop`. Do not edit the shared Databricks Git Folder directly.
 
 ```text
-feature branch -> pull request -> tests/review -> main -> Bundle deploy
+feature branch -> pull request -> develop -> GitHub Action -> Databricks Git Folder
 ```
 
-`.github/workflows/deploy.yml` validates and deploys the Bundle when `main` changes. Configure repository secrets `DATABRICKS_HOST` and `DATABRICKS_TOKEN` before enabling it. If the team does not permit a long-lived GitHub token, disable automated deployment and let the designated release manager run `make deploy` with local Databricks OAuth instead. Production GitHub OIDC deployment requires account-level service-principal federation, which Free Edition does not expose.
+`.github/workflows/sync-databricks.yml` runs when `develop` changes and calls `databricks repos update` for the shared Git Folder `/Shared/0-ai-trust`. It syncs source code only and does not start the pipeline. Configure repository secrets `DATABRICKS_HOST` and `DATABRICKS_TOKEN` before enabling it.
 
 ## Zero Trust boundaries
 

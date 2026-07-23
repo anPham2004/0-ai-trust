@@ -1,7 +1,4 @@
-.PHONY: sim-up sim-down test validate deploy bootstrap
-
-DATABRICKS_PROFILE ?= g3-databricks
-DATABRICKS_TARGET ?= dev
+.PHONY: sim-up sim-down test validate bootstrap
 
 sim-up:
 	docker compose --env-file source-simulator/.env -f source-simulator/compose.yaml up -d --build
@@ -14,10 +11,6 @@ test:
 
 validate:
 	docker compose --env-file source-simulator/.env -f source-simulator/compose.yaml config --quiet
-	databricks bundle validate --target $(DATABRICKS_TARGET) --profile $(DATABRICKS_PROFILE)
-
-deploy:
-	databricks bundle deploy --target $(DATABRICKS_TARGET) --profile $(DATABRICKS_PROFILE)
 
 bootstrap:
 	@echo "Run these idempotent migrations in lexical order through Databricks SQL Editor:"
