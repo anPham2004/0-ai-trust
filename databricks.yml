@@ -2,7 +2,7 @@ bundle:
   name: 0-ai-trust
 
 include:
-  - resources/*.yml
+  - resources/**/*.yml
 
 variables:
   catalog:

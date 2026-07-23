@@ -11,7 +11,7 @@ Tables that use a 1:1 row_number join pattern are pinned to their parent
 count — changing only those independently would cause NULL foreign keys.
 
 Run:
-    python3.11 datagen/scripts/run_all.py
+    python3.11 dev-tools/datagen/scripts/run_all.py
 
 Prerequisites:
     pip install -r requirements.txt

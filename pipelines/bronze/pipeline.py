@@ -1,6 +1,6 @@
 """Bronze ingestion: native landing files to Unity Catalog external Delta tables.
 
-The pipeline uses the legacy DLT-compatible declarative API because it mirrors
+The pipeline uses the legacy DLT-compatible declarative interface because it mirrors
 the target platform. All business data is written to S3-backed external table
 sinks; Databricks supplies compute, checkpoints, lineage, and UC governance.
 """

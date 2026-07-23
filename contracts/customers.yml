@@ -9,10 +9,12 @@ lifecycle_stage: Monitor
 canonical_key: global_id
 description: Customer current state ingested by log-based CDC from the customer-owned database.
 sources:
-  - type: DEBEZIUM_CDC
+  - type: DATABASE
+    ingestion_mechanism: DEBEZIUM_CDC
     dataset: customer_master.customers
     fields: [global_id, customerId, firstName, lastName, email, phoneNumber, gender, age, state, createdAt, lastUpdateTime]
-  - type: DEBEZIUM_CDC
+  - type: DATABASE
+    ingestion_mechanism: DEBEZIUM_CDC
     dataset: customer_master.kyc_records
     fields: [global_id, kycId, verificationStatus, verificationDate, riskRating, pepStatus, sanctionsCheck]
 freshness_sla: 24 hours

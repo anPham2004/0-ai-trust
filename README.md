@@ -76,47 +76,65 @@ Do not rename or change the URL/file-event configuration of an external location
 
 The 32 generated datasets are intentionally broader than the Banker Assist use case. Banking, energy, and insurance records remain in Bronze so that Silver modelling must explicitly select scope rather than inheriting ingestion bias.
 
-- PostgreSQL + log-based CDC: 23 mutable authoritative datasets, including customers, organisations, KYC, applications, cases, accounts, balances, transactions, lending servicing, energy accounts, and insurance policies.
-- Apache Kafka: 5 true event/history datasets: application stage history, loan application events, status changes, service case events, and support interactions.
-- File ingestion: 4 legacy/reference/history datasets: accepted loans, rejected applications, banking products, and energy plans.
+- Database source: 23 mutable authoritative datasets, ingested from PostgreSQL transaction logs through Debezium CDC.
+- Event source: 5 true event/history datasets, transported through Apache Kafka.
+- File source: 4 legacy/reference/history datasets, delivered as S3 micro-batches.
 
-The authoritative mapping is `contracts/source_inventory.yml`. Generated schemas are in `datagen/output/master-schema.json`.
+These are the only three ingestion source categories. CDC, Apache Kafka, and S3 micro-batch are mechanisms used by those categories, not additional source types.
+
+The authoritative routing mapping is `contracts/source_inventory.yml`. See [SCHEMA.md](SCHEMA.md) for the complete dataset reference, entity relationships, row counts, and the data carried by each ingestion source. The machine-generated physical schema remains in `dev-tools/datagen/output/master-schema.json`.
 
 The simulator uses Debezium because HVR/Precisely is proprietary. It reproduces the relevant contract: initial snapshot, transaction-log CDC, source LSN, operation type, deletes, and continuous continuation. It must be described as an HVR analogue, not as HVR itself.
 
 ## DLT terminology
 
-The Bronze code deliberately uses the DLT-compatible `dlt` declarative API, Spark Structured Streaming, and Auto Loader. It does not use Lakeflow Connect, managed database connectors, Lakeflow Jobs, or direct outbound database/Kafka connections from Free Edition.
+The Bronze code deliberately uses the DLT-compatible `dlt` declarative interface, Spark Structured Streaming, and Auto Loader. It does not use Lakeflow Connect, managed database connectors, Lakeflow Jobs, or direct outbound database/Kafka connections from Free Edition.
 
-Databricks renamed the Delta Live Tables product to Lakeflow Spark Declarative Pipelines. Consequently, the workspace UI and REST API may display “Lakeflow pipeline” even though the code uses the compatible `dlt` API. DLT cannot exist as a separate modern workspace resource under its former product name.
+Databricks renamed the Delta Live Tables product to Lakeflow Spark Declarative Pipelines. Consequently, workspace metadata may display “Lakeflow pipeline” even though the code uses the compatible `dlt` interface. DLT cannot exist as a separate modern workspace resource under its former product name.
 
 ## Repository structure
 
 ```text
 .
 ├── README.md
+├── SCHEMA.md                    dataset schema and ingestion source reference
+├── Makefile                    single entry point for common operations
 ├── databricks.yml
+├── .github/workflows/
+│   └── deploy.yml              validated Bundle deployment from main
 ├── contracts/                  shared data contracts, CDEs, and source inventory
-├── datagen/
-│   ├── scripts/                deterministic data generation
-│   ├── reference-schemas/      upstream schema references
-│   └── output/                 generated schema contract; row files are ignored
+├── dev-tools/
+│   └── datagen/
+│       ├── requirements.txt
+│       ├── scripts/            deterministic data generation
+│       ├── reference-schemas/  upstream schema references
+│       └── output/             generated schema contract; row files are ignored
 ├── source-simulator/
+│   ├── .env                    local runtime configuration; ignored by Git
 │   ├── compose.yaml            EC2 runtime boundary
 │   ├── postgres/               authoritative database source
+│   ├── bootstrap-loader/       initial bulk load before CDC continuation
 │   ├── cdc-connector-init/     Debezium registration
 │   ├── activity-generator/     periodic database, Kafka, and file activity
 │   ├── landing-exporter/       S3 micro-batch exporter
 │   └── credit-monitor/         AWS credit guard
 ├── pipelines/
-│   ├── bootstrap/              Unity Catalog external-object setup
+│   ├── bootstrap/              versioned Unity Catalog DDL migrations
 │   ├── bronze/                 implemented ingestion pipeline
 │   ├── silver/                 modelling template only
 │   └── gold/                   modelling template only
 ├── infrastructure/aws/         Terraform for EC2, IAM, S3, and monitoring
-├── resources/                  Databricks Asset Bundle resource definitions
-└── tests/                      architecture and policy regression tests
+├── resources/
+│   ├── pipelines/              declarative pipeline resources
+│   └── jobs/                   reserved for scheduled jobs
+└── tests/
+    ├── architecture/           repository and ingestion invariants
+    ├── unit/                   isolated policy tests
+    ├── contracts/              reserved for contract validation
+    └── integration/            reserved for pipeline smoke tests
 ```
+
+Naming is deterministic: deployable component directories use `kebab-case`; Python, test, contract, and Terraform identifiers use `snake_case`; Bundle resource files use `<layer>.pipeline.yml`; SQL migrations use `vNNN_description.sql` and run in lexical order. Do not introduce version suffixes such as `nab-v2` into resource names.
 
 There are no PowerShell deployment scripts. Commands below use standard Terraform, Docker, AWS, Databricks, SSH, and Git CLIs and work from any operating system that provides those tools.
 
@@ -127,6 +145,7 @@ There are no PowerShell deployment scripts. Commands below use standard Terrafor
 - Terraform
 - Docker for local validation
 - OpenSSH
+- GNU Make
 - Python 3.12+
 - The existing S3 storage credential and external location must have read/write access to `s3://g3-assignment/g3/0-ai-trust/`.
 
@@ -148,15 +167,16 @@ aws freetier get-account-plan-state --region us-east-1 --profile g3-aws
 The committed schema is generated from the synthetic data project. Generated row files are local artefacts and are ignored by Git.
 
 ```bash
-python datagen/scripts/run_all.py
-python -m unittest discover -s tests -v
-python -m compileall pipelines source-simulator datagen/scripts
-docker compose -f source-simulator/compose.yaml config
+python -m pip install -r dev-tools/datagen/requirements.txt
+python dev-tools/datagen/scripts/run_all.py
+make test
+python -m compileall pipelines source-simulator dev-tools/datagen/scripts
+make validate
 ```
 
 ## Provision AWS
 
-Create `infrastructure/aws/terraform.tfvars` from the example and provide administrator `/32` CIDRs, SSH public key, and alert email. Never commit this file.
+Maintain the real, Git-ignored `infrastructure/aws/terraform.tfvars` locally with the administrator `/32` CIDRs, SSH public key, and alert email. Never commit this file.
 
 ```bash
 export AWS_PROFILE=g3-aws
@@ -190,28 +210,16 @@ HOST=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --region "$REGIO
 Package only deployable files and upload them:
 
 ```bash
-tar --exclude='__pycache__' --exclude='*.pyc' -czf 0-ai-trust-runtime.tgz source-simulator
+tar --exclude='__pycache__' --exclude='*.pyc' --exclude='.env' -czf 0-ai-trust-runtime.tgz source-simulator
 scp -i ~/.ssh/g3-assignment 0-ai-trust-runtime.tgz "ubuntu@$HOST:/tmp/"
 ssh -i ~/.ssh/g3-assignment "ubuntu@$HOST" 'sudo mkdir -p /opt/0-ai-trust && sudo tar -xzf /tmp/0-ai-trust-runtime.tgz -C /opt/0-ai-trust'
 ```
 
-Create `/opt/0-ai-trust/source-simulator/.env` on EC2. Use a randomly generated database password and the Terraform SNS output:
+`source-simulator/.env` is the single runtime configuration source and is ignored by Git because it contains the real database password and alert ARN. Transfer it separately and restrict it to root:
 
-```text
-POSTGRES_DB=nab_sources
-POSTGRES_USER=nab_app
-POSTGRES_PASSWORD=<random-secret>
-S3_BUCKET=g3-assignment
-AWS_REGION=ap-southeast-2
-BOOTSTRAP_PREFIX=g3/bootstrap/nab
-SOURCE_BATCH_PREFIX=g3/source/nab/batch
-S3_PREFIX=g3/0-ai-trust/landing
-MICROBATCH_INTERVAL_SECONDS=300
-SOURCE_ACTIVITY_INTERVAL_SECONDS=300
-SOURCE_FILE_EVERY_CYCLES=12
-CREDIT_ALERT_TOPIC_ARN=<terraform-credit_alert_topic_arn>
-AWS_CREDIT_ALERT_THRESHOLD_USD=80
-AWS_CREDIT_CHECK_INTERVAL_SECONDS=3600
+```bash
+scp -i ~/.ssh/g3-assignment source-simulator/.env "ubuntu@$HOST:/tmp/0-ai-trust.env"
+ssh -i ~/.ssh/g3-assignment "ubuntu@$HOST" 'sudo install -m 600 -o root -g root /tmp/0-ai-trust.env /opt/0-ai-trust/source-simulator/.env && rm /tmp/0-ai-trust.env'
 ```
 
 Start the continuously running simulator:
@@ -250,14 +258,14 @@ Host: 127.0.0.1
 Port: 15432
 Database: nab_sources
 User: nab_app
-Password: value from EC2 /opt/0-ai-trust/.env
+Password: value from EC2 `/opt/0-ai-trust/source-simulator/.env`
 ```
 
 PostgreSQL and Kafka Connect ports bind only to EC2 loopback and are not exposed publicly.
 
 ## Initialize Unity Catalog
 
-Run `pipelines/bootstrap/setup.sql` once through Databricks SQL Editor as the storage owner. It creates only:
+Run `pipelines/bootstrap/v001_initial_setup.sql` once through Databricks SQL Editor as the storage owner. Future idempotent migrations use the next `vNNN_description.sql` name. The initial migration creates only:
 
 - catalog `0-ai-trust`
 - schemas `bronze`, `silver`, and `gold`
@@ -310,7 +318,7 @@ GitHub is the source of truth. Each developer links GitHub through the Databrick
 feature branch -> pull request -> tests/review -> main -> Bundle deploy
 ```
 
-On Free Edition, use GitHub Actions for secret-free static CI and let a designated release manager deploy `main` using local Databricks OAuth. Production GitHub OIDC deployment requires account-level service-principal federation, which Free Edition does not expose.
+`.github/workflows/deploy.yml` validates and deploys the Bundle when `main` changes. Configure repository secrets `DATABRICKS_HOST` and `DATABRICKS_TOKEN` before enabling it. If the team does not permit a long-lived GitHub token, disable automated deployment and let the designated release manager run `make deploy` with local Databricks OAuth instead. Production GitHub OIDC deployment requires account-level service-principal federation, which Free Edition does not expose.
 
 ## Zero Trust boundaries
 

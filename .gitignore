@@ -17,10 +17,10 @@ infrastructure/aws/*.tfstate.*
 infrastructure/aws/*.tfplan
 infrastructure/aws/terraform.tfvars
 
-datagen/generated-output/
-datagen/generated-batch/
-datagen/output/**
-!datagen/output/master-schema.json
+dev-tools/datagen/generated-output/
+dev-tools/datagen/generated-batch/
+dev-tools/datagen/output/**
+!dev-tools/datagen/output/master-schema.json
 
 _SUCCESS
 ._SUCCESS.crc

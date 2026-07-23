@@ -12,7 +12,7 @@ resources:
       root_path: ${workspace.file_path}/pipelines/bronze
       libraries:
         - file:
-            path: ../pipelines/bronze/pipeline.py
+            path: ../../pipelines/bronze/pipeline.py
       configuration:
         zero_ai_trust.catalog: ${var.catalog}
         zero_ai_trust.landing_path: ${var.landing_path}

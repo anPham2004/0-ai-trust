@@ -7,9 +7,9 @@ canonical_key: organisation_id
 customer_link_key: global_id
 critical_data_elements: [organisation_id, legal_name, organisation_type, kyb_status]
 sources:
-  - {type: DEBEZIUM_CDC, dataset: organisation_master.organisations}
-  - {type: DEBEZIUM_CDC, dataset: organisation_master.organisation_party_relationships}
-  - {type: DEBEZIUM_CDC, dataset: organisation_master.organisation_relationships}
+  - {type: DATABASE, ingestion_mechanism: DEBEZIUM_CDC, dataset: organisation_master.organisations}
+  - {type: DATABASE, ingestion_mechanism: DEBEZIUM_CDC, dataset: organisation_master.organisation_party_relationships}
+  - {type: DATABASE, ingestion_mechanism: DEBEZIUM_CDC, dataset: organisation_master.organisation_relationships}
 lineage_l1: organisation master DB -> Debezium -> S3/Volume Bronze; downstream lineage pending model approval
 lineage_l2_required: true
 future_context_requirements:

@@ -10,7 +10,8 @@ canonical_key: case_id
 customer_key: global_id
 application_key: pending_schema_review
 sources:
-  - type: DEBEZIUM_CDC
+  - type: DATABASE
+    ingestion_mechanism: DEBEZIUM_CDC
     dataset: case_management.service_cases
     fields: [caseId, global_id, caseType, subject, status, priority, createdAt, resolvedAt, resolutionSummary, assignedTeam]
 known_source_limitations:

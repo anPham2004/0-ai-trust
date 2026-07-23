@@ -52,7 +52,7 @@ PRIMARY_KEYS = {
 }
 
 # NAB-style routing: mutable authoritative state is database/CDC, true event history is Kafka,
-# and legacy/reference/history feeds remain files. No artificial API projection is created.
+# and legacy/reference/history feeds remain files.
 BATCH_TABLES = {"accepted_loans", "rejected_applications", "banking_products", "energy_plans"}
 KAFKA_EVENT_TABLES = {
     "application_stage_history", "loan_application_events", "status_change_history",

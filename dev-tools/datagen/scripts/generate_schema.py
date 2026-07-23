@@ -1,9 +1,9 @@
 """Read all Parquet output dirs and write master-schema.json.
 
 Run after the pipeline completes:
-    python3.11 datagen/scripts/generate_schema.py
+    python3.11 dev-tools/datagen/scripts/generate_schema.py
 
-Writes to: datagen/output/master-schema.json
+Writes to: dev-tools/datagen/output/master-schema.json
 """
 import json, os, sys
 

@@ -1,6 +1,0 @@
-region             = "ap-southeast-2"
-admin_cidrs        = ["203.0.113.10/32"]
-public_key_path     = "~/.ssh/g3-assignment.pub"
-instance_type      = "c7i-flex.large"
-landing_bucket_name = "g3-assignment"
-alert_email         = "team@example.com"

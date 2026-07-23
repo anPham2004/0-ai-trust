@@ -2,35 +2,35 @@ landing_principle: The external S3 landing keeps every source in native format a
 bronze_principle: External Delta change history is incremental; mutable CDC entities expose an SCD2 view while event and file facts remain append-only.
 modelling_status: UNDECIDED
 datasets:
-  - {table: accepted_loans, domain: LENDING_HISTORY, native_source: BATCH_CSV}
-  - {table: application_stage_history, domain: LOAN_ORIGINATION, native_source: KAFKA}
-  - {table: banking_accounts, domain: BANKING, native_source: DEBEZIUM_CDC}
-  - {table: banking_balances, domain: BANKING, native_source: DEBEZIUM_CDC}
-  - {table: banking_direct_debits, domain: BANKING, native_source: DEBEZIUM_CDC}
-  - {table: banking_payees, domain: BANKING, native_source: DEBEZIUM_CDC}
-  - {table: banking_products, domain: BANKING, native_source: BATCH_CSV}
-  - {table: banking_scheduled_payments, domain: BANKING, native_source: DEBEZIUM_CDC}
-  - {table: banking_transactions, domain: BANKING, native_source: DEBEZIUM_CDC}
-  - {table: credit_cards, domain: BANKING, native_source: DEBEZIUM_CDC}
-  - {table: customer_preferences, domain: CUSTOMER, native_source: DEBEZIUM_CDC}
-  - {table: customers, domain: CUSTOMER, native_source: DEBEZIUM_CDC}
-  - {table: energy_accounts, domain: ENERGY, native_source: DEBEZIUM_CDC}
-  - {table: energy_invoices, domain: ENERGY, native_source: DEBEZIUM_CDC}
-  - {table: energy_plans, domain: ENERGY, native_source: BATCH_CSV}
-  - {table: energy_service_points, domain: ENERGY, native_source: DEBEZIUM_CDC}
-  - {table: insurance_policies, domain: INSURANCE, native_source: DEBEZIUM_CDC}
-  - {table: kyc_records, domain: CUSTOMER_AND_ORGANISATION, native_source: DEBEZIUM_CDC}
-  - {table: loan_accounts, domain: LENDING_SERVICING, native_source: DEBEZIUM_CDC}
-  - {table: loan_application_events, domain: LOAN_ORIGINATION, native_source: KAFKA}
-  - {table: loan_applications, domain: LOAN_ORIGINATION, native_source: DEBEZIUM_CDC}
-  - {table: missing_documents, domain: LOAN_ORIGINATION, native_source: DEBEZIUM_CDC}
-  - {table: mortgage_accounts, domain: LENDING_SERVICING, native_source: DEBEZIUM_CDC}
-  - {table: organisation_party_relationships, domain: ORGANISATION, native_source: DEBEZIUM_CDC}
-  - {table: organisation_relationships, domain: ORGANISATION, native_source: DEBEZIUM_CDC}
-  - {table: organisations, domain: ORGANISATION, native_source: DEBEZIUM_CDC}
-  - {table: physical_addresses, domain: CUSTOMER_AND_ORGANISATION, native_source: DEBEZIUM_CDC}
-  - {table: rejected_applications, domain: LENDING_HISTORY, native_source: BATCH_CSV}
-  - {table: service_case_events, domain: CUSTOMER_SERVICE, native_source: KAFKA}
-  - {table: service_cases, domain: CUSTOMER_SERVICE, native_source: DEBEZIUM_CDC}
-  - {table: status_change_history, domain: LOAN_ORIGINATION, native_source: KAFKA}
-  - {table: support_interactions, domain: CUSTOMER_SERVICE, native_source: KAFKA}
+  - {table: accepted_loans, domain: LENDING_HISTORY, source_type: FILE, ingestion_mechanism: S3_MICROBATCH}
+  - {table: application_stage_history, domain: LOAN_ORIGINATION, source_type: EVENT, ingestion_mechanism: APACHE_KAFKA}
+  - {table: banking_accounts, domain: BANKING, source_type: DATABASE, ingestion_mechanism: DEBEZIUM_CDC}
+  - {table: banking_balances, domain: BANKING, source_type: DATABASE, ingestion_mechanism: DEBEZIUM_CDC}
+  - {table: banking_direct_debits, domain: BANKING, source_type: DATABASE, ingestion_mechanism: DEBEZIUM_CDC}
+  - {table: banking_payees, domain: BANKING, source_type: DATABASE, ingestion_mechanism: DEBEZIUM_CDC}
+  - {table: banking_products, domain: BANKING, source_type: FILE, ingestion_mechanism: S3_MICROBATCH}
+  - {table: banking_scheduled_payments, domain: BANKING, source_type: DATABASE, ingestion_mechanism: DEBEZIUM_CDC}
+  - {table: banking_transactions, domain: BANKING, source_type: DATABASE, ingestion_mechanism: DEBEZIUM_CDC}
+  - {table: credit_cards, domain: BANKING, source_type: DATABASE, ingestion_mechanism: DEBEZIUM_CDC}
+  - {table: customer_preferences, domain: CUSTOMER, source_type: DATABASE, ingestion_mechanism: DEBEZIUM_CDC}
+  - {table: customers, domain: CUSTOMER, source_type: DATABASE, ingestion_mechanism: DEBEZIUM_CDC}
+  - {table: energy_accounts, domain: ENERGY, source_type: DATABASE, ingestion_mechanism: DEBEZIUM_CDC}
+  - {table: energy_invoices, domain: ENERGY, source_type: DATABASE, ingestion_mechanism: DEBEZIUM_CDC}
+  - {table: energy_plans, domain: ENERGY, source_type: FILE, ingestion_mechanism: S3_MICROBATCH}
+  - {table: energy_service_points, domain: ENERGY, source_type: DATABASE, ingestion_mechanism: DEBEZIUM_CDC}
+  - {table: insurance_policies, domain: INSURANCE, source_type: DATABASE, ingestion_mechanism: DEBEZIUM_CDC}
+  - {table: kyc_records, domain: CUSTOMER_AND_ORGANISATION, source_type: DATABASE, ingestion_mechanism: DEBEZIUM_CDC}
+  - {table: loan_accounts, domain: LENDING_SERVICING, source_type: DATABASE, ingestion_mechanism: DEBEZIUM_CDC}
+  - {table: loan_application_events, domain: LOAN_ORIGINATION, source_type: EVENT, ingestion_mechanism: APACHE_KAFKA}
+  - {table: loan_applications, domain: LOAN_ORIGINATION, source_type: DATABASE, ingestion_mechanism: DEBEZIUM_CDC}
+  - {table: missing_documents, domain: LOAN_ORIGINATION, source_type: DATABASE, ingestion_mechanism: DEBEZIUM_CDC}
+  - {table: mortgage_accounts, domain: LENDING_SERVICING, source_type: DATABASE, ingestion_mechanism: DEBEZIUM_CDC}
+  - {table: organisation_party_relationships, domain: ORGANISATION, source_type: DATABASE, ingestion_mechanism: DEBEZIUM_CDC}
+  - {table: organisation_relationships, domain: ORGANISATION, source_type: DATABASE, ingestion_mechanism: DEBEZIUM_CDC}
+  - {table: organisations, domain: ORGANISATION, source_type: DATABASE, ingestion_mechanism: DEBEZIUM_CDC}
+  - {table: physical_addresses, domain: CUSTOMER_AND_ORGANISATION, source_type: DATABASE, ingestion_mechanism: DEBEZIUM_CDC}
+  - {table: rejected_applications, domain: LENDING_HISTORY, source_type: FILE, ingestion_mechanism: S3_MICROBATCH}
+  - {table: service_case_events, domain: CUSTOMER_SERVICE, source_type: EVENT, ingestion_mechanism: APACHE_KAFKA}
+  - {table: service_cases, domain: CUSTOMER_SERVICE, source_type: DATABASE, ingestion_mechanism: DEBEZIUM_CDC}
+  - {table: status_change_history, domain: LOAN_ORIGINATION, source_type: EVENT, ingestion_mechanism: APACHE_KAFKA}
+  - {table: support_interactions, domain: CUSTOMER_SERVICE, source_type: EVENT, ingestion_mechanism: APACHE_KAFKA}

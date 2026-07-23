@@ -2,7 +2,7 @@
 Orchestrator for the multi-domain synthetic data generation pipeline (32 tables).
 
 Run:
-    python3.11 datagen/scripts/run_all.py
+    python3.11 dev-tools/datagen/scripts/run_all.py
 
 Prerequisites:
     - pip install faker numpy pandas pyspark pyarrow python-dateutil

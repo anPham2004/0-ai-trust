@@ -9,13 +9,16 @@ lifecycle_stage: Monitor
 canonical_key: application_id
 customer_key: global_id
 sources:
-  - type: KAFKA
+  - type: EVENT
+    ingestion_mechanism: APACHE_KAFKA
     dataset: nab.application.events
     fields: [stage transitions, status transitions, lifecycle events]
-  - type: DEBEZIUM_CDC
+  - type: DATABASE
+    ingestion_mechanism: DEBEZIUM_CDC
     dataset: lending_origination.loan_applications
     fields: [applicationId, global_id, applicationType, requestedAmount, finalOutcome, loanGoal, creditScore, submittedAt, lastUpdatedAt]
-  - type: DEBEZIUM_CDC
+  - type: DATABASE
+    ingestion_mechanism: DEBEZIUM_CDC
     dataset: lending_origination.missing_documents
     fields: [documentId, applicationId, documentType, status, requestedAt, receivedAt]
 freshness_sla: 24 hours
