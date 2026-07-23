@@ -93,7 +93,7 @@ The simulator uses Debezium because HVR/Precisely is proprietary. It reproduces 
 
 The pipeline uses the successor Spark Declarative Pipelines interface, `from pyspark import pipelines as dp`, Spark Structured Streaming, and Auto Loader. It does not use the legacy `dlt` Python module, Lakeflow Connect managed database connectors, or direct outbound database/Kafka connections from Free Edition.
 
-Databricks renamed Delta Live Tables to Lakeflow Spark Declarative Pipelines. The Bronze pipeline runs continuously and owns the Auto Loader checkpoints. A separate triggered downstream pipeline is scheduled by Lakeflow Jobs every 15 minutes for future Silver and Gold processing.
+Databricks renamed Delta Live Tables to Lakeflow Spark Declarative Pipelines. The single pipeline runs continuously and owns the Auto Loader checkpoints. Bronze streaming flows use their low-latency default trigger, while every future Silver and Gold dataset must set `spark_conf=downstream_microbatch_spark_conf()` to run at a 15-minute trigger interval. This preserves both SLAs inside the one concurrently active workspace pipeline allowed by Free Edition.
 
 ## Repository structure
 
@@ -289,13 +289,24 @@ ORDER BY table_schema, table_name;
 
 ## Configure and run the pipelines
 
-After repository changes are merged into `develop`, the GitHub workflow tests and syncs them into `/Shared/0-ai-trust`. The existing `0-ai-trust-medallion` pipeline owns only the files under `pipelines/bronze` and runs continuously. Retaining this pipeline preserves its Auto Loader checkpoints and prevents a duplicate replay into the external sinks. The triggered `0-ai-trust-curation` pipeline owns `pipelines/silver` and `pipelines/gold`. Neither pipeline has a generic entrypoint file. Their root directory is:
+After repository changes are merged into `develop`, the GitHub workflow tests and syncs them into `/Shared/0-ai-trust`. The existing `0-ai-trust-medallion` pipeline directly registers `pipelines/bronze`, `pipelines/silver`, and `pipelines/gold` and runs continuously. Retaining this pipeline preserves its Auto Loader checkpoints and prevents a duplicate replay into the external sinks. It has no generic entrypoint file. Its root directory is:
 
 ```text
 Root folder: /Workspace/Shared/0-ai-trust/pipelines
 ```
 
-The continuous Bronze pipeline uses Spark Structured Streaming and Auto Loader to materialise newly landed data without waiting for a scheduled Job. The `0-ai-trust-medallion-refresh` Lakeflow Job calls only `0-ai-trust-curation` every 15 minutes. While Silver and Gold contain documentation-only templates, that Job remains paused to avoid empty compute runs; enable it after the first approved downstream dataset is implemented.
+The Bronze flows use Spark Structured Streaming and Auto Loader to materialise newly landed data without waiting for a scheduled Job. Free Edition permits only one concurrently active workspace pipeline, so a second triggered Silver/Gold pipeline cannot run while Bronze remains continuous. Future Silver and Gold tables therefore stay in the same pipeline and use a per-dataset 15-minute `pipelines.trigger.interval`. No Lakeflow Job is required for this execution model.
+
+Future downstream declarations must use the shared policy explicitly:
+
+```python
+from pyspark import pipelines as dp
+from framework.refresh_policy import downstream_microbatch_spark_conf
+
+@dp.table(spark_conf=downstream_microbatch_spark_conf())
+def customer_curated():
+    ...
+```
 
 Useful Databricks CLI operations:
 
@@ -305,17 +316,14 @@ databricks repos get 1237804683921450 --profile g3-databricks
 databricks pipelines list-pipelines --profile g3-databricks
 databricks jobs list --profile g3-databricks
 
-# Validate the continuous Bronze definitions without writing data.
+# Validate all continuous pipeline definitions without writing data.
 databricks pipelines start-update ba6a2d09-4d80-4b13-ac56-22e644411fe2 \
   --validate-only --profile g3-databricks
 
-# Start Bronze continuous processing. Use --full-refresh only for an intentional rebuild.
+# Start continuous processing. Use --full-refresh only for an intentional rebuild.
 databricks pipelines start-update ba6a2d09-4d80-4b13-ac56-22e644411fe2 \
   --profile g3-databricks
 
-# Inspect or manually trigger the scheduled orchestration job.
-databricks jobs get 190404689821954 --profile g3-databricks
-databricks jobs run-now 190404689821954 --profile g3-databricks
 ```
 
 Validate Bronze:

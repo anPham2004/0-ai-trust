@@ -197,6 +197,12 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn("/dev/tcp/127.0.0.1/9092", compose)
         self.assertNotIn("kafka-topics.sh", compose)
         self.assertIn("mem_limit:", compose)
+        self.assertIn("MICROBATCH_INTERVAL_SECONDS:-60", compose)
+
+    def test_downstream_refresh_policy_is_fifteen_minutes(self):
+        policy = (ROOT / "pipelines/framework/refresh_policy.py").read_text(encoding="utf-8")
+        self.assertIn('DOWNSTREAM_TRIGGER_INTERVAL = "15 minutes"', policy)
+        self.assertIn('"pipelines.trigger.interval"', policy)
 
     def test_landing_manifest_contains_replay_and_freshness_evidence(self):
         exporter = (ROOT / "source-simulator/landing-exporter/exporter.py").read_text(encoding="utf-8")
