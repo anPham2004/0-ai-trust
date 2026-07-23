@@ -1,0 +1,41 @@
+product: service_cases
+version: 1.1.0
+contract_status: DRAFT
+owner: customer-service-domain
+producer: case-management-platform
+consumers: [banker-assist, customer-service-operations]
+critical_data_elements: [case_id, global_id, case_status]
+lifecycle_stage: Monitor
+canonical_key: case_id
+customer_key: global_id
+application_key: pending_schema_review
+sources:
+  - type: DATABASE
+    ingestion_mechanism: DEBEZIUM_CDC
+    dataset: case_management.service_cases
+    fields: [caseId, global_id, caseType, subject, status, priority, createdAt, resolvedAt, resolutionSummary, assignedTeam]
+known_source_limitations:
+  - Application and arrangement linkage must be validated from the generated schema during Silver modelling.
+freshness_sla: 24 hours
+lineage_l1: case-management/events -> S3/Volume Bronze; downstream lineage pending model approval
+lineage_l2_required: true
+rules:
+  hard:
+    - CASE_ID_NULL
+    - CASE_CUSTOMER_NOT_FOUND
+    - CASE_STATUS_INVALID
+    - CASE_DATE_ORDER_INVALID
+    - HIGHLY_CONFIDENTIAL_FREE_TEXT_LEAK
+  warn:
+    - CASE_SLA_OVERDUE
+    - CONTACT_PII_SCRUBBED
+tolerances:
+  hard_failure_rate: 0.01
+  sla_breach_rate: 0.02
+quality_dimensions:
+  completeness: [CASE_ID_NULL, CASE_CUSTOMER_NOT_FOUND]
+  consistency: [CASE_DATE_ORDER_INVALID]
+  timeliness: [CASE_SLA_OVERDUE]
+  validity: [CASE_STATUS_INVALID, HIGHLY_CONFIDENTIAL_FREE_TEXT_LEAK]
+parameters:
+  allowed_case_statuses: [open, in_progress, resolved, closed]

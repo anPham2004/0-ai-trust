@@ -1,25 +1,29 @@
 .DS_Store
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
 
-# Synthetic data output (upload to Databricks Volume manually, not via git)
-# synthetic-data/output/
+.venv/
+venv/
 
+.env
+*.tgz
 
-#databricks aitools skills
-.databricks
+infrastructure/aws/.terraform/
+infrastructure/aws/*.tfstate
+infrastructure/aws/*.tfstate.*
+infrastructure/aws/*.tfplan
+infrastructure/aws/terraform.tfvars
 
+dev-tools/datagen/generated-output/
+dev-tools/datagen/generated-batch/
+dev-tools/datagen/output/**
+!dev-tools/datagen/output/master-schema.json
 
-# Parquet / Spark artefacts
 _SUCCESS
 ._SUCCESS.crc
 *.parquet
 *.parquet.crc
 
-# Python virtual environments
-.venv/
-venv/
-
-# Internal planning / AI session files
 .claude/
 plans/

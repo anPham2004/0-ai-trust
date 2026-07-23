@@ -1,0 +1,17 @@
+use_case: banker_assist_application_status
+status: DRAFT_PENDING_SILVER_MODEL
+default_disposition: OUT_OF_SCOPE
+selected_event_types:
+  - CustomerCurrentState
+  - CustomerKycCurrentState
+  - LoanApplicationCurrentState
+  - LoanApplicationStatusChanged
+  - ApplicationStageChanged
+  - LoanApplicationProcessEvent
+  - LoanDocumentStatusChanged
+  - ServiceCaseCurrentState
+  - ServiceCaseEventRecorded
+retained_not_selected_event_types:
+  - PhysicalAddressCurrentState
+  - CustomerPreferencesCurrentState
+  - SupportInteractionCreated

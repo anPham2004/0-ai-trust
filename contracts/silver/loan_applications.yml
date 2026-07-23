@@ -1,0 +1,68 @@
+product: loan_applications
+version: 1.1.0
+contract_status: DRAFT
+owner: lending-domain
+producer: loan-origination-platform
+consumers: [banker-assist, lending-operations]
+critical_data_elements: [application_id, global_id, application_status, requested_amount]
+lifecycle_stage: Monitor
+canonical_key: application_id
+customer_key: global_id
+sources:
+  - type: EVENT
+    ingestion_mechanism: APACHE_KAFKA
+    dataset: nab.application.events
+    fields: [stage transitions, status transitions, lifecycle events]
+  - type: DATABASE
+    ingestion_mechanism: DEBEZIUM_CDC
+    dataset: lending_origination.loan_applications
+    fields: [applicationId, global_id, applicationType, requestedAmount, finalOutcome, loanGoal, creditScore, submittedAt, lastUpdatedAt]
+  - type: DATABASE
+    ingestion_mechanism: DEBEZIUM_CDC
+    dataset: lending_origination.missing_documents
+    fields: [documentId, applicationId, documentType, status, requestedAt, receivedAt]
+freshness_sla: 24 hours
+lineage_l1: loan-origination DB/events -> S3/Volume Bronze; downstream lineage pending model approval
+lineage_l2_required: true
+rules:
+  hard:
+    - APPLICATION_ID_NULL
+    - APPLICATION_CUSTOMER_NOT_FOUND
+    - LOAN_TYPE_INVALID
+    - LOAN_AMOUNT_INVALID
+    - APPLICATION_STATUS_INVALID
+    - APPLICATION_DATE_ORDER_INVALID
+    - HIGHLY_CONFIDENTIAL_FREE_TEXT_LEAK
+    - APPLICATION_STAGE_DATE_ORDER_INVALID
+    - APPLICATION_STAGE_STATUS_CONFLICT
+  warn:
+    - APPLICATION_STALE
+    - CONTACT_PII_SCRUBBED
+    - APPLICATION_STAGE_SLA_OVERDUE
+ai_policy:
+  allowed: [status_summary, missing_document_summary, next_step_guidance]
+  prohibited: [credit_decision, fraud_assessment, display_raw_pii]
+tolerances:
+  hard_failure_rate: 0.01
+  freshness_breach_rate: 0.05
+quality_dimensions:
+  completeness: [APPLICATION_ID_NULL, APPLICATION_CUSTOMER_ID_NULL, ASSIGNMENT_MISSING]
+  accuracy: [LOAN_AMOUNT_INVALID]
+  consistency: [APPLICATION_CUSTOMER_NOT_FOUND, INVALID_STATUS_TRANSITION_FOUND, SOURCE_STATE_CONFLICT]
+  timeliness: [APPLICATION_STALE, OUT_OF_ORDER_STATUS_EVENT_SEEN]
+  validity: [LOAN_TYPE_INVALID, APPLICATION_STATUS_INVALID, APPLICATION_DATE_ORDER_INVALID, HIGHLY_CONFIDENTIAL_FREE_TEXT_LEAK]
+parameters:
+  allowed_loan_types: [new, continuation]
+  allowed_application_statuses: [Accepted, Cancelled, Denied]
+  minimum_loan_amount: 1000
+  freshness_days: 30
+  allowed_status_transitions:
+    - Assessment->Cancelled
+    - Assessment->Conditionally_Approved
+    - Assessment->Credit_Check
+    - Assessment->Withdrawn
+    - Conditionally_Approved->Document_Verification
+    - Credit_Check->Approved
+    - Credit_Check->Denied
+    - Document_Verification->Assessment
+    - Submitted->Document_Verification

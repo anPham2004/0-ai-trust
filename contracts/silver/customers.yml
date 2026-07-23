@@ -1,0 +1,51 @@
+product: customers
+version: 1.1.0
+contract_status: DRAFT
+owner: customer-domain
+producer: customer-master-platform
+consumers: [banker-assist, lending-operations]
+critical_data_elements: [global_id, kyc_status, has_active_warning]
+lifecycle_stage: Monitor
+canonical_key: global_id
+description: Customer current state ingested by log-based CDC from the customer-owned database.
+sources:
+  - type: DATABASE
+    ingestion_mechanism: DEBEZIUM_CDC
+    dataset: customer_master.customers
+    fields: [global_id, customerId, firstName, lastName, email, phoneNumber, gender, age, state, createdAt, lastUpdateTime]
+  - type: DATABASE
+    ingestion_mechanism: DEBEZIUM_CDC
+    dataset: customer_master.kyc_records
+    fields: [global_id, kycId, verificationStatus, verificationDate, riskRating, pepStatus, sanctionsCheck]
+freshness_sla: 24 hours
+lineage_l1: customer-master DB -> Debezium -> S3/Volume Bronze; downstream lineage pending model approval
+lineage_l2_required: true
+classifications:
+  first_name: CONFIDENTIAL
+  last_name: CONFIDENTIAL
+  age: CONFIDENTIAL
+  email: CONFIDENTIAL
+  phone: CONFIDENTIAL
+rules:
+  hard:
+    - CUSTOMER_ID_NULL
+    - KYC_MISSING
+    - KYC_STATUS_INVALID
+    - AGE_MINIMUM
+  warn:
+    - CUSTOMER_SNAPSHOT_STALE
+    - ACTIVE_CUSTOMER_WARNING
+    - EMAIL_FORMAT_REVIEW
+    - PHONE_FORMAT_REVIEW
+tolerances:
+  hard_failure_rate: 0.01
+  freshness_breach_rate: 0.05
+quality_dimensions:
+  completeness: [CUSTOMER_ID_NULL, KYC_MISSING]
+  validity: [KYC_STATUS_INVALID, CUSTOMER_CREATED_AT_INVALID]
+  timeliness: [CUSTOMER_SNAPSHOT_STALE]
+parameters:
+  allowed_kyc_statuses: [VERIFIED, PENDING, EXPIRED, FAILED]
+  freshness_days: 30
+  minimum_age: 18
+  minimum_created_date: 2010-01-01
