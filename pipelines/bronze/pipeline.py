@@ -9,13 +9,14 @@ import dlt
 from pyspark.sql import functions as F
 from pyspark.sql.types import LongType, StringType, StructField, StructType
 
-
+# Catalog and landing path configuration for Unity Catalog and file ingestion
 CATALOG = spark.conf.get("zero_ai_trust.catalog", "0-ai-trust")
 LANDING = spark.conf.get(
     "zero_ai_trust.landing_path",
     "/Volumes/0-ai-trust/bronze/landing/raw",
 )
 
+# Schema definition for transport records ingested from landing files
 TRANSPORT_SCHEMA = StructType(
     [
         StructField("topic", StringType()),
@@ -29,11 +30,11 @@ TRANSPORT_SCHEMA = StructType(
     ]
 )
 
-
+# Helper to generate fully qualified external table names in Unity Catalog
 def external_table(name: str) -> str:
     return f"`{CATALOG}`.bronze.{name}"
 
-
+# Reads streaming text files from the landing path and parses them into transport schema
 def text_stream(source: str):
     return (
         spark.readStream.format("cloudFiles")
@@ -49,14 +50,14 @@ def text_stream(source: str):
         .select("transport.*", "_source_file", "_source_file_modified_at")
     )
 
-
+# Sink definition for CDC changes, writing to an external Delta table
 dlt.create_sink(
     "cdc_changes_sink",
     "delta",
     {"tableName": external_table("cdc_changes")},
 )
 
-
+# Append flow for ingesting CDC changes from text files into the CDC changes sink
 @dlt.append_flow(name="ingest_cdc_changes", target="cdc_changes_sink")
 def ingest_cdc_changes():
     source_schema = F.get_json_object("value", "$.source.schema")
@@ -81,14 +82,14 @@ def ingest_cdc_changes():
         )
     )
 
-
+# Sink definition for Kafka events, writing to an external Delta table
 dlt.create_sink(
     "kafka_events_sink",
     "delta",
     {"tableName": external_table("kafka_events")},
 )
 
-
+# Append flow for ingesting Kafka events from text files into the Kafka events sink
 @dlt.append_flow(name="ingest_kafka_events", target="kafka_events_sink")
 def ingest_kafka_events():
     return (
@@ -110,14 +111,14 @@ def ingest_kafka_events():
         )
     )
 
-
+# Sink definition for file arrivals, writing to an external Delta table
 dlt.create_sink(
     "file_arrivals_sink",
     "delta",
     {"tableName": external_table("file_arrivals")},
 )
 
-
+# Append flow for ingesting binary files and their metadata into the file arrivals sink
 @dlt.append_flow(name="ingest_file_arrivals", target="file_arrivals_sink")
 def ingest_file_arrivals():
     return (
