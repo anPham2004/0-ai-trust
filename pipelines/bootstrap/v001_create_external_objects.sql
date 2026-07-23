@@ -15,7 +15,7 @@ COMMENT 'Reserved modelling template: masked AI-ready data products';
 DROP SCHEMA IF EXISTS `0-ai-trust`.default;
 
 CREATE EXTERNAL VOLUME IF NOT EXISTS `0-ai-trust`.bronze.landing
-LOCATION 's3://g3-assignment/g3/0-ai-trust/landing'
+LOCATION 's3://g3-assignment/g3/0-ai-trust/bronze/landing'
 COMMENT 'Immutable source-native landing zone';
 
 CREATE TABLE IF NOT EXISTS `0-ai-trust`.bronze.cdc_changes (
@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS `0-ai-trust`.bronze.cdc_changes (
   _ingested_at TIMESTAMP
 )
 USING DELTA
-LOCATION 's3://g3-assignment/g3/0-ai-trust/bronze/cdc_changes'
+LOCATION 's3://g3-assignment/g3/0-ai-trust/bronze/tables/cdc_changes'
 TBLPROPERTIES (
   'quality' = 'bronze',
   'data_classification' = 'Highly Confidential',
@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS `0-ai-trust`.bronze.kafka_events (
   _ingested_at TIMESTAMP
 )
 USING DELTA
-LOCATION 's3://g3-assignment/g3/0-ai-trust/bronze/kafka_events'
+LOCATION 's3://g3-assignment/g3/0-ai-trust/bronze/tables/kafka_events'
 TBLPROPERTIES (
   'quality' = 'bronze',
   'data_classification' = 'Highly Confidential',
@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS `0-ai-trust`.bronze.file_arrivals (
   _ingested_at TIMESTAMP
 )
 USING DELTA
-LOCATION 's3://g3-assignment/g3/0-ai-trust/bronze/file_arrivals'
+LOCATION 's3://g3-assignment/g3/0-ai-trust/bronze/tables/file_arrivals'
 TBLPROPERTIES (
   'quality' = 'bronze',
   'data_classification' = 'Highly Confidential',

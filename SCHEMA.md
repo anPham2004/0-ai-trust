@@ -49,7 +49,7 @@ These are mutable authoritative entities or current-state records. Debezium simu
 
 ```text
 PostgreSQL WAL -> Debezium -> Kafka CDC topics -> landing-exporter
-               -> S3 landing/raw/cdc/*.jsonl -> Auto Loader -> bronze.cdc_changes
+               -> S3 bronze/landing/cdc/<dataset>/*.jsonl -> Auto Loader -> bronze.cdc_changes
 ```
 
 | Information area | Datasets |
@@ -68,7 +68,7 @@ These are historical facts emitted when a business process or customer interacti
 
 ```text
 Business activity -> Apache Kafka -> landing-exporter
-                  -> S3 landing/raw/kafka/*.jsonl -> Auto Loader -> bronze.kafka_events
+                  -> S3 bronze/landing/event/<dataset>/*.jsonl -> Auto Loader -> bronze.kafka_events
 ```
 
 | Information area | Datasets |
@@ -83,7 +83,7 @@ The Kafka envelope retains topic, key, partition, offset, timestamp, event type,
 These represent legacy history, catalogues, or externally delivered extracts where log-based CDC and business events are not appropriate.
 
 ```text
-S3 source drop-zone -> landing-exporter -> S3 landing/raw/file/<dataset>/*.csv
+S3 source drop-zone -> landing-exporter -> S3 bronze/landing/file/<dataset>/*.csv
                     -> Auto Loader binaryFile -> bronze.file_arrivals
 ```
 
@@ -96,7 +96,7 @@ Files are copied byte-for-byte. Bronze records file path, bytes, size, modificat
 
 ### Micro-batch manifest
 
-Every exporter cycle writes `landing/manifests/manifest-<batch_id>.json` containing artifact paths, record counts, SHA-256 hashes, native formats, and total records. A manifest is an audit and reconciliation receipt, not business data and not a fourth ingestion source.
+Every exporter cycle writes `bronze/landing/manifests/manifest-<batch_id>.json` containing heartbeat status, dataset artifact paths, record counts, SHA-256 hashes, LSN/offset watermarks, native formats, and total records. A manifest is an audit and reconciliation receipt, not business data and not a fourth ingestion source.
 
 ---
 

@@ -133,7 +133,7 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn('BATCH_TABLES = {"accepted_loans", "rejected_applications"', loader)
 
     def test_only_three_layer_schemas_are_created(self):
-        setup = (ROOT / "pipelines/bootstrap/v001_initial_setup.sql").read_text(encoding="utf-8")
+        setup = (ROOT / "pipelines/bootstrap/v001_create_external_objects.sql").read_text(encoding="utf-8")
         self.assertIn("CREATE CATALOG IF NOT EXISTS `0-ai-trust`", setup)
         for layer in ("bronze", "silver", "gold"):
             self.assertIn(f"CREATE SCHEMA IF NOT EXISTS `0-ai-trust`.{layer}", setup)
@@ -143,31 +143,48 @@ class ArchitectureTests(unittest.TestCase):
         self.assertEqual(setup.count("CREATE SCHEMA IF NOT EXISTS"), 3)
 
     def test_all_bronze_tables_are_external_delta(self):
-        setup = (ROOT / "pipelines/bootstrap/v001_initial_setup.sql").read_text(encoding="utf-8")
+        setup = (ROOT / "pipelines/bootstrap/v001_create_external_objects.sql").read_text(encoding="utf-8")
         for table in ("cdc_changes", "kafka_events", "file_arrivals"):
             marker = f"CREATE TABLE IF NOT EXISTS `0-ai-trust`.bronze.{table}"
             section = setup.split(marker, 1)[1].split(";", 1)[0]
             self.assertIn("USING DELTA", section)
-            self.assertIn("LOCATION 's3://g3-assignment/g3/0-ai-trust/bronze/", section)
+            self.assertIn("LOCATION 's3://g3-assignment/g3/0-ai-trust/bronze/tables/", section)
         self.assertIn("CREATE OR REPLACE VIEW `0-ai-trust`.bronze.cdc_scd2", setup)
 
     def test_declarative_pipeline_writes_only_external_sinks(self):
-        bronze = (ROOT / "pipelines/bronze/pipeline.py").read_text(encoding="utf-8")
-        self.assertEqual(bronze.count("dlt.create_sink("), 3)
-        self.assertEqual(bronze.count("@dlt.append_flow"), 3)
-        self.assertNotIn("@dlt.table", bronze)
-        self.assertIn('option("cloudFiles.useManagedFileEvents", "true")', bronze)
-        self.assertIn('option("cloudFiles.format", "binaryFile")', bronze)
+        definitions = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted((ROOT / "pipelines/bronze").glob("*_ingestion.py"))
+        )
+        support = (ROOT / "pipelines/framework/landing_stream_reader.py").read_text(encoding="utf-8")
+        self.assertEqual(definitions.count("dp.create_sink("), 3)
+        self.assertEqual(definitions.count("@dp.append_flow"), 3)
+        self.assertNotIn("import dlt", definitions)
+        self.assertNotIn("dlt.", definitions)
+        self.assertIn("from pyspark import pipelines as dp", definitions)
+        self.assertIn('option("cloudFiles.useManagedFileEvents", "true")', support + definitions)
+        self.assertIn('option("cloudFiles.format", "binaryFile")', definitions)
 
     def test_silver_and_gold_are_templates_only(self):
-        for layer in ("silver", "gold"):
-            content = (ROOT / f"pipelines/{layer}/template.py").read_text(encoding="utf-8")
-            self.assertNotIn("@dlt.", content)
-            self.assertNotIn("CREATE TABLE", content.upper())
+        expected = {
+            "silver": {
+                "application_curated.py", "customer_curated.py", "organisation_curated.py",
+                "record_quarantine.py", "service_curated.py",
+            },
+            "gold": {"banker_assist_context.py", "data_quality_context.py", "semantic_context.py"},
+        }
+        for layer, filenames in expected.items():
+            actual = {path.name for path in (ROOT / "pipelines" / layer).glob("*.py")}
+            self.assertEqual(actual, filenames)
+            for filename in filenames:
+                content = (ROOT / "pipelines" / layer / filename).read_text(encoding="utf-8")
+                self.assertNotIn("@dp.", content)
+                self.assertNotIn("CREATE TABLE", content.upper())
 
     def test_periodic_database_kafka_and_file_activity_exists(self):
         activity = (ROOT / "source-simulator/activity-generator/activity.py").read_text(encoding="utf-8")
         self.assertIn("UPDATE lending_origination.loan_applications", activity)
+        self.assertIn("INSERT INTO lending_origination.loan_applications", activity)
         self.assertIn('"nab.application.events"', activity)
         self.assertIn("copy_object", activity)
 
@@ -177,6 +194,19 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn("quay.io/debezium/connect:", compose)
         self.assertNotIn("redpandadata", compose.lower())
         self.assertIn("AWS_CREDIT_ALERT_THRESHOLD_USD:-80", compose)
+        self.assertIn("/dev/tcp/127.0.0.1/9092", compose)
+        self.assertNotIn("kafka-topics.sh", compose)
+        self.assertIn("mem_limit:", compose)
+
+    def test_landing_manifest_contains_replay_and_freshness_evidence(self):
+        exporter = (ROOT / "source-simulator/landing-exporter/exporter.py").read_text(encoding="utf-8")
+        for field in (
+            "manifest_version", "heartbeat_status", "record_count", "sha256",
+            "min_source_lsn", "max_source_lsn", "min_kafka_offset", "max_kafka_offset",
+        ):
+            self.assertIn(field, exporter)
+        self.assertIn('write_grouped_jsonl("event"', exporter)
+        self.assertNotIn('write_jsonl("kafka"', exporter)
 
     def test_repo_has_only_authorized_markdown_documents(self):
         ignored_directories = {".terraform", ".pytest_cache", ".databricks", ".git"}

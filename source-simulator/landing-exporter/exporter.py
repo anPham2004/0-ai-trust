@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,7 +16,7 @@ LANDING_ROOT = Path(os.getenv("LANDING_ROOT", "/landing"))
 INTERVAL = int(os.getenv("MICROBATCH_INTERVAL_SECONDS", "300"))
 SOURCE_BATCH_PREFIX = os.getenv("SOURCE_BATCH_PREFIX", "g3/source/nab/batch").strip("/")
 S3_BUCKET = os.environ["S3_BUCKET"]
-S3_PREFIX = os.getenv("S3_PREFIX", "g3/0-ai-trust/landing").strip("/")
+S3_PREFIX = os.getenv("S3_PREFIX", "g3/0-ai-trust/bronze/landing").strip("/")
 S3 = boto3.client("s3", region_name=os.getenv("AWS_REGION", "ap-southeast-2"))
 
 
@@ -35,7 +36,12 @@ def publish_file(path: Path) -> str:
     return f"s3://{S3_BUCKET}/{key}"
 
 
-def artifact(path: Path, record_count: int, native_format: str | None = None) -> dict:
+def artifact(
+    path: Path,
+    record_count: int,
+    native_format: str | None = None,
+    **metadata,
+) -> dict:
     result = {
         "path": publish_file(path),
         "record_count": record_count,
@@ -43,13 +49,53 @@ def artifact(path: Path, record_count: int, native_format: str | None = None) ->
     }
     if native_format:
         result["native_format"] = native_format
+    result.update({key: value for key, value in metadata.items() if value is not None})
     return result
 
 
-def write_jsonl(source: str, batch_id: str, records: list[dict]) -> dict | None:
+def dataset_slug(value: str) -> str:
+    return re.sub(r"[^a-z0-9_]+", "__", value.lower()).strip("_") or "unknown_dataset"
+
+
+def payload(record: dict) -> dict:
+    try:
+        value = json.loads(record.get("value") or "{}")
+        return value if isinstance(value, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def cdc_dataset(record: dict) -> str:
+    source = payload(record).get("source") or {}
+    qualified = ".".join(filter(None, (source.get("schema"), source.get("table"))))
+    return dataset_slug(qualified or record.get("topic") or "unknown_cdc")
+
+
+def event_dataset(record: dict) -> str:
+    value = payload(record)
+    return dataset_slug(value.get("source_dataset") or record.get("topic") or "unknown_event")
+
+
+def transport_watermarks(records: list[dict]) -> dict:
+    offsets = [record["offset"] for record in records if record.get("offset") is not None]
+    lsns = []
+    for record in records:
+        source_lsn = (payload(record).get("source") or {}).get("lsn")
+        if source_lsn is not None:
+            lsns.append(int(source_lsn))
+    return {
+        "min_kafka_offset": min(offsets) if offsets else None,
+        "max_kafka_offset": max(offsets) if offsets else None,
+        "min_source_lsn": min(lsns) if lsns else None,
+        "max_source_lsn": max(lsns) if lsns else None,
+        "topics": sorted({record["topic"] for record in records if record.get("topic")}),
+    }
+
+
+def write_jsonl(source: str, dataset: str, batch_id: str, records: list[dict]) -> dict | None:
     if not records:
         return None
-    directory = LANDING_ROOT / "raw" / source
+    directory = LANDING_ROOT / source / dataset
     directory.mkdir(parents=True, exist_ok=True)
     target = directory / f"batch-{batch_id}.jsonl"
     temporary = target.with_suffix(".tmp")
@@ -57,7 +103,24 @@ def write_jsonl(source: str, batch_id: str, records: list[dict]) -> dict | None:
         for record in records:
             handle.write(json.dumps(record, separators=(",", ":"), default=str) + "\n")
     temporary.replace(target)
-    return artifact(target, len(records))
+    return artifact(
+        target,
+        len(records),
+        source_type=source.upper(),
+        source_dataset=dataset,
+        **transport_watermarks(records),
+    )
+
+
+def write_grouped_jsonl(source: str, batch_id: str, records: list[dict], classifier) -> list[dict]:
+    grouped = {}
+    for record in records:
+        grouped.setdefault(classifier(record), []).append(record)
+    return [
+        result
+        for dataset, dataset_records in sorted(grouped.items())
+        if (result := write_jsonl(source, dataset, batch_id, dataset_records)) is not None
+    ]
 
 
 def consume(pattern: str, group_id: str, limit: int = 100000) -> tuple[list, Consumer]:
@@ -97,37 +160,37 @@ def transport_record(message) -> dict:
     }
 
 
-def export_cdc(batch_id: str) -> dict | None:
+def export_cdc(batch_id: str) -> list[dict]:
     """Land HVR-compatible native CDC envelopes with LSN and Kafka offsets intact."""
     messages, consumer = consume("^nab-cdc\\..*", "zero-ai-trust-cdc-exporter", limit=200000)
     try:
         records = [transport_record(message) for message in messages]
-        result = write_jsonl("cdc", batch_id, records)
+        results = write_grouped_jsonl("cdc", batch_id, records, cdc_dataset)
         if records:
             consumer.commit(asynchronous=False)
-        return result
+        return results
     finally:
         consumer.close()
 
 
-def export_kafka(batch_id: str) -> dict | None:
+def export_events(batch_id: str) -> list[dict]:
     # Subscribe to the enterprise namespace, never a Banker Assist allowlist. Silver owns scope.
     messages, consumer = consume("^nab\\..*", "zero-ai-trust-event-exporter", limit=200000)
     try:
         # Kafka Connect control topics may contain credentials and are never source data.
         source_messages = [m for m in messages if not m.topic().startswith("_nab_connect")]
         records = [transport_record(message) for message in source_messages]
-        result = write_jsonl("kafka", batch_id, records)
+        results = write_grouped_jsonl("event", batch_id, records, event_dataset)
         if records:
             consumer.commit(asynchronous=False)
-        return result
+        return results
     finally:
         consumer.close()
 
 
 def export_native_batch(batch_id: str) -> list[dict]:
     """Promote each new immutable CSV object from the producer drop-zone exactly once."""
-    directory = LANDING_ROOT / "raw" / "file"
+    directory = LANDING_ROOT / "file"
     directory.mkdir(parents=True, exist_ok=True)
     results = []
     paginator = S3.get_paginator("list_objects_v2")
@@ -138,7 +201,7 @@ def export_native_batch(batch_id: str) -> list[dict]:
             if not name.lower().endswith(".csv") or name.startswith(("_", ".")):
                 continue
             dataset = key[len(SOURCE_BATCH_PREFIX) + 1:].split("/", 1)[0]
-            landing_key = f"{S3_PREFIX}/raw/file/{dataset}/{name}"
+            landing_key = f"{S3_PREFIX}/file/{dataset}/{name}"
             try:
                 S3.head_object(Bucket=S3_BUCKET, Key=landing_key)
                 continue
@@ -150,24 +213,43 @@ def export_native_batch(batch_id: str) -> list[dict]:
             target = target_dir / name
             S3.download_file(S3_BUCKET, key, str(target))
             line_count = max(0, len(target.read_bytes().splitlines()) - 1)
-            results.append(artifact(target, line_count, "CSV"))
+            results.append(
+                artifact(
+                    target,
+                    line_count,
+                    "CSV",
+                    source_type="FILE",
+                    source_dataset=dataset_slug(dataset),
+                )
+            )
     return results
 
 
 def run_batch() -> None:
     batch_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     artifacts = []
-    for operation in (export_cdc, export_kafka, export_native_batch):
+    for operation in (export_cdc, export_events, export_native_batch):
         try:
             result = operation(batch_id)
             artifacts.extend(result if isinstance(result, list) else [result] if result else [])
         except Exception as exc:
             safe_log("source_export_failed", source=operation.__name__, error_type=type(exc).__name__)
     manifest = {
+        "manifest_version": "1.0",
         "batch_id": batch_id,
         "created_at": now_iso(),
+        "heartbeat_status": "HEALTHY",
         "artifacts": artifacts,
+        "artifact_count": len(artifacts),
         "total_records": sum(item["record_count"] for item in artifacts),
+        "source_record_counts": {
+            source_type: sum(
+                item["record_count"]
+                for item in artifacts
+                if item.get("source_type") == source_type
+            )
+            for source_type in ("CDC", "EVENT", "FILE")
+        },
     }
     manifest_dir = LANDING_ROOT / "manifests"
     manifest_dir.mkdir(parents=True, exist_ok=True)

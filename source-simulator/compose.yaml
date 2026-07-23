@@ -21,6 +21,8 @@ services:
       timeout: 3s
       retries: 20
     restart: unless-stopped
+    mem_limit: 512m
+    cpus: 0.50
 
   kafka:
     image: apache/kafka:3.9.1
@@ -37,16 +39,18 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_NUM_PARTITIONS: 1
-      KAFKA_HEAP_OPTS: -Xms512m -Xmx512m
+      KAFKA_HEAP_OPTS: -Xms256m -Xmx384m
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
     volumes:
       - kafka_data:/var/lib/kafka/data
     healthcheck:
-      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list >/dev/null 2>&1"]
-      interval: 10s
-      timeout: 5s
+      test: ["CMD-SHELL", "bash -ec ': > /dev/tcp/127.0.0.1/9092'"]
+      interval: 30s
+      timeout: 3s
       retries: 30
     restart: unless-stopped
+    mem_limit: 768m
+    cpus: 0.75
 
   bootstrap-loader:
     build: ./bootstrap-loader
@@ -62,11 +66,13 @@ services:
       kafka:
         condition: service_healthy
     restart: "no"
+    mem_limit: 384m
+    cpus: 0.50
 
   kafka-connect:
     image: quay.io/debezium/connect:3.3.2.Final
     environment:
-      KAFKA_HEAP_OPTS: -Xms256m -Xmx768m
+      KAFKA_HEAP_OPTS: -Xms256m -Xmx512m
       BOOTSTRAP_SERVERS: kafka:9092
       GROUP_ID: nab-kafka-connect
       CONFIG_STORAGE_TOPIC: _nab_connect_configs
@@ -85,6 +91,8 @@ services:
     ports:
       - 127.0.0.1:8083:8083
     restart: unless-stopped
+    mem_limit: 896m
+    cpus: 0.75
 
   cdc-connector-init:
     build: ./cdc-connector-init
@@ -97,6 +105,8 @@ services:
       kafka-connect:
         condition: service_started
     restart: "no"
+    mem_limit: 256m
+    cpus: 0.25
 
   activity-generator:
     build: ./activity-generator
@@ -112,6 +122,8 @@ services:
       cdc-connector-init:
         condition: service_completed_successfully
     restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.25
 
   landing-exporter:
     build: ./landing-exporter
@@ -121,7 +133,7 @@ services:
       SOURCE_BATCH_PREFIX: ${SOURCE_BATCH_PREFIX:-g3/source/nab/batch}
       MICROBATCH_INTERVAL_SECONDS: ${MICROBATCH_INTERVAL_SECONDS:-300}
       S3_BUCKET: ${S3_BUCKET:-g3-assignment}
-      S3_PREFIX: ${S3_PREFIX:-g3/0-ai-trust/landing}
+      S3_PREFIX: ${S3_PREFIX:-g3/0-ai-trust/bronze/landing}
       AWS_REGION: ${AWS_REGION:-ap-southeast-2}
     volumes:
       - landing_data:/landing
@@ -131,6 +143,8 @@ services:
       cdc-connector-init:
         condition: service_completed_successfully
     restart: unless-stopped
+    mem_limit: 384m
+    cpus: 0.50
 
   credit-monitor:
     build: ./credit-monitor
@@ -142,6 +156,8 @@ services:
     volumes:
       - credit_monitor_state:/state
     restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.25
 
 volumes:
   postgres_data:

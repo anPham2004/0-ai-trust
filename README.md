@@ -40,19 +40,22 @@ Databricks also exposes the read-only `information_schema` system namespace auto
 
 ```text
 s3://g3-assignment/g3/0-ai-trust/
-├── landing/
-│   ├── raw/cdc/                        Debezium envelopes plus topic/key/offset
-│   ├── raw/kafka/                      Kafka envelopes plus transport metadata
-│   ├── raw/file/                       source files, byte-for-byte
-│   └── manifests/
 ├── bronze/
-│   ├── cdc_changes/                    Delta
-│   ├── kafka_events/                   Delta
-│   └── file_arrivals/                  Delta
+│   ├── landing/
+│   │   ├── cdc/<dataset>/              CDC envelopes plus LSN/topic/offset
+│   │   ├── event/<dataset>/            business-event envelopes
+│   │   ├── file/<dataset>/             source files, byte-for-byte
+│   │   └── manifests/                  heartbeat and reconciliation receipts
+│   └── tables/
+│       ├── cdc_changes/                Delta
+│       ├── kafka_events/               Delta
+│       └── file_arrivals/              Delta
 ├── silver/                             reserved
 ├── gold/                               reserved
 └── __managed/                          guard root; expected to contain no tables
 ```
+
+The former top-level `landing/` layout is legacy and must not receive new objects.
 
 Dropping an external table removes Unity Catalog metadata but does not delete its S3 files. S3 lifecycle and deletion are therefore an AWS owner responsibility. Direct S3 access bypasses Unity Catalog controls and must remain restricted to infrastructure roles.
 
@@ -86,11 +89,11 @@ The authoritative routing mapping is `contracts/source/source_inventory.yml`. Se
 
 The simulator uses Debezium because HVR/Precisely is proprietary. It reproduces the relevant contract: initial snapshot, transaction-log CDC, source LSN, operation type, deletes, and continuous continuation. It must be described as an HVR analogue, not as HVR itself.
 
-## DLT terminology
+## Declarative pipeline terminology
 
-The Bronze code deliberately uses the DLT-compatible `dlt` declarative interface, Spark Structured Streaming, and Auto Loader. It does not use Lakeflow Connect, managed database connectors, Lakeflow Jobs, or direct outbound database/Kafka connections from Free Edition.
+The pipeline uses the successor Spark Declarative Pipelines interface, `from pyspark import pipelines as dp`, Spark Structured Streaming, and Auto Loader. It does not use the legacy `dlt` Python module, Lakeflow Connect managed database connectors, or direct outbound database/Kafka connections from Free Edition.
 
-Databricks renamed the Delta Live Tables product to Lakeflow Spark Declarative Pipelines. Consequently, workspace metadata may display “Lakeflow pipeline” even though the code uses the compatible `dlt` interface. DLT cannot exist as a separate modern workspace resource under its former product name.
+Databricks renamed Delta Live Tables to Lakeflow Spark Declarative Pipelines. Lakeflow Jobs supplies the native 15-minute schedule; the declarative pipeline owns dataset dependencies and incremental state.
 
 ## Repository structure
 
@@ -267,7 +270,7 @@ PostgreSQL and Kafka Connect ports bind only to EC2 loopback and are not exposed
 
 ## Initialize Unity Catalog
 
-Run `pipelines/bootstrap/v001_initial_setup.sql` once through Databricks SQL Editor as the storage owner. Future idempotent migrations use the next `vNNN_description.sql` name. The initial migration creates only:
+Run `pipelines/bootstrap/v001_create_external_objects.sql` once through Databricks SQL Editor as the storage owner. Future idempotent migrations use the next `vNNN_description.sql` name. The initial migration creates only:
 
 - catalog `0-ai-trust`
 - schemas `bronze`, `silver`, and `gold`
@@ -284,16 +287,15 @@ WHERE table_schema IN ('bronze', 'silver', 'gold')
 ORDER BY table_schema, table_name;
 ```
 
-## Configure and run Bronze
+## Configure and run the medallion pipeline
 
-After the repository changes are merged into `develop`, the GitHub workflow syncs them into `/Shared/0-ai-trust`. Configure the existing `0-ai-trust-bronze` pipeline once so its source file and root directory are:
+After repository changes are merged into `develop`, the GitHub workflow tests and syncs them into `/Shared/0-ai-trust`. The `0-ai-trust-medallion` pipeline directly registers the descriptive files under `pipelines/bronze`, `pipelines/silver`, and `pipelines/gold`; it has no generic entrypoint file. Its root directory is:
 
 ```text
-Source file: /Workspace/Shared/0-ai-trust/pipelines/bronze/pipeline.py
-Root folder: /Workspace/Shared/0-ai-trust/pipelines/bronze
+Root folder: /Workspace/Shared/0-ai-trust/pipelines
 ```
 
-Use the Databricks Jobs & Pipelines UI to start an update. The pipeline is triggered, not continuous. Each update processes all newly landed files using Structured Streaming checkpoints and then stops. This preserves NAB-style micro-batch semantics and avoids unnecessary Free Edition compute usage.
+The `0-ai-trust-medallion-refresh` Lakeflow Job starts the triggered pipeline every 15 minutes. Each update processes all newly landed files using Structured Streaming checkpoints and then stops. Bronze files are already landed near-real-time by the source simulator; the scheduled update materialises queryable Bronze and, after modelling approval, the dependent Silver and Gold datasets.
 
 Validate Bronze:
 
@@ -331,4 +333,4 @@ feature branch -> pull request -> develop -> GitHub Action -> Databricks Git Fol
 
 ## Current modelling boundary
 
-`pipelines/silver/template.py` and `pipelines/gold/template.py` are intentionally empty templates. Adding tables to either file before modelling approval is a scope violation for the current phase.
+The descriptive files under `pipelines/silver` and `pipelines/gold` intentionally contain no dataset definitions. Adding curated or context tables before modelling approval is a scope violation for the current phase.
