@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import time
+import uuid
 from datetime import datetime, timezone
 
 import boto3
@@ -42,6 +43,37 @@ def update_database(cycle: int) -> tuple[str, str | None]:
             'WHERE "applicationId" = %s',
             (now().isoformat(), row[0]),
         )
+        connection.commit()
+        return row[0], row[1]
+
+
+def insert_database_record(cycle: int) -> tuple[str, str | None]:
+    """Insert a new source-owned application so CDC demonstrates create semantics."""
+    application_id = f"SIM-{now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    with psycopg.connect(DATABASE_URL) as connection:
+        row = connection.execute(
+            'INSERT INTO lending_origination.loan_applications '
+            '("global_id", "applicationId", "customerId", "loanGoal", "applicationType", '
+            '"requestedAmount", "creditScore", "finalOutcome", "submittedAt", '
+            '"lastUpdatedAt", "numOffers", "acceptedOfferAmount", "monthlyCost", '
+            '"numberOfTerms", "totalEvents", "organisationId") '
+            'SELECT "global_id", %s, "customerId", "loanGoal", "applicationType", '
+            '"requestedAmount", "creditScore", %s, %s, %s, "numOffers", '
+            '"acceptedOfferAmount", "monthlyCost", "numberOfTerms", "totalEvents", '
+            '"organisationId" '
+            'FROM lending_origination.loan_applications '
+            'ORDER BY "applicationId" OFFSET %s LIMIT 1 '
+            'RETURNING "applicationId", "global_id"',
+            (
+                application_id,
+                "Pending",
+                now().isoformat(),
+                now().isoformat(),
+                cycle % 100,
+            ),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("No source application is available to seed an incremental insert")
         connection.commit()
         return row[0], row[1]
 
@@ -101,10 +133,11 @@ def main() -> None:
     cycle = 0
     while True:
         try:
-            application_id, global_id = update_database(cycle)
+            update_database(cycle)
+            application_id, global_id = insert_database_record(cycle)
             publish_event(cycle, application_id, global_id)
             file_created = publish_file(cycle)
-            safe_log("source_activity_complete", cycle=cycle, database_updates=1,
+            safe_log("source_activity_complete", cycle=cycle, database_inserts=1, database_updates=1,
                      kafka_events=1, file_arrivals=int(file_created))
             cycle += 1
         except Exception as exc:

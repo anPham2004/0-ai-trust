@@ -101,7 +101,7 @@ resource "aws_iam_role_policy" "source_landing" {
         Condition = { StringLike = { "s3:prefix" = [
           "g3/bootstrap/*",
           "g3/source/*",
-          "g3/0-ai-trust/landing/*"
+          "g3/0-ai-trust/bronze/landing/*"
         ] } }
       },
       {
@@ -115,7 +115,7 @@ resource "aws_iam_role_policy" "source_landing" {
       {
         Effect   = "Allow"
         Action   = ["s3:PutObject", "s3:GetObject"]
-        Resource = "${data.aws_s3_bucket.landing.arn}/g3/0-ai-trust/landing/*"
+        Resource = "${data.aws_s3_bucket.landing.arn}/g3/0-ai-trust/bronze/landing/*"
       },
       {
         Effect   = "Allow"
