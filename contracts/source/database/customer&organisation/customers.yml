@@ -1,0 +1,563 @@
+# =============================================================================
+# DATA CONTRACT: customers
+# =============================================================================
+# Quick reference:
+# - required: indicates whether this column must exist in the schema/payload.
+# - nullable: specifies whether the column value is allowed to be null.
+# - data_type: physical data type received from the source.
+# - logical_type: business meaning and context of the data.
+# - accepted: valid values, ranges, patterns, or formats.
+# - example: synthetic data example.
+# - sensitivity: data sensitivity level and required handling method.
+# - quality_rules: automated checks that the pipeline can execute.
+#
+# Severity:
+# - ERROR: record is untrustworthy and must be routed to quarantine.
+# - WARNING: record can still be used but must carry a warning flag.
+#
+# Action:
+# - QUARANTINE: route failing records to the quarantine area.
+# - ALLOW_WITH_WARNING: retain the record while appending a warning flag.
+# =============================================================================
+
+contract_version: "1.0.0"
+contract_id: "source.database.customers"
+
+# -----------------------------------------------------------------------------
+# 1. Dataset basic information
+# -----------------------------------------------------------------------------
+dataset:
+  name: customers
+  domain: CUSTOMER
+  description: >
+    Master source dataset for individual customers, people representing
+    business customers and sole traders. The global_id generated here is the
+    universal person identifier used by most other mock datasets.
+  expected_rows_scale_1: 1000
+  physical_schema_ref: "dev-tools/datagen/output/master-schema.json#/customers"
+
+# -----------------------------------------------------------------------------
+# 2. Ownership and contract status
+# -----------------------------------------------------------------------------
+lifecycle:
+  # DRAFT -> IN_REVIEW -> APPROVED -> DEPRECATED / RETIRED
+  status: DRAFT
+  owner: TBD
+  approver: TBD
+  effective_from: null
+
+# -----------------------------------------------------------------------------
+# 3. Source and ingestion
+# -----------------------------------------------------------------------------
+source:
+  category: DATABASE
+  system_type: POSTGRESQL
+  source_object: "public.customers"
+  authoritative: true
+
+ingestion:
+  # Debezium reads changes from PostgreSQL WAL and streams them via Kafka.
+  mechanism: DEBEZIUM_CDC
+  transport: APACHE_KAFKA
+
+  landing:
+    format: JSONL
+    path_template: "s3://<bucket>/bronze/landing/cdc/customers/"
+    immutable: true
+
+  bronze_target: "bronze.cdc_changes"
+
+  cdc:
+    supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+
+    ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+
+# -----------------------------------------------------------------------------
+# 4. Keys
+# -----------------------------------------------------------------------------
+keys:
+  primary_key:
+    - global_id
+
+  alternate_keys:
+    - customerId
+
+  foreign_keys: []
+
+# -----------------------------------------------------------------------------
+# 5. Field-level contract
+# -----------------------------------------------------------------------------
+schema:
+  fields:
+
+    - name: global_id
+      data_type: string
+      logical_type: uuid
+      required: true
+      nullable: false
+      accepted:
+        format: UUID
+      example: "65df84b8-4274-4dbd-9667-6c9967ae6538"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: CUS_GLOBAL_ID_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "global_id must always be present."
+        - rule_id: CUS_GLOBAL_ID_UUID
+          type: FORMAT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "global_id must be a valid UUID."
+
+    - name: customerId
+      data_type: string
+      logical_type: customer_identifier
+      required: true
+      nullable: false
+      accepted:
+        regex: '^CUST-\d{5}$'
+      example: "CUST-00042"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: CUS_CUSTOMER_ID_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "customerId must always be present."
+        - rule_id: CUS_CUSTOMER_ID_PATTERN
+          type: REGEX
+          parameters:
+            regex: '^CUST-\d{5}$'
+          severity: ERROR
+          action: QUARANTINE
+          description: "customerId must follow the CUST-00000 pattern."
+
+    - name: firstName
+      data_type: string
+      logical_type: person_name
+      required: true
+      nullable: true
+      accepted:
+        min_length: 1
+        max_length: 100
+      example: "Olivia"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: DIRECT_IDENTIFIER
+        handling: HASH_OR_REDACT
+      quality_rules:
+        - rule_id: CUS_FIRST_NAME_NON_BLANK
+          type: NON_BLANK_IF_PRESENT
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: "firstName must not be blank when supplied."
+
+    - name: lastName
+      data_type: string
+      logical_type: person_name
+      required: true
+      nullable: true
+      accepted:
+        min_length: 1
+        max_length: 100
+      example: "Nguyen"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: DIRECT_IDENTIFIER
+        handling: HASH_OR_REDACT
+      quality_rules:
+        - rule_id: CUS_LAST_NAME_NON_BLANK
+          type: NON_BLANK_IF_PRESENT
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: "lastName must not be blank when supplied."
+
+    - name: email
+      data_type: string
+      logical_type: email_address
+      required: true
+      nullable: true
+      accepted:
+        regex: '^[^@\s]+@[^@\s]+\.[^@\s]+$'
+      example: "olivia.nguyen@example.com"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: CONTACT_INFORMATION
+        handling: MASK
+      quality_rules:
+        - rule_id: CUS_EMAIL_FORMAT
+          type: REGEX_IF_PRESENT
+          parameters:
+            regex: '^[^@\s]+@[^@\s]+\.[^@\s]+$'
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: "email must have a valid structure when supplied."
+
+    - name: phoneNumber
+      data_type: string
+      logical_type: phone_number
+      required: true
+      nullable: true
+      accepted:
+        description: "Australian mock phone number generated by Faker en_AU."
+      example: "0412 345 678"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: CONTACT_INFORMATION
+        handling: MASK
+      quality_rules:
+        - rule_id: CUS_PHONE_NON_BLANK
+          type: NON_BLANK_IF_PRESENT
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: "phoneNumber must not be blank when supplied."
+
+    - name: gender
+      data_type: string
+      logical_type: category
+      required: true
+      nullable: false
+      accepted:
+        values: [Male, Female, Non_binary]
+      example: "Female"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: DEMOGRAPHIC_INFORMATION
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: CUS_GENDER_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values: [Male, Female, Non_binary]
+          severity: ERROR
+          action: QUARANTINE
+          description: "gender must be one of the supported source values."
+
+    - name: age
+      data_type: int32
+      logical_type: integer
+      required: true
+      nullable: true
+      accepted:
+        min: 18
+        max: 80
+      example: 42
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: DEMOGRAPHIC_INFORMATION
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: CUS_AGE_RANGE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min: 18
+            max: 80
+          severity: ERROR
+          action: QUARANTINE
+          description: "age must be between 18 and 80 when supplied."
+
+    - name: state
+      data_type: string
+      logical_type: australian_state_code
+      required: true
+      nullable: false
+      accepted:
+        values: [NSW, VIC, QLD, WA, SA, TAS, ACT, NT]
+      example: "VIC"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: CUS_STATE_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values: [NSW, VIC, QLD, WA, SA, TAS, ACT, NT]
+          severity: ERROR
+          action: QUARANTINE
+          description: "state must be a supported Australian state or territory code."
+
+    - name: createdAt
+      data_type: string
+      logical_type: timestamp
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_TIMESTAMP
+      example: "2026-01-15T09:30:00Z"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: CUS_CREATED_AT_PARSEABLE
+          type: PARSEABLE_TIMESTAMP_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "createdAt must be parseable as a timestamp."
+
+    - name: lastUpdateTime
+      data_type: string
+      logical_type: timestamp
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_TIMESTAMP
+      example: "2026-06-30T14:15:00Z"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: CUS_LAST_UPDATE_PARSEABLE
+          type: PARSEABLE_TIMESTAMP_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "lastUpdateTime must be parseable as a timestamp."
+
+    - name: middleNames
+      data_type: string
+      logical_type: person_name
+      required: true
+      nullable: true
+      accepted:
+        max_length: 200
+      example: "Anh"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: DIRECT_IDENTIFIER
+        handling: REDACT
+      quality_rules:
+        - rule_id: CUS_MIDDLE_NAMES_LENGTH
+          type: MAX_LENGTH_IF_PRESENT
+          parameters:
+            max_length: 200
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: "middleNames must not exceed 200 characters."
+
+    - name: prefix
+      data_type: string
+      logical_type: name_prefix
+      required: true
+      nullable: false
+      accepted:
+        values: ["Mr.", "Mrs.", "Ms.", "Miss", "Dr.", "Mx."]
+      example: "Ms."
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: DIRECT_IDENTIFIER
+        handling: REDACT
+      quality_rules:
+        - rule_id: CUS_PREFIX_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values: ["Mr.", "Mrs.", "Ms.", "Miss", "Dr.", "Mx."]
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: "prefix should belong to the supported source vocabulary."
+
+    - name: suffix
+      data_type: string
+      logical_type: name_suffix
+      required: true
+      nullable: true
+      accepted:
+        values: ["Jr.", "Sr.", "PhD", "II", "III"]
+      example: "PhD"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: DIRECT_IDENTIFIER
+        handling: REDACT
+      quality_rules:
+        - rule_id: CUS_SUFFIX_ENUM
+          type: ACCEPTED_VALUES_IF_PRESENT
+          parameters:
+            values: ["Jr.", "Sr.", "PhD", "II", "III"]
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: "suffix should belong to the supported source vocabulary."
+
+    - name: occupationCode
+      data_type: string
+      logical_type: reference_code
+      required: true
+      nullable: true
+      accepted:
+        reference_set: ANZSCO
+        exact_values_status: TBD_FROM_GENERATOR_CONFIG
+      example: null
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: EMPLOYMENT_INFORMATION
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: CUS_OCCUPATION_CODE_REFERENCE
+          type: REFERENCE_SET_IF_PRESENT
+          parameters:
+            reference_set: ANZSCO
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: "occupationCode should exist in the approved ANZSCO reference set."
+
+    - name: occupationCodeVersion
+      data_type: string
+      logical_type: reference_version
+      required: true
+      nullable: false
+      accepted:
+        values: ["V1.0", "V1.1", "V1.2", "V1.3"]
+      example: "V1.3"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: CUS_OCCUPATION_VERSION_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values: ["V1.0", "V1.1", "V1.2", "V1.3"]
+          severity: ERROR
+          action: QUARANTINE
+          description: "occupationCodeVersion must be a supported version."
+
+    - name: phoneNumbers
+      data_type: string
+      logical_type: array_of_phone_objects
+      required: true
+      nullable: true
+      accepted:
+        format: JSON_ARRAY
+        item_purpose_values: [MOBILE, HOME, WORK, UNSPECIFIED]
+      example: '[{"purpose":"MOBILE","number":"0412 345 678"}]'
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: CONTACT_INFORMATION
+        handling: MASK
+      quality_rules:
+        - rule_id: CUS_PHONE_NUMBERS_JSON
+          type: VALID_JSON_ARRAY_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "phoneNumbers must be a valid JSON array."
+
+    - name: emailAddresses
+      data_type: string
+      logical_type: array_of_email_objects
+      required: true
+      nullable: true
+      accepted:
+        format: JSON_ARRAY
+        item_purpose_values: [HOME, WORK, OTHER]
+      example: '[{"purpose":"HOME","address":"olivia.nguyen@example.com"}]'
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: CONTACT_INFORMATION
+        handling: MASK
+      quality_rules:
+        - rule_id: CUS_EMAIL_ADDRESSES_JSON
+          type: VALID_JSON_ARRAY_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "emailAddresses must be a valid JSON array."
+
+    - name: customerType
+      data_type: string
+      logical_type: category
+      required: true
+      nullable: false
+      accepted:
+        values: [INDIVIDUAL, BUSINESS, SOLE_TRADER]
+      example: "BUSINESS"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: CUS_CUSTOMER_TYPE_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values: [INDIVIDUAL, BUSINESS, SOLE_TRADER]
+          severity: ERROR
+          action: QUARANTINE
+          description: "customerType must be a supported onboarding category."
+
+# -----------------------------------------------------------------------------
+# 6. Dataset-level rules
+# These rules evaluate multiple records or multiple columns simultaneously.
+# -----------------------------------------------------------------------------
+dataset_quality_rules:
+  - rule_id: CUS_GLOBAL_ID_UNIQUE
+    type: UNIQUE
+    columns: [global_id]
+    severity: ERROR
+    action: QUARANTINE
+    description: "global_id must be unique across the customers dataset."
+
+  - rule_id: CUS_CUSTOMER_ID_UNIQUE
+    type: UNIQUE
+    columns: [customerId]
+    severity: ERROR
+    action: QUARANTINE
+    description: "customerId must be unique across the customers dataset."
+
+  - rule_id: CUS_LAST_UPDATE_AFTER_CREATE
+    type: COLUMN_COMPARISON
+    parameters:
+      left_column: lastUpdateTime
+      operator: GREATER_THAN_OR_EQUAL
+      right_column: createdAt
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: "lastUpdateTime cannot be earlier than createdAt."
+
+  - rule_id: CUS_CONTACT_METHOD_PRESENT
+    type: ANY_PRESENT
+    columns: [email, phoneNumber, emailAddresses, phoneNumbers]
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: "At least one contact method should be available."
+
+# -----------------------------------------------------------------------------
+# 7. Team notes
+# -----------------------------------------------------------------------------
+notes:
+  - >
+    This contract describes the raw source dataset. Raw PII is not yet safe to be
+    exposed directly to AI workloads.
+  - >
+    Masking, hashing, redaction, canonical renaming and type conversion are 
+    performed during Silver entity modeling.
+  - >
+    The exact list of occupationCode must be retrieved from the generator config
+    prior to moving the contract to the APPROVED state.
