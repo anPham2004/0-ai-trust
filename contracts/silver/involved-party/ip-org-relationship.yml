@@ -1,0 +1,172 @@
+product: ip_org_relationship
+version: 1.1.0
+contract_status: DRAFT
+approver: TBD
+effective_from: null
+owner: customer-domain
+producer: customer-master-platform
+consumers: [banker-assist, lending-operations]
+description: >
+  Organisation-to-organisation relationships from CDC. Parent/subsidiary, trust,
+  partnership, franchise, and joint venture structures.
+
+canonical_key: relationship_id
+keys:
+  primary_key: [relationship_id]
+  alternate_keys: []
+critical_data_elements: [relationship_id, source_org_id, target_org_id, relationship_type]
+lifecycle_stage: Monitor
+
+sources:
+  - type: DATABASE
+    ingestion_mechanism: DEBEZIUM_CDC
+    bronze_sink: cdc_changes
+    source_dataset: public.organisation_relationships
+    fields: [relationshipId, sourceOrgId, targetOrgId, relationshipType,
+             isActive, startDate]
+    cdc:
+      supported_operations: [SNAPSHOT, INSERT, UPDATE, DELETE]
+      ordering_metadata: [source_lsn, kafka_partition, kafka_offset]
+
+freshness_sla: 24 hours
+lineage_l1: >
+  customer-master DB -> Debezium -> Kafka CDC topics -> landing-exporter
+  -> S3 bronze/landing/cdc/ -> Auto Loader -> bronze.cdc_changes -> Silver
+lineage_l2_required: true
+known_source_limitations:
+  - "CDC eventual consistency — records may arrive out of order within partition"
+
+output_schema:
+  - name: relationship_id
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: uuid
+    description: "PK"
+  - name: source_org_id
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: uuid
+    description: "FK to ip_organisation"
+  - name: target_org_id
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: uuid
+    description: "FK to ip_organisation"
+  - name: relationship_type
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: category
+    allowed_values: [PARENT_SUBSIDIARY, TRUST_TRUSTEE, PARTNERSHIP, FRANCHISE, JOINT_VENTURE]
+  - name: is_active
+    type: BOOLEAN
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: boolean_flag
+  - name: start_date
+    type: DATE
+    required: false
+    nullable: true
+    classification: INTERNAL
+    is_pii: false
+    logical_type: date
+  - name: pipeline_run_id
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: uuid
+  - name: source_table
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: identifier
+  - name: processed_at
+    type: TIMESTAMP
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: timestamp
+  - name: dq_status
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: category
+    allowed_values: [PASSED, FAILED, WARNING]
+  - name: masking_status
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: category
+    allowed_values: [MASKED, CLEAN]
+
+rules:
+  hard:
+    - id: RELATIONSHIP_ID_NULL
+      expression: "relationship_id IS NOT NULL"
+      description: "Primary key must exist"
+    - id: SOURCE_ORG_ID_NULL
+      expression: "source_org_id IS NOT NULL"
+      description: "Source organisation FK must exist"
+    - id: TARGET_ORG_ID_NULL
+      expression: "target_org_id IS NOT NULL"
+      description: "Target organisation FK must exist"
+    - id: RELATIONSHIP_TYPE_INVALID
+      expression: "relationship_type IN ('PARENT_SUBSIDIARY','TRUST_TRUSTEE','PARTNERSHIP','FRANCHISE','JOINT_VENTURE')"
+      description: "Must be a known relationship type"
+    - id: SELF_RELATIONSHIP
+      expression: "source_org_id != target_org_id"
+      description: "Organisation cannot relate to itself"
+    - id: RELATIONSHIP_ID_UUID_FORMAT
+      expression: "relationship_id IS NULL OR relationship_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'"
+      description: "relationship_id must be valid UUID format when present"
+    - id: SOURCE_ORG_ID_UUID_FORMAT
+      expression: "source_org_id IS NULL OR source_org_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'"
+      description: "source_org_id must be valid UUID format when present"
+    - id: TARGET_ORG_ID_UUID_FORMAT
+      expression: "target_org_id IS NULL OR target_org_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'"
+      description: "target_org_id must be valid UUID format when present"
+  warn: []
+
+tolerances:
+  hard_failure_rate: 0.01
+  freshness_breach_rate: 0.05
+
+quality_dimensions:
+  completeness: [RELATIONSHIP_ID_NULL, SOURCE_ORG_ID_NULL, TARGET_ORG_ID_NULL]
+  validity: [RELATIONSHIP_TYPE_INVALID, SELF_RELATIONSHIP, RELATIONSHIP_ID_UUID_FORMAT, SOURCE_ORG_ID_UUID_FORMAT, TARGET_ORG_ID_UUID_FORMAT]
+
+ai_policy:
+  allowed: [relationship_lookup, corporate_structure_summary]
+  prohibited: [display_raw_pii, credit_decision, risk_scoring, fraud_assessment]
+
+zero_trust:
+  quality_status_required: true
+  source_reference_required: true
+  quarantined_excluded: true
+  stale_flagged: true
+
+parameters:
+  allowed_relationship_types: [PARENT_SUBSIDIARY, TRUST_TRUSTEE, PARTNERSHIP,
+                               FRANCHISE, JOINT_VENTURE]

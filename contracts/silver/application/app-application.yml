@@ -1,0 +1,237 @@
+product: app_application
+version: 1.1.0
+contract_status: DRAFT
+approver: TBD
+effective_from: null
+owner: lending-domain
+producer: loan-origination-platform
+consumers: [banker-assist, lending-operations]
+description: >
+  Loan application master record from CDC. Covers personal and business
+  applications with masked financial amounts and credit scores.
+
+canonical_key: application_id
+customer_key: global_id
+keys:
+  primary_key: [application_id]
+  alternate_keys: []
+critical_data_elements: [application_id, global_id, application_type, final_outcome]
+lifecycle_stage: Monitor
+
+sources:
+  - type: DATABASE
+    ingestion_mechanism: DEBEZIUM_CDC
+    bronze_sink: cdc_changes
+    source_dataset: public.loan_applications
+    fields: [global_id, applicationId, organisationId, numOffers, loanGoal,
+             applicationType, finalOutcome, submittedAt, lastUpdatedAt,
+             requestedAmount, creditScore]
+    cdc:
+      supported_operations: [SNAPSHOT, INSERT, UPDATE, DELETE]
+      ordering_metadata: [source_lsn, kafka_partition, kafka_offset]
+
+freshness_sla: 24 hours
+lineage_l1: >
+  loan-origination DB -> Debezium -> Kafka CDC topics -> landing-exporter
+  -> S3 bronze/landing/cdc/ -> Auto Loader -> bronze.cdc_changes -> Silver
+lineage_l2_required: true
+known_source_limitations:
+  - "CDC eventual consistency — records may arrive out of order within partition"
+
+output_schema:
+  - name: global_id
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: uuid
+    description: "FK to ip_individual"
+  - name: application_id
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: uuid
+    description: "PK"
+  - name: organisation_id
+    type: STRING
+    required: false
+    nullable: true
+    classification: INTERNAL
+    is_pii: false
+    logical_type: uuid
+  - name: is_business_application
+    type: BOOLEAN
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: boolean_flag
+    description: "Derived: organisationId IS NOT NULL"
+  - name: num_offers
+    type: STRING
+    required: false
+    nullable: true
+    classification: INTERNAL
+    is_pii: false
+    logical_type: counter
+  - name: loan_goal
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: category
+  - name: application_type
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: category
+  - name: final_outcome
+    type: STRING
+    required: false
+    nullable: true
+    classification: INTERNAL
+    is_pii: false
+    logical_type: category
+    allowed_values: [APPROVED, REJECTED, PENDING]
+  - name: submitted_at
+    type: TIMESTAMP
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: timestamp
+  - name: last_updated_at
+    type: TIMESTAMP
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: timestamp
+  - name: requested_amount_masked
+    type: STRING
+    required: false
+    nullable: true
+    classification: RESTRICTED
+    is_pii: true
+    pii_type: FINANCIAL_INFORMATION
+    logical_type: amount
+    masking: range_bucket
+  - name: credit_score
+    type: INT
+    required: false
+    nullable: true
+    classification: RESTRICTED
+    is_pii: true
+    pii_type: FINANCIAL_INFORMATION
+    logical_type: amount
+    masking: redact
+    description: "Banker-only, redacted from AI output"
+  - name: pipeline_run_id
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: uuid
+  - name: source_table
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: identifier
+  - name: processed_at
+    type: TIMESTAMP
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: timestamp
+  - name: dq_status
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: category
+    allowed_values: [PASSED, FAILED, WARNING]
+  - name: masking_status
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: category
+    allowed_values: [MASKED, CLEAN]
+
+rules:
+  hard:
+    - id: APPLICATION_ID_NULL
+      expression: "application_id IS NOT NULL"
+      description: "Primary key must exist"
+    - id: GLOBAL_ID_NULL
+      expression: "global_id IS NOT NULL"
+      description: "Customer FK must exist"
+    - id: APPLICATION_TYPE_NULL
+      expression: "application_type IS NOT NULL"
+      description: "Application type required"
+    - id: LOAN_GOAL_NULL
+      expression: "loan_goal IS NOT NULL"
+      description: "Loan goal required"
+    - id: SUBMITTED_AT_NULL
+      expression: "submitted_at IS NOT NULL"
+      description: "Submission timestamp required"
+    - id: FINAL_OUTCOME_INVALID
+      expression: "final_outcome IS NULL OR final_outcome IN ('APPROVED','REJECTED','PENDING')"
+      description: "Must be a known outcome"
+    - id: DATE_ORDER_INVALID
+      expression: "last_updated_at >= submitted_at"
+      description: "Last update must follow submission"
+    - id: APPLICATION_ID_UUID_FORMAT
+      expression: "application_id IS NULL OR application_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'"
+      description: "application_id must be valid UUID format when present"
+    - id: GLOBAL_ID_UUID_FORMAT
+      expression: "global_id IS NULL OR global_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'"
+      description: "global_id must be valid UUID format when present"
+    - id: ORGANISATION_ID_UUID_FORMAT
+      expression: "organisation_id IS NULL OR organisation_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'"
+      description: "organisation_id must be valid UUID format when present"
+    - id: LOAN_GOAL_NOT_BLANK
+      expression: "loan_goal IS NULL OR length(trim(loan_goal)) > 0"
+      description: "loan_goal must not be empty or whitespace-only when present"
+  warn:
+    - id: APPLICATION_STALE
+      expression: "last_updated_at >= date_sub(current_date(), 30)"
+      description: "Application updated within 30 days"
+
+tolerances:
+  hard_failure_rate: 0.01
+  freshness_breach_rate: 0.05
+
+quality_dimensions:
+  completeness: [APPLICATION_ID_NULL, GLOBAL_ID_NULL, APPLICATION_TYPE_NULL,
+                 LOAN_GOAL_NULL, SUBMITTED_AT_NULL, LOAN_GOAL_NOT_BLANK]
+  validity: [FINAL_OUTCOME_INVALID, DATE_ORDER_INVALID, APPLICATION_ID_UUID_FORMAT,
+             GLOBAL_ID_UUID_FORMAT, ORGANISATION_ID_UUID_FORMAT]
+  timeliness: [APPLICATION_STALE]
+
+ai_policy:
+  allowed: [status_summary, next_step_guidance]
+  prohibited: [display_raw_pii, credit_decision, risk_scoring, fraud_assessment,
+               display_credit_score, display_exact_amount]
+
+zero_trust:
+  quality_status_required: true
+  source_reference_required: true
+  quarantined_excluded: true
+  stale_flagged: true
+
+parameters:
+  allowed_final_outcomes: [APPROVED, REJECTED, PENDING]
+  freshness_days: 30

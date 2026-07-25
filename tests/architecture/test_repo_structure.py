@@ -35,18 +35,19 @@ class ArchitectureTests(unittest.TestCase):
 
     def test_contracts_are_partitioned_by_lifecycle(self):
         expected = {
-            "source": {"source_inventory.yml"},
+            "source": {"source_inventory.yml", "database"},
             "bronze": {".gitkeep"},
             "silver": {
-                "customers.yml",
-                "loan_applications.yml",
-                "organisations.yml",
-                "service_cases.yml",
+                "involved-party",
+                "arrangement",
+                "application",
+                "event",
             },
             "gold": {"cde_registry.yml", "scope_registry.yml"},
         }
         for layer, filenames in expected.items():
-            actual = {path.name for path in (ROOT / "contracts" / layer).iterdir() if path.is_file()}
+            actual = {path.name for path in (ROOT / "contracts" / layer).iterdir()
+                      if path.is_file() or path.is_dir()}
             self.assertEqual(actual, filenames, layer)
 
     def test_runtime_configuration_has_no_example_files(self):

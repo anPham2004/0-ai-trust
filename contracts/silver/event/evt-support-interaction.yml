@@ -1,0 +1,174 @@
+product: evt_support_interaction
+version: 1.1.0
+contract_status: DRAFT
+approver: TBD
+effective_from: null
+owner: service-domain
+producer: customer-service-platform
+consumers: [banker-assist, lending-operations]
+description: >
+  Support interaction events from Kafka. Records customer interactions
+  across channels with topic and resolution.
+
+canonical_key: interaction_id
+customer_key: global_id
+keys:
+  primary_key: [interaction_id]
+  alternate_keys: []
+critical_data_elements: [interaction_id, global_id, channel, interaction_timestamp]
+lifecycle_stage: Monitor
+
+sources:
+  - type: EVENT
+    ingestion_mechanism: APACHE_KAFKA
+    bronze_sink: kafka_events
+    source_dataset: support_interactions
+    fields: [interactionId, global_id, channel, timestamp, topic,
+             resolution, durationMinutes]
+
+freshness_sla: 24 hours
+lineage_l1: >
+  customer-service events -> Kafka -> landing-exporter
+  -> S3 bronze/landing/event/ -> Auto Loader -> bronze.kafka_events -> Silver
+lineage_l2_required: true
+known_source_limitations: []
+
+output_schema:
+  - name: interaction_id
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: uuid
+    description: "PK"
+  - name: global_id
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: uuid
+    description: "FK to ip_individual"
+  - name: channel
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: category
+  - name: interaction_timestamp
+    type: TIMESTAMP
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: timestamp
+  - name: topic
+    type: STRING
+    required: false
+    nullable: true
+    classification: INTERNAL
+    is_pii: false
+    logical_type: description
+  - name: resolution
+    type: STRING
+    required: false
+    nullable: true
+    classification: INTERNAL
+    is_pii: false
+    logical_type: description
+  - name: duration_minutes
+    type: INT
+    required: false
+    nullable: true
+    classification: INTERNAL
+    is_pii: false
+    logical_type: counter
+  - name: pipeline_run_id
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: uuid
+  - name: source_table
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: identifier
+  - name: processed_at
+    type: TIMESTAMP
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: timestamp
+  - name: dq_status
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: category
+    allowed_values: [PASSED, FAILED, WARNING]
+  - name: masking_status
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: category
+    allowed_values: [MASKED, CLEAN]
+
+rules:
+  hard:
+    - id: INTERACTION_ID_NULL
+      expression: "interaction_id IS NOT NULL"
+      description: "Primary key must exist"
+    - id: GLOBAL_ID_NULL
+      expression: "global_id IS NOT NULL"
+      description: "Customer FK must exist"
+    - id: CHANNEL_NULL
+      expression: "channel IS NOT NULL"
+      description: "Interaction channel required"
+    - id: INTERACTION_TIMESTAMP_NULL
+      expression: "interaction_timestamp IS NOT NULL"
+      description: "Interaction timestamp required"
+    - id: INTERACTION_ID_UUID_FORMAT
+      expression: "interaction_id IS NULL OR interaction_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'"
+      description: "interaction_id must be valid UUID format when present"
+    - id: GLOBAL_ID_UUID_FORMAT
+      expression: "global_id IS NULL OR global_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'"
+      description: "global_id must be valid UUID format when present"
+    - id: CHANNEL_NOT_BLANK
+      expression: "channel IS NULL OR length(trim(channel)) > 0"
+      description: "channel must not be empty or whitespace-only when present"
+  warn:
+    - id: DURATION_RANGE
+      expression: "duration_minutes IS NULL OR (duration_minutes >= 0 AND duration_minutes <= 480)"
+      description: "Duration within reasonable range"
+
+tolerances:
+  hard_failure_rate: 0.01
+  freshness_breach_rate: 0.05
+
+quality_dimensions:
+  completeness: [INTERACTION_ID_NULL, GLOBAL_ID_NULL, CHANNEL_NULL,
+                 INTERACTION_TIMESTAMP_NULL, CHANNEL_NOT_BLANK]
+  validity: [INTERACTION_ID_UUID_FORMAT, GLOBAL_ID_UUID_FORMAT]
+
+ai_policy:
+  allowed: [interaction_summary, channel_analysis]
+  prohibited: [display_raw_pii, credit_decision, risk_scoring, fraud_assessment]
+
+zero_trust:
+  quality_status_required: true
+  source_reference_required: true
+  quarantined_excluded: true
+  stale_flagged: true
+
+parameters:
+  max_duration_minutes: 480

@@ -1,0 +1,149 @@
+product: app_rejected_application
+version: 1.1.0
+contract_status: DRAFT
+approver: TBD
+effective_from: null
+owner: lending-domain
+producer: loan-origination-platform
+consumers: [banker-assist, lending-operations]
+description: >
+  Rejected application records from S3 file source. Historical rejected
+  applications with rejection reasons.
+
+canonical_key: loan_id
+customer_key: global_id
+keys:
+  primary_key: [loan_id]
+  alternate_keys: []
+critical_data_elements: [loan_id, global_id]
+lifecycle_stage: Monitor
+
+sources:
+  - type: FILE
+    ingestion_mechanism: S3_MICROBATCH
+    bronze_sink: file_arrivals
+    source_dataset: rejected_applications
+    fields: [global_id, loanId, applicationTitle, applicationDate,
+             rejectionReason]
+
+freshness_sla: 24 hours
+lineage_l1: >
+  lending-history files -> S3 bronze/landing/file/
+  -> Auto Loader -> bronze.file_arrivals -> Silver
+lineage_l2_required: true
+known_source_limitations:
+  - "FILE source with limited columns; no rejection reason detail in source"
+
+output_schema:
+  - name: global_id
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: uuid
+    description: "FK to ip_individual"
+  - name: loan_id
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: uuid
+    description: "PK"
+  - name: application_title
+    type: STRING
+    required: false
+    nullable: true
+    classification: INTERNAL
+    is_pii: false
+    logical_type: category
+  - name: application_date
+    type: DATE
+    required: false
+    nullable: true
+    classification: INTERNAL
+    is_pii: false
+    logical_type: date
+  - name: rejection_reason
+    type: STRING
+    required: false
+    nullable: true
+    classification: CONFIDENTIAL
+    is_pii: false
+    logical_type: description
+    description: "Banker-only"
+  - name: pipeline_run_id
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: uuid
+  - name: source_table
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: identifier
+  - name: processed_at
+    type: TIMESTAMP
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: timestamp
+  - name: dq_status
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: category
+    allowed_values: [PASSED, FAILED, WARNING]
+  - name: masking_status
+    type: STRING
+    required: true
+    nullable: false
+    classification: INTERNAL
+    is_pii: false
+    logical_type: category
+    allowed_values: [MASKED, CLEAN]
+
+rules:
+  hard:
+    - id: LOAN_ID_NULL
+      expression: "loan_id IS NOT NULL"
+      description: "Primary key must exist"
+    - id: GLOBAL_ID_NULL
+      expression: "global_id IS NOT NULL"
+      description: "Customer FK must exist"
+    - id: LOAN_ID_UUID_FORMAT
+      expression: "loan_id IS NULL OR loan_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'"
+      description: "loan_id must be valid UUID format when present"
+    - id: GLOBAL_ID_UUID_FORMAT
+      expression: "global_id IS NULL OR global_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'"
+      description: "global_id must be valid UUID format when present"
+  warn: []
+
+tolerances:
+  hard_failure_rate: 0.01
+  freshness_breach_rate: 0.05
+
+quality_dimensions:
+  completeness: [LOAN_ID_NULL, GLOBAL_ID_NULL]
+  validity: [LOAN_ID_UUID_FORMAT, GLOBAL_ID_UUID_FORMAT]
+
+ai_policy:
+  allowed: [rejection_history_summary]
+  prohibited: [display_raw_pii, credit_decision, risk_scoring, fraud_assessment,
+               display_rejection_reason]
+
+zero_trust:
+  quality_status_required: true
+  source_reference_required: true
+  quarantined_excluded: true
+  stale_flagged: true
+
+parameters: {}
