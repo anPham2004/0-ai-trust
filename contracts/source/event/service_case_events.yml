@@ -1,0 +1,638 @@
+# =============================================================================
+# DATA CONTRACT: service_case_events
+# =============================================================================
+# Purpose:
+# - Stores the append-only activity history for customer service cases.
+# - Records notes, status changes, assignments, escalations, attached-document
+#   events, and customer-contact events performed by service agents.
+#
+# Important event behaviour:
+# - Each row is a historical case activity and must remain append-only.
+# - Transport duplicates may be removed, but valid historical events must never
+#   be updated or deleted.
+# - caseId links each event to service_cases.
+#
+# Quick guide:
+# - required: the event payload field must exist.
+# - nullable: the physical payload value may be null.
+# - ERROR + QUARANTINE: exclude the event from trusted outputs.
+# - WARNING + ALLOW_WITH_WARNING: retain the event and report the issue.
+# =============================================================================
+
+contract_version: "1.0.0"
+contract_id: "source.event.service_case_events"
+
+# -----------------------------------------------------------------------------
+# 1. Basic dataset information
+# -----------------------------------------------------------------------------
+dataset:
+  name: service_case_events
+  domain: CUSTOMER_SERVICE
+  description: >
+    Append-only activity events for customer service cases. Each record captures
+    an event type, business timestamp, performing agent, and source-generated
+    description for one customer service case.
+  expected_rows_scale_1: 2400
+  physical_schema_ref: "dev-tools/datagen/output/master-schema.json#/service_case_events"
+
+# -----------------------------------------------------------------------------
+# 2. Ownership and contract lifecycle
+# -----------------------------------------------------------------------------
+lifecycle:
+  # DRAFT -> IN_REVIEW -> APPROVED -> DEPRECATED / RETIRED
+  status: DRAFT
+  owner: TBD
+  approver: TBD
+  effective_from: null
+
+# -----------------------------------------------------------------------------
+# 3. Event source and ingestion information
+# -----------------------------------------------------------------------------
+source:
+  category: EVENT
+  system_type: BUSINESS_EVENT_STREAM
+  event_name: service_case_events
+  topic_name: TBD
+  authoritative: true
+  append_only: true
+
+ingestion:
+  mechanism: KAFKA_EVENT
+  transport: APACHE_KAFKA
+
+  landing:
+    format: JSONL
+    path_template: "s3://<bucket>/bronze/landing/event/service_case_events/"
+    immutable: true
+
+  bronze_target: "bronze.kafka_events"
+  deduplicated_bronze_target: "bronze.kafka_events_deduplicated"
+
+  event_envelope:
+    retained_metadata:
+      - topic
+      - key
+      - partition
+      - offset
+      - timestamp
+      - event_type
+      - raw_payload
+
+  append_only_policy:
+    allowed_operations:
+      - APPEND
+    prohibited_operations:
+      - UPDATE_EXISTING_EVENT
+      - DELETE_HISTORICAL_EVENT
+    description: >
+      Transport-level duplicates may be deduplicated, but valid case activity
+      events must remain immutable and append-only.
+
+# -----------------------------------------------------------------------------
+# 4. Keys and relationships
+# -----------------------------------------------------------------------------
+keys:
+  primary_key:
+    - eventId
+
+  event_deduplication_key:
+    - eventId
+
+  foreign_keys:
+    - columns:
+        - global_id
+      reference:
+        dataset: customers
+        columns:
+          - global_id
+      nullable: true
+
+    - columns:
+        - caseId
+      reference:
+        dataset: service_cases
+        columns:
+          - caseId
+      nullable: true
+
+# -----------------------------------------------------------------------------
+# 5. Field-level contract
+# -----------------------------------------------------------------------------
+schema:
+  fields:
+
+    - name: global_id
+      data_type: string
+      logical_type: person_identifier
+      required: true
+      nullable: true
+      accepted:
+        format: UUID
+      example: "65df84b8-4274-4dbd-9667-6c9967ae6538"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: SCE_GLOBAL_ID_UUID
+          type: FORMAT_IF_PRESENT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "global_id must be a valid UUID when supplied."
+
+        - rule_id: SCE_GLOBAL_ID_CUSTOMER_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: customers
+            reference_column: global_id
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            global_id must exist in customers.global_id when supplied.
+
+    - name: eventId
+      data_type: string
+      logical_type: service_case_event_identifier
+      required: true
+      nullable: false
+      accepted:
+        format: UUID
+      example: "afc901a8-95d9-43ef-af49-7910cf5e7da5"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: SCE_EVENT_ID_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "eventId must always be present."
+
+        - rule_id: SCE_EVENT_ID_UUID
+          type: FORMAT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "eventId must be a valid UUID."
+
+    - name: caseId
+      data_type: string
+      logical_type: service_case_identifier
+      required: true
+      nullable: true
+      accepted:
+        format: UUID
+      example: "aa1718d4-623d-4da0-a3d9-b1f2df832cd8"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: SCE_CASE_ID_UUID
+          type: FORMAT_IF_PRESENT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "caseId must be a valid UUID when supplied."
+
+        - rule_id: SCE_CASE_ID_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: service_cases
+            reference_column: caseId
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            caseId must exist in service_cases.caseId when supplied.
+
+    - name: eventType
+      data_type: string
+      logical_type: service_case_event_type
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - NOTE_ADDED
+          - STATUS_CHANGED
+          - ASSIGNED
+          - ESCALATED
+          - DOCUMENT_ATTACHED
+          - CUSTOMER_CONTACTED
+      example: "STATUS_CHANGED"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: APPROVED_CONTEXT_ONLY
+      quality_rules:
+        - rule_id: SCE_EVENT_TYPE_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "eventType must always be present."
+
+        - rule_id: SCE_EVENT_TYPE_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - NOTE_ADDED
+              - STATUS_CHANGED
+              - ASSIGNED
+              - ESCALATED
+              - DOCUMENT_ATTACHED
+              - CUSTOMER_CONTACTED
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            eventType must be one of the six documented service case activities.
+
+    - name: eventTimestamp
+      data_type: string
+      logical_type: timestamp
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_TIMESTAMP
+      example: "2026-05-13T11:20:00Z"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: CUSTOMER_SERVICE_ACTIVITY_METADATA
+        handling: RESTRICT_OR_GENERALISE
+      quality_rules:
+        - rule_id: SCE_EVENT_TIMESTAMP_PARSEABLE
+          type: PARSEABLE_TIMESTAMP_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            eventTimestamp must be parseable as a timestamp when supplied.
+
+    - name: performedBy
+      data_type: string
+      logical_type: internal_service_agent_identifier
+      required: true
+      nullable: true
+      accepted:
+        regex: '^AGENT-\d{4}$'
+        numeric_suffix_min: 0
+        numeric_suffix_max: 49
+      example: "AGENT-0017"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: EMPLOYEE_IDENTIFIER
+        handling: REDACT_FROM_CUSTOMER_AI
+      quality_rules:
+        - rule_id: SCE_PERFORMED_BY_PATTERN
+          type: REGEX_IF_PRESENT
+          parameters:
+            regex: '^AGENT-\d{4}$'
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            performedBy must follow the AGENT-0000 pattern when supplied.
+
+        - rule_id: SCE_PERFORMED_BY_RANGE
+          type: REGEX_NUMERIC_COMPONENT_RANGE_IF_PRESENT
+          parameters:
+            regex: '^AGENT-(\d{4})$'
+            capture_group: 1
+            min: 0
+            max: 49
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            performedBy must identify a documented source agent from AGENT-0000
+            through AGENT-0049.
+
+    - name: description
+      data_type: string
+      logical_type: service_case_event_description
+      required: true
+      nullable: false
+      accepted:
+        min_length: 1
+        template_catalogue_status: TBD_FROM_GENERATOR_CONFIG
+        documented_examples:
+          - "Internal note recorded by agent"
+          - "Case status updated"
+      example: "Case status updated"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: CUSTOMER_SERVICE_FREE_TEXT
+        handling: REDACT_OR_BANKER_ONLY
+      quality_rules:
+        - rule_id: SCE_DESCRIPTION_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "description must always be present."
+
+        - rule_id: SCE_DESCRIPTION_NON_BLANK
+          type: NON_BLANK
+          severity: ERROR
+          action: QUARANTINE
+          description: "description must not be empty or whitespace-only."
+
+# -----------------------------------------------------------------------------
+# 6. Dataset-level quality rules
+# -----------------------------------------------------------------------------
+dataset_quality_rules:
+
+  - rule_id: SCE_EVENT_ID_UNIQUE
+    type: UNIQUE
+    columns:
+      - eventId
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      eventId must uniquely identify a business event. Repeated eventId values
+      are treated as transport duplicates rather than new case activities.
+
+  - rule_id: SCE_CASE_LINK_PRESENT
+    type: NOT_NULL
+    columns:
+      - caseId
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A case event should identify its service case. The physical schema
+      currently permits caseId to be null.
+
+  - rule_id: SCE_CUSTOMER_LINK_PRESENT
+    type: NOT_NULL
+    columns:
+      - global_id
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A case event should identify its customer. The physical schema currently
+      permits global_id to be null.
+
+  - rule_id: SCE_CASE_CUSTOMER_CONSISTENT
+    type: REFERENCE_PAIR_CONSISTENT
+    parameters:
+      reference_dataset: service_cases
+      source_columns:
+        - caseId
+        - global_id
+      reference_columns:
+        - caseId
+        - global_id
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      caseId and global_id must refer to the same service case record.
+
+  - rule_id: SCE_CORE_EVENT_FIELDS_PRESENT
+    type: ALL_NOT_NULL
+    columns:
+      - eventTimestamp
+      - performedBy
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A usable service-case event should contain its business timestamp and
+      performing agent. The physical schema currently permits null values.
+
+  - rule_id: SCE_EVENT_NOT_BEFORE_CASE_CREATION
+    type: REFERENCE_TIMESTAMP_COMPARISON
+    parameters:
+      reference_dataset: service_cases
+      source_key:
+        caseId: caseId
+      source_timestamp_column: eventTimestamp
+      operator: GREATER_THAN_OR_EQUAL
+      reference_timestamp_column: createdAt
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      eventTimestamp cannot be earlier than the parent case's createdAt timestamp.
+
+  - rule_id: SCE_CHRONOLOGICAL_ORDER_PER_CASE
+    type: MONOTONIC_EVENT_TIME_PER_GROUP
+    parameters:
+      group_columns:
+        - caseId
+      timestamp_column: eventTimestamp
+      tiebreaker_columns:
+        - eventId
+      allow_equal_timestamps: true
+      comparison_scope: COMPLETE_SNAPSHOT
+      ignore_nulls: true
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Events for the same case should be chronologically orderable by business
+      timestamp and eventId.
+
+  - rule_id: SCE_MAX_ONE_IDENTICAL_EVENT_AT_TIME
+    type: UNIQUE_WITHIN_GROUP
+    columns:
+      - caseId
+      - eventType
+      - eventTimestamp
+      - performedBy
+      - description
+    parameters:
+      comparison_scope: COMPLETE_SNAPSHOT
+      ignore_nulls: true
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Identical case activities at the same timestamp may indicate duplicate
+      event production even when eventId values differ.
+
+  - rule_id: SCE_EVENT_TYPE_DISTRIBUTION_MONITORING
+    type: CATEGORICAL_DISTRIBUTION_TOLERANCE
+    parameters:
+      column: eventType
+      expected_ratios:
+        NOTE_ADDED: 0.30
+        STATUS_CHANGED: 0.25
+        ASSIGNED: 0.15
+        ESCALATED: 0.10
+        DOCUMENT_ATTACHED: 0.10
+        CUSTOMER_CONTACTED: 0.10
+      absolute_tolerance: 0.10
+      comparison_scope: COMPLETE_SNAPSHOT
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Event-type proportions should remain reasonably close to the configured
+      mock-data distribution in a complete snapshot.
+
+  - rule_id: SCE_AGENT_DISTRIBUTION_MONITORING
+    type: CONCENTRATION_DISTRIBUTION_MONITORING
+    parameters:
+      column: performedBy
+      expected_shape: PARETO
+      generator_expression: "pow(rand, 2)"
+      comparison_scope: COMPLETE_SNAPSHOT
+      exact_thresholds_status: TBD_FROM_GENERATOR_CONFIG
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      The generator intentionally concentrates event volume among top agents.
+      Exact concentration thresholds must be confirmed from generated evidence.
+
+  - rule_id: SCE_DESCRIPTION_TEMPLATE_MAPPING_REVIEW
+    type: REFERENCE_MAPPING_PENDING
+    parameters:
+      selector_column: eventType
+      target_column: description
+      documented_examples:
+        NOTE_ADDED: "Internal note recorded by agent"
+        STATUS_CHANGED: "Case status updated"
+      status: TBD_FROM_GENERATOR_CONFIG
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      The source states that description is template-based by eventType but does
+      not publish the complete template catalogue. Exact template validation
+      must be copied from the generator rather than inferred.
+
+  - rule_id: SCE_CASE_STATUS_ALIGNMENT_REVIEW
+    type: CROSS_EVENT_PARENT_STATE_ALIGNMENT
+    parameters:
+      event_type_column: eventType
+      status_event_value: STATUS_CHANGED
+      parent_dataset: service_cases
+      parent_key: caseId
+      parent_status_column: status
+      status_payload_fields_present: false
+      status: NOT_ENFORCEABLE_FROM_CURRENT_SCHEMA
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      STATUS_CHANGED events do not contain oldStatus or newStatus fields, so the
+      event cannot be reconciled to the parent case status from this source
+      schema alone.
+
+# -----------------------------------------------------------------------------
+# 7. Event transport quality rules
+# -----------------------------------------------------------------------------
+event_quality_rules:
+
+  - rule_id: SCE_KAFKA_POSITION_UNIQUE
+    type: UNIQUE_EVENT_ENVELOPE_POSITION
+    columns:
+      - topic
+      - partition
+      - offset
+    severity: ERROR
+    action: DEDUPLICATE_TRANSPORT_COPY
+    description: >
+      A Kafka topic, partition, and offset combination must identify one landed
+      transport record.
+
+  - rule_id: SCE_EVENT_KEY_PRESENT
+    type: ENVELOPE_FIELD_NOT_NULL
+    field: key
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      The Kafka event key should be present for deterministic partitioning and replay.
+
+  - rule_id: SCE_EVENT_TIMESTAMP_PRESENT
+    type: ENVELOPE_FIELD_NOT_NULL
+    field: timestamp
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      The Kafka envelope should retain the broker event timestamp.
+
+# -----------------------------------------------------------------------------
+# 8. Derived checks for Silver and AI-ready context
+# -----------------------------------------------------------------------------
+derived_quality_checks:
+
+  - rule_id: SCE_CUSTOMER_SAFE_EVENT_LABEL
+    type: GOVERNED_EVENT_TRANSLATION
+    source_field: eventType
+    output_field: customer_safe_event_label
+    proposed_mapping:
+      STATUS_CHANGED: "Case status updated"
+      ASSIGNED: "Case assigned for review"
+      ESCALATED: "Case escalated for additional review"
+      DOCUMENT_ATTACHED: "A document was added to the case"
+      CUSTOMER_CONTACTED: "Customer contact was recorded"
+    excluded_values:
+      - NOTE_ADDED
+    approval_status: TBD_GOVERNANCE_REVIEW
+    description: >
+      Customer-facing context may use approved high-level event labels. Internal
+      note events must not be exposed.
+
+  - rule_id: SCE_DESCRIPTION_REDACTION
+    type: PRIVACY_TRANSFORMATION
+    source_field: description
+    output_field: description_redacted
+    description: >
+      Raw event descriptions must be removed or transformed into approved
+      customer-safe summaries before Customer.AI consumption.
+
+  - rule_id: SCE_AGENT_REDACTION
+    type: PRIVACY_TRANSFORMATION
+    source_field: performedBy
+    output_field: performed_by_redacted
+    description: >
+      Internal service-agent identifiers must be excluded from customer-facing
+      AI context.
+
+  - rule_id: SCE_LATEST_CASE_EVENT
+    type: LATEST_EVENT_VALUE
+    group_column: caseId
+    order_by:
+      - eventTimestamp
+      - eventId
+    source_fields:
+      - eventType
+      - eventTimestamp
+    output_fields:
+      - latest_event_type
+      - latest_event_timestamp
+    comparison_scope: COMPLETE_SNAPSHOT
+    description: >
+      Silver may derive the latest validated case activity for support-history
+      and handover summaries.
+
+# -----------------------------------------------------------------------------
+# 9. Notes for the team
+# -----------------------------------------------------------------------------
+notes:
+  - >
+    This contract follows the authoritative physical source schema and includes
+    all seven fields defined for service_case_events.
+  - >
+    service_case_events is an EVENT source and must remain append-only.
+    Transport duplicates may be removed, but valid historical activities must
+    never be updated or deleted.
+  - >
+    The source documents six event types and their population ratios. Those
+    ratios are implemented only as complete-snapshot monitoring warnings.
+  - >
+    The complete eventType-to-description template catalogue is not published.
+    The contract validates non-empty descriptions and records exact template
+    mapping as TBD rather than inventing additional templates.
+  - >
+    NOTE_ADDED descriptions represent internal notes and must never be exposed
+    to Customer.AI. The assignment's supported customer questions allow a safe
+    case-history summary, but explicitly restrict internal banker notes.
+  - >
+    performedBy is an internal employee identifier and must be redacted from
+    customer-facing outputs.
+  - >
+    STATUS_CHANGED events do not include oldStatus or newStatus, so this dataset
+    alone cannot explain the exact status transition or verify it against the
+    current parent case status.
+  - >
+    The Kafka topic name, event-key convention, full description-template
+    catalogue, and exact Pareto concentration thresholds remain TBD.

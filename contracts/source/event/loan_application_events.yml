@@ -1,0 +1,985 @@
+# =============================================================================
+# DATA CONTRACT: loan_application_events
+# =============================================================================
+# Purpose:
+# - Stores append-only BPI process-mining events for loan applications.
+# - Captures Application, Offer, and Workflow activity with lifecycle,
+#   resource, action, timestamp, and optional offer attributes.
+#
+# Important event behaviour:
+# - Each event is a historical business fact and must remain append-only.
+# - Transport duplicates may be removed using the event identifier or Kafka
+#   position, but valid historical events must never be overwritten.
+# - Offer-specific fields are permitted only for concept names beginning O_.
+#
+# Quick guide:
+# - required: the physical event payload field must exist.
+# - nullable: the physical payload value may be null.
+# - ERROR + QUARANTINE: exclude the event from trusted outputs.
+# - WARNING + ALLOW_WITH_WARNING: retain the event and report the issue.
+# =============================================================================
+
+contract_version: "1.0.0"
+contract_id: "source.event.loan_application_events"
+
+# -----------------------------------------------------------------------------
+# 1. Basic dataset information
+# -----------------------------------------------------------------------------
+dataset:
+  name: loan_application_events
+  domain: LENDING_ORIGINATION
+  description: >
+    Append-only BPI process-mining events for loan applications. The source
+    contains twenty-four concept names across Application, Offer, and Workflow
+    event origins, together with lifecycle transitions, responsible resources,
+    actions, timestamps, and optional offer attributes.
+  expected_rows_scale_1: 5000
+  physical_schema_ref: "dev-tools/datagen/output/master-schema.json#/loan_application_events"
+
+# -----------------------------------------------------------------------------
+# 2. Ownership and contract lifecycle
+# -----------------------------------------------------------------------------
+lifecycle:
+  # DRAFT -> IN_REVIEW -> APPROVED -> DEPRECATED / RETIRED
+  status: DRAFT
+  owner: TBD
+  approver: TBD
+  effective_from: null
+
+# -----------------------------------------------------------------------------
+# 3. Event source and ingestion information
+# -----------------------------------------------------------------------------
+source:
+  category: EVENT
+  system_type: BUSINESS_EVENT_STREAM
+  event_name: loan_application_events
+  topic_name: TBD
+  authoritative: true
+  append_only: true
+
+ingestion:
+  mechanism: KAFKA_EVENT
+  transport: APACHE_KAFKA
+
+  landing:
+    format: JSONL
+    path_template: "s3://<bucket>/bronze/landing/event/loan_application_events/"
+    immutable: true
+
+  bronze_target: "bronze.kafka_events"
+  deduplicated_bronze_target: "bronze.kafka_events_deduplicated"
+
+  event_envelope:
+    retained_metadata:
+      - topic
+      - key
+      - partition
+      - offset
+      - timestamp
+      - event_type
+      - raw_payload
+
+  append_only_policy:
+    allowed_operations:
+      - APPEND
+    prohibited_operations:
+      - UPDATE_EXISTING_EVENT
+      - DELETE_HISTORICAL_EVENT
+    description: >
+      Transport-level duplicates may be deduplicated, but valid process events
+      must remain immutable and append-only.
+
+# -----------------------------------------------------------------------------
+# 4. Keys and relationships
+# -----------------------------------------------------------------------------
+keys:
+  primary_key:
+    - eventId
+
+  event_deduplication_key:
+    - eventId
+
+  foreign_keys:
+    - columns:
+        - global_id
+      reference:
+        dataset: customers
+        columns:
+          - global_id
+      nullable: true
+
+    - columns:
+        - applicationId
+      reference:
+        dataset: loan_applications
+        columns:
+          - applicationId
+      nullable: true
+
+# -----------------------------------------------------------------------------
+# 5. Field-level contract
+# -----------------------------------------------------------------------------
+schema:
+  fields:
+
+    - name: global_id
+      data_type: string
+      logical_type: person_identifier
+      required: true
+      nullable: true
+      accepted:
+        format: UUID
+      example: "65df84b8-4274-4dbd-9667-6c9967ae6538"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: LAE_GLOBAL_ID_UUID
+          type: FORMAT_IF_PRESENT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "global_id must be a valid UUID when supplied."
+
+        - rule_id: LAE_GLOBAL_ID_CUSTOMER_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: customers
+            reference_column: global_id
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            global_id must exist in customers.global_id when supplied.
+
+    - name: eventId
+      data_type: string
+      logical_type: loan_application_event_identifier
+      required: true
+      nullable: false
+      accepted:
+        format: UUID
+      example: "4f85ecde-688d-4e29-a99f-55b915ce374b"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: LAE_EVENT_ID_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "eventId must always be present."
+
+        - rule_id: LAE_EVENT_ID_UUID
+          type: FORMAT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "eventId must be a valid UUID."
+
+    - name: applicationId
+      data_type: string
+      logical_type: loan_application_identifier
+      required: true
+      nullable: true
+      accepted:
+        regex: '^Application_\d{9}$'
+      example: "Application_000000042"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: LAE_APPLICATION_ID_PATTERN
+          type: REGEX_IF_PRESENT
+          parameters:
+            regex: '^Application_\d{9}$'
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            applicationId must follow the Application_000000000 pattern when supplied.
+
+        - rule_id: LAE_APPLICATION_ID_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: loan_applications
+            reference_column: applicationId
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            applicationId must exist in loan_applications.applicationId when supplied.
+
+    - name: conceptName
+      data_type: string
+      logical_type: bpi_process_concept_name
+      required: true
+      nullable: false
+      accepted:
+        prefix_values:
+          - A_
+          - O_
+          - W_
+        documented_value_count: 24
+        exact_value_catalogue_status: TBD_FROM_GENERATOR_SCRIPT
+        documented_examples:
+          - A_Create Application
+          - A_Submitted
+          - A_Accepted
+          - A_Denied
+      example: "A_Submitted"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: APPROVED_CONTEXT_ONLY
+      quality_rules:
+        - rule_id: LAE_CONCEPT_NAME_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "conceptName must always be present."
+
+        - rule_id: LAE_CONCEPT_NAME_PREFIX
+          type: REGEX
+          parameters:
+            regex: '^(A_|O_|W_).+$'
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            conceptName must begin with A_, O_, or W_.
+
+    - name: lifecycleTransition
+      data_type: string
+      logical_type: process_lifecycle_transition
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - complete
+          - start
+          - schedule
+          - suspend
+          - resume
+          - withdraw
+          - ate_abort
+      example: "complete"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: LAE_LIFECYCLE_TRANSITION_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - complete
+              - start
+              - schedule
+              - suspend
+              - resume
+              - withdraw
+              - ate_abort
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            lifecycleTransition must be one of the documented source values.
+
+    - name: timestamp
+      data_type: string
+      logical_type: timestamp
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_TIMESTAMP
+      example: "2026-03-12T10:45:00Z"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: APPLICATION_ACTIVITY_METADATA
+        handling: RESTRICT_OR_GENERALISE
+      quality_rules:
+        - rule_id: LAE_TIMESTAMP_PARSEABLE
+          type: PARSEABLE_TIMESTAMP_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "timestamp must be parseable when supplied."
+
+    - name: orgResource
+      data_type: string
+      logical_type: process_resource_identifier
+      required: true
+      nullable: true
+      accepted:
+        regex: '^User_\d{1,3}$'
+        documented_range: "User_1 through User_100"
+      example: "User_17"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: EMPLOYEE_OR_PROCESS_RESOURCE_IDENTIFIER
+        handling: REDACT_FROM_CUSTOMER_AI
+      quality_rules:
+        - rule_id: LAE_ORG_RESOURCE_PATTERN
+          type: REGEX_IF_PRESENT
+          parameters:
+            regex: '^User_\d{1,3}$'
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            orgResource must follow the User_<number> pattern when supplied.
+
+        - rule_id: LAE_ORG_RESOURCE_RANGE
+          type: REGEX_NUMERIC_COMPONENT_RANGE_IF_PRESENT
+          parameters:
+            regex: '^User_(\d{1,3})$'
+            capture_group: 1
+            min: 1
+            max: 100
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            orgResource must identify a documented process resource from User_1
+            through User_100.
+
+    - name: action
+      data_type: string
+      logical_type: process_event_action
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - Created
+          - statechange
+          - Obtained
+          - Released
+          - Deleted
+      example: "statechange"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: LAE_ACTION_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - Created
+              - statechange
+              - Obtained
+              - Released
+              - Deleted
+          severity: ERROR
+          action: QUARANTINE
+          description: "action must be one of the documented source values."
+
+    - name: eventOrigin
+      data_type: string
+      logical_type: process_event_origin
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - Application
+          - Offer
+          - Workflow
+      example: "Application"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: LAE_EVENT_ORIGIN_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - Application
+              - Offer
+              - Workflow
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            eventOrigin must be Application, Offer, or Workflow.
+
+    - name: offerId
+      data_type: string
+      logical_type: offer_identifier
+      required: true
+      nullable: true
+      accepted:
+        regex: '^Offer_\d{9}$'
+      example: "Offer_000000042"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: CREDIT_OFFER_IDENTIFIER
+        handling: TOKENISE_OR_REDACT
+      quality_rules:
+        - rule_id: LAE_OFFER_ID_PATTERN
+          type: REGEX_IF_PRESENT
+          parameters:
+            regex: '^Offer_\d{9}$'
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            offerId must follow the Offer_000000000 pattern when supplied.
+
+    - name: offeredAmount
+      data_type: string
+      logical_type: decimal_amount
+      required: true
+      nullable: true
+      accepted:
+        currency: AUD
+        min_exclusive: 0
+      example: "30000.00"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: CREDIT_OFFER_FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: LAE_OFFERED_AMOUNT_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            offeredAmount must be parseable as a decimal amount when supplied.
+
+        - rule_id: LAE_OFFERED_AMOUNT_POSITIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min_exclusive: 0
+          severity: ERROR
+          action: QUARANTINE
+          description: "offeredAmount must be greater than zero when supplied."
+
+    - name: firstWithdrawalAmount
+      data_type: string
+      logical_type: decimal_amount
+      required: true
+      nullable: true
+      accepted:
+        currency: AUD
+        min_exclusive: 0
+      example: "25000.00"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: CREDIT_OFFER_FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: LAE_FIRST_WITHDRAWAL_AMOUNT_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            firstWithdrawalAmount must be parseable as a decimal amount when supplied.
+
+        - rule_id: LAE_FIRST_WITHDRAWAL_AMOUNT_POSITIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min_exclusive: 0
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            firstWithdrawalAmount must be greater than zero when supplied.
+
+    - name: numberOfTerms
+      data_type: string
+      logical_type: term_months_decimal_string
+      required: true
+      nullable: true
+      accepted:
+        values:
+          - "12.0"
+          - "24.0"
+          - "36.0"
+          - "48.0"
+          - "60.0"
+          - "72.0"
+      example: "60.0"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: APPROVED_CONTEXT_ONLY
+      quality_rules:
+        - rule_id: LAE_NUMBER_OF_TERMS_ENUM_IF_PRESENT
+          type: ACCEPTED_VALUES_IF_PRESENT
+          parameters:
+            values:
+              - "12.0"
+              - "24.0"
+              - "36.0"
+              - "48.0"
+              - "60.0"
+              - "72.0"
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            numberOfTerms must be one of the documented term values when supplied.
+
+    - name: monthlyCost
+      data_type: string
+      logical_type: decimal_amount
+      required: true
+      nullable: true
+      accepted:
+        currency: AUD
+        min_exclusive: 0
+      example: "415.70"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: CREDIT_OFFER_FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: LAE_MONTHLY_COST_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            monthlyCost must be parseable as a decimal amount when supplied.
+
+        - rule_id: LAE_MONTHLY_COST_POSITIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min_exclusive: 0
+          severity: ERROR
+          action: QUARANTINE
+          description: "monthlyCost must be greater than zero when supplied."
+
+    - name: creditScore
+      data_type: string
+      logical_type: credit_score
+      required: true
+      nullable: true
+      accepted:
+        min: 0
+        max: 1000
+      example: "750"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: CREDIT_RISK_INFORMATION
+        handling: BANKER_ONLY_OR_REDACT
+      quality_rules:
+        - rule_id: LAE_CREDIT_SCORE_INTEGER
+          type: PARSEABLE_INTEGER_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            creditScore must be parseable as an integer when supplied.
+
+        - rule_id: LAE_CREDIT_SCORE_RANGE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min: 0
+            max: 1000
+            parse_as: INTEGER
+          severity: ERROR
+          action: QUARANTINE
+          description: "creditScore must be between zero and one thousand."
+
+    - name: accepted
+      data_type: string
+      logical_type: nullable_boolean_string
+      required: true
+      nullable: true
+      accepted:
+        values:
+          - "True"
+          - "False"
+      example: "True"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: CREDIT_DECISION_INFORMATION
+        handling: BANKER_ONLY_OR_RESTRICT
+      quality_rules:
+        - rule_id: LAE_ACCEPTED_BOOLEAN_STRING
+          type: ACCEPTED_VALUES_IF_PRESENT
+          parameters:
+            values:
+              - "True"
+              - "False"
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            accepted must be True or False when supplied.
+
+    - name: selected
+      data_type: string
+      logical_type: nullable_boolean_string
+      required: true
+      nullable: true
+      accepted:
+        values:
+          - "True"
+          - "False"
+      example: "True"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: CREDIT_OFFER_SELECTION_INFORMATION
+        handling: BANKER_ONLY_OR_RESTRICT
+      quality_rules:
+        - rule_id: LAE_SELECTED_BOOLEAN_STRING
+          type: ACCEPTED_VALUES_IF_PRESENT
+          parameters:
+            values:
+              - "True"
+              - "False"
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            selected must be True or False when supplied.
+
+# -----------------------------------------------------------------------------
+# 6. Dataset-level quality rules
+# -----------------------------------------------------------------------------
+dataset_quality_rules:
+
+  - rule_id: LAE_EVENT_ID_UNIQUE
+    type: UNIQUE
+    columns:
+      - eventId
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      eventId must uniquely identify a business event. Repeated eventId values
+      are treated as transport duplicates rather than new process events.
+
+  - rule_id: LAE_APPLICATION_LINK_PRESENT
+    type: NOT_NULL
+    columns:
+      - applicationId
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A process event should identify its loan application. The physical schema
+      currently permits applicationId to be null.
+
+  - rule_id: LAE_CUSTOMER_LINK_PRESENT
+    type: NOT_NULL
+    columns:
+      - global_id
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A process event should identify its customer. The physical schema currently
+      permits global_id to be null.
+
+  - rule_id: LAE_APPLICATION_CUSTOMER_CONSISTENT
+    type: REFERENCE_PAIR_CONSISTENT
+    parameters:
+      reference_dataset: loan_applications
+      source_columns:
+        - applicationId
+        - global_id
+      reference_columns:
+        - applicationId
+        - global_id
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      applicationId and global_id must refer to the same loan application.
+
+  - rule_id: LAE_TIMESTAMP_PRESENT
+    type: NOT_NULL
+    columns:
+      - timestamp
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A usable process event should contain its business timestamp. The physical
+      schema currently permits timestamp to be null.
+
+  - rule_id: LAE_TIMESTAMP_NOT_BEFORE_SUBMISSION
+    type: REFERENCE_TIMESTAMP_COMPARISON
+    parameters:
+      reference_dataset: loan_applications
+      source_key:
+        applicationId: applicationId
+      source_timestamp_column: timestamp
+      operator: GREATER_THAN_OR_EQUAL
+      reference_timestamp_column: submittedAt
+      ignore_nulls: true
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Event timestamp should not normally be earlier than the parent
+      application's submittedAt timestamp.
+
+  - rule_id: LAE_EVENT_ORIGIN_FROM_CONCEPT_PREFIX
+    type: PREFIX_TO_VALUE_MAPPING
+    parameters:
+      source_column: conceptName
+      target_column: eventOrigin
+      mappings:
+        A_: Application
+        O_: Offer
+        W_: Workflow
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      eventOrigin must be derived from the conceptName prefix.
+
+  - rule_id: LAE_OFFER_FIELDS_NULL_OUTSIDE_OFFER_EVENTS
+    type: CONDITIONAL_ALL_NULL_UNLESS_PREFIX
+    parameters:
+      selector_column: conceptName
+      allowed_prefix: O_
+      target_columns:
+        - offerId
+        - offeredAmount
+        - firstWithdrawalAmount
+        - numberOfTerms
+        - monthlyCost
+        - creditScore
+        - accepted
+        - selected
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      Offer-specific fields must be null when conceptName does not begin with O_.
+
+  - rule_id: LAE_OFFER_ID_PRESENT_FOR_OFFER_EVENTS
+    type: CONDITIONAL_NOT_NULL_BY_PREFIX
+    parameters:
+      selector_column: conceptName
+      prefix: O_
+      target_column: offerId
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      An Offer event should identify its offer through offerId.
+
+  - rule_id: LAE_FIRST_WITHDRAWAL_NOT_ABOVE_OFFER
+    type: NUMERIC_COLUMN_COMPARISON
+    parameters:
+      left_column: firstWithdrawalAmount
+      operator: LESS_THAN_OR_EQUAL
+      right_column: offeredAmount
+      parse_as: DECIMAL
+      ignore_nulls: true
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      firstWithdrawalAmount should not normally exceed offeredAmount.
+
+  - rule_id: LAE_SELECTED_ACCEPTED_CONSISTENCY
+    type: CONDITIONAL_ACCEPTED_VALUES
+    parameters:
+      source_column: selected
+      mappings:
+        "True":
+          - "True"
+      target_column: accepted
+      ignore_nulls: true
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A selected offer should normally also be accepted. The source only states
+      that selected is correlated with accepted, so this check remains a warning.
+
+  - rule_id: LAE_PARENT_TOTAL_EVENT_COUNT
+    type: PARENT_DECLARED_CHILD_COUNT_MATCH
+    parameters:
+      parent_dataset: loan_applications
+      parent_key: applicationId
+      parent_count_column: totalEvents
+      child_key: applicationId
+      parse_parent_count_as: INTEGER
+      comparison_scope: COMPLETE_SNAPSHOT
+      ignore_nulls: true
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      In a complete snapshot, the number of events for each application should
+      match loan_applications.totalEvents.
+
+  - rule_id: LAE_APPLICATION_EVENT_SEQUENCE_ORDER
+    type: MONOTONIC_EVENT_TIME_PER_GROUP
+    parameters:
+      group_columns:
+        - applicationId
+      timestamp_column: timestamp
+      tiebreaker_columns:
+        - eventId
+      allow_equal_timestamps: true
+      comparison_scope: COMPLETE_SNAPSHOT
+      ignore_nulls: true
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Events for the same application should be orderable by business timestamp
+      and eventId without requiring updates to historical records.
+
+  - rule_id: LAE_BUSINESS_HOURS_DISTRIBUTION_MONITORING
+    type: TIMESTAMP_HOUR_POPULATION_RATIO
+    parameters:
+      column: timestamp
+      timezone: SOURCE_TIMEZONE_TBD
+      start_hour_inclusive: 9
+      end_hour_exclusive: 17
+      expected_ratio: 0.75
+      absolute_tolerance: 0.12
+      comparison_scope: COMPLETE_SNAPSHOT
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Approximately seventy-five percent of source events occur during business
+      hours. This is a distribution-monitoring rule, not a record-level validity
+      requirement.
+
+  - rule_id: LAE_EXACT_CONCEPT_CATALOGUE_REVIEW
+    type: REFERENCE_CATALOGUE_PENDING
+    parameters:
+      column: conceptName
+      documented_count: 24
+      source: GENERATOR_SCRIPT
+      status: TBD_FROM_GENERATOR_SCRIPT
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      The exact twenty-four concept names must be extracted from the generator
+      script before the contract is promoted to APPROVED.
+
+  - rule_id: LAE_SILVER_EVENT_ORIGIN_ALIGNMENT_REVIEW
+    type: DOCUMENTED_CROSS_LAYER_ALIGNMENT
+    parameters:
+      source_values:
+        - Application
+        - Offer
+        - Workflow
+      silver_documented_values:
+        - SYSTEM
+        - CUSTOMER
+        - BANKER
+      status: TBD_CROSS_LAYER_ALIGNMENT
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      The source defines eventOrigin from A_, O_, and W_ prefixes, while the
+      Silver document notes SYSTEM, CUSTOMER, and BANKER. The team must resolve
+      this mismatch before enforcing the Silver mapping.
+
+# -----------------------------------------------------------------------------
+# 7. Event transport quality rules
+# -----------------------------------------------------------------------------
+event_quality_rules:
+
+  - rule_id: LAE_KAFKA_POSITION_UNIQUE
+    type: UNIQUE_EVENT_ENVELOPE_POSITION
+    columns:
+      - topic
+      - partition
+      - offset
+    severity: ERROR
+    action: DEDUPLICATE_TRANSPORT_COPY
+    description: >
+      A Kafka topic, partition, and offset combination must identify one landed
+      transport record.
+
+  - rule_id: LAE_EVENT_KEY_PRESENT
+    type: ENVELOPE_FIELD_NOT_NULL
+    field: key
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      The Kafka event key should be present for deterministic partitioning and replay.
+
+  - rule_id: LAE_EVENT_TIMESTAMP_PRESENT
+    type: ENVELOPE_FIELD_NOT_NULL
+    field: timestamp
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      The Kafka envelope should retain the broker event timestamp.
+
+# -----------------------------------------------------------------------------
+# 8. Derived checks for Silver and AI-ready context
+# -----------------------------------------------------------------------------
+derived_quality_checks:
+
+  - rule_id: LAE_EVENT_ORIGIN_DERIVATION
+    type: DERIVED_ENUM
+    expression: >
+      CASE
+        WHEN conceptName LIKE 'A_%' THEN 'Application'
+        WHEN conceptName LIKE 'O_%' THEN 'Offer'
+        WHEN conceptName LIKE 'W_%' THEN 'Workflow'
+      END
+    output_field: derived_event_origin
+    description: >
+      Silver may independently derive event origin and compare it with the
+      physical eventOrigin value.
+
+  - rule_id: LAE_OFFER_AMOUNT_BUCKET_DERIVATION
+    type: PRIVACY_TRANSFORMATION
+    source_fields:
+      - offeredAmount
+      - firstWithdrawalAmount
+      - monthlyCost
+    output_fields:
+      - offered_amount_masked
+      - first_withdrawal_amount_masked
+      - monthly_cost_masked
+    description: >
+      AI-ready outputs must use approved monetary range buckets rather than exact
+      offer values.
+
+  - rule_id: LAE_OFFER_DECISION_PROJECTION
+    type: APPROVED_CONTEXT_PROJECTION
+    approved_fields:
+      - conceptName
+      - lifecycleTransition
+      - timestamp
+      - action
+      - eventOrigin
+    prohibited_fields:
+      - orgResource
+      - offerId
+      - offeredAmount
+      - firstWithdrawalAmount
+      - monthlyCost
+      - creditScore
+    description: >
+      A restricted process timeline may be projected after quality validation,
+      while employee identifiers, offer identifiers, exact amounts, and credit
+      scores remain excluded or masked.
+
+# -----------------------------------------------------------------------------
+# 9. Notes for the team
+# -----------------------------------------------------------------------------
+notes:
+  - >
+    This contract follows the authoritative physical source schema and includes
+    all seventeen fields defined for loan_application_events.
+  - >
+    loan_application_events is an EVENT source and must remain append-only.
+    Transport duplicates may be removed, but valid historical events must never
+    be updated or deleted.
+  - >
+    The source states that conceptName has twenty-four values but lists only four
+    examples in the schema document. The full accepted-value catalogue must be
+    extracted from the generator script rather than invented.
+  - >
+    The lifecycle value ate_abort is preserved exactly as documented by the
+    source. The team should verify its spelling against the generator script
+    before promoting the contract to APPROVED.
+  - >
+    Offer-specific fields are allowed only for O_ concept events. The source does
+    not state that every offer field is mandatory on every O_ event, so only
+    offerId presence is treated as a warning expectation.
+  - >
+    eventOrigin is derived from conceptName as Application, Offer, or Workflow.
+    A conflicting Silver note lists SYSTEM, CUSTOMER, and BANKER, so the final
+    cross-layer mapping remains unresolved.
+  - >
+    orgResource is an internal process-resource identifier and must not be
+    exposed to Customer.AI. Exact offer amounts, monthly costs, credit scores,
+    and offer decisions require masking or restricted banker access.

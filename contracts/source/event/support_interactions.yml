@@ -1,0 +1,746 @@
+# =============================================================================
+# DATA CONTRACT: support_interactions
+# =============================================================================
+# Purpose:
+# - Stores the append-only customer support contact log.
+# - Records the customer, interaction channel, business timestamp, topic,
+#   resolution, handling agent, and interaction duration.
+#
+# Important event behaviour:
+# - Each row is a historical customer-contact event and must remain append-only.
+# - Transport duplicates may be removed, but valid historical interactions must
+#   never be updated or deleted.
+# - global_id and customerId identify the customer associated with the contact.
+#
+# Quick guide:
+# - required: the event payload field must exist.
+# - nullable: the physical payload value may be null.
+# - ERROR + QUARANTINE: exclude the event from trusted outputs.
+# - WARNING + ALLOW_WITH_WARNING: retain the event and report the issue.
+# =============================================================================
+
+contract_version: "1.0.0"
+contract_id: "source.event.support_interactions"
+
+# -----------------------------------------------------------------------------
+# 1. Basic dataset information
+# -----------------------------------------------------------------------------
+dataset:
+  name: support_interactions
+  domain: CUSTOMER_SERVICE
+  description: >
+    Append-only CRM support-contact events across chat, phone, email, and branch
+    channels. Each record contains customer identifiers, interaction timestamp,
+    support topic, resolution, handling agent, and duration.
+  expected_rows_scale_1: 3000
+  physical_schema_ref: "dev-tools/datagen/output/master-schema.json#/support_interactions"
+
+# -----------------------------------------------------------------------------
+# 2. Ownership and contract lifecycle
+# -----------------------------------------------------------------------------
+lifecycle:
+  # DRAFT -> IN_REVIEW -> APPROVED -> DEPRECATED / RETIRED
+  status: DRAFT
+  owner: TBD
+  approver: TBD
+  effective_from: null
+
+# -----------------------------------------------------------------------------
+# 3. Event source and ingestion information
+# -----------------------------------------------------------------------------
+source:
+  category: EVENT
+  system_type: BUSINESS_EVENT_STREAM
+  event_name: support_interactions
+  topic_name: TBD
+  authoritative: true
+  append_only: true
+
+ingestion:
+  mechanism: KAFKA_EVENT
+  transport: APACHE_KAFKA
+
+  landing:
+    format: JSONL
+    path_template: "s3://<bucket>/bronze/landing/event/support_interactions/"
+    immutable: true
+
+  bronze_target: "bronze.kafka_events"
+  deduplicated_bronze_target: "bronze.kafka_events_deduplicated"
+
+  event_envelope:
+    retained_metadata:
+      - topic
+      - key
+      - partition
+      - offset
+      - timestamp
+      - event_type
+      - raw_payload
+
+  append_only_policy:
+    allowed_operations:
+      - APPEND
+    prohibited_operations:
+      - UPDATE_EXISTING_EVENT
+      - DELETE_HISTORICAL_EVENT
+    description: >
+      Transport-level duplicates may be deduplicated, but valid customer-contact
+      events must remain immutable and append-only.
+
+# -----------------------------------------------------------------------------
+# 4. Keys and relationships
+# -----------------------------------------------------------------------------
+keys:
+  primary_key:
+    - interactionId
+
+  event_deduplication_key:
+    - interactionId
+
+  foreign_keys:
+    - columns:
+        - global_id
+      reference:
+        dataset: customers
+        columns:
+          - global_id
+      nullable: true
+
+    - columns:
+        - customerId
+      reference:
+        dataset: customers
+        columns:
+          - customerId
+      nullable: true
+
+# -----------------------------------------------------------------------------
+# 5. Field-level contract
+# -----------------------------------------------------------------------------
+schema:
+  fields:
+
+    - name: global_id
+      data_type: string
+      logical_type: person_identifier
+      required: true
+      nullable: true
+      accepted:
+        format: UUID
+      example: "65df84b8-4274-4dbd-9667-6c9967ae6538"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: SPI_GLOBAL_ID_UUID
+          type: FORMAT_IF_PRESENT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "global_id must be a valid UUID when supplied."
+
+        - rule_id: SPI_GLOBAL_ID_CUSTOMER_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: customers
+            reference_column: global_id
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            global_id must exist in customers.global_id when supplied.
+
+    - name: interactionId
+      data_type: string
+      logical_type: support_interaction_identifier
+      required: true
+      nullable: false
+      accepted:
+        format: UUID
+      example: "645a1d25-f81d-4670-b2bc-0ba0314f1db4"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: SPI_INTERACTION_ID_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "interactionId must always be present."
+
+        - rule_id: SPI_INTERACTION_ID_UUID
+          type: FORMAT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "interactionId must be a valid UUID."
+
+    - name: customerId
+      data_type: string
+      logical_type: customer_identifier
+      required: true
+      nullable: true
+      accepted:
+        regex: '^CUST-\d{5}$'
+      example: "CUST-00042"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: SPI_CUSTOMER_ID_PATTERN
+          type: REGEX_IF_PRESENT
+          parameters:
+            regex: '^CUST-\d{5}$'
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            customerId must follow the CUST-00000 pattern when supplied.
+
+        - rule_id: SPI_CUSTOMER_ID_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: customers
+            reference_column: customerId
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            customerId must exist in customers.customerId when supplied.
+
+    - name: channel
+      data_type: string
+      logical_type: support_contact_channel
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - chat
+          - phone
+          - email
+          - branch
+      example: "chat"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: APPROVED_CONTEXT_ONLY
+      quality_rules:
+        - rule_id: SPI_CHANNEL_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - chat
+              - phone
+              - email
+              - branch
+          severity: ERROR
+          action: QUARANTINE
+          description: "channel must be one of the four documented contact channels."
+
+    - name: timestamp
+      data_type: string
+      logical_type: timestamp
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_TIMESTAMP
+      example: "2026-07-15T10:40:00Z"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: CUSTOMER_CONTACT_METADATA
+        handling: RESTRICT_OR_GENERALISE
+      quality_rules:
+        - rule_id: SPI_TIMESTAMP_PARSEABLE
+          type: PARSEABLE_TIMESTAMP_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "timestamp must be parseable when supplied."
+
+    - name: topic
+      data_type: string
+      logical_type: support_interaction_topic
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - Application_Status
+          - Account_Inquiry
+          - Document_Upload
+          - Complaint
+          - General
+      example: "Application_Status"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: CUSTOMER_SERVICE_SUBJECT_INFORMATION
+        handling: APPROVED_CONTEXT_ONLY
+      quality_rules:
+        - rule_id: SPI_TOPIC_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - Application_Status
+              - Account_Inquiry
+              - Document_Upload
+              - Complaint
+              - General
+          severity: ERROR
+          action: QUARANTINE
+          description: "topic must be one of the documented support topics."
+
+    - name: resolution
+      data_type: string
+      logical_type: support_interaction_resolution
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - resolved
+          - escalated
+          - follow_up_required
+          - unresolved
+      example: "resolved"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: CUSTOMER_SERVICE_OUTCOME_INFORMATION
+        handling: APPROVED_CONTEXT_ONLY
+      quality_rules:
+        - rule_id: SPI_RESOLUTION_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - resolved
+              - escalated
+              - follow_up_required
+              - unresolved
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            resolution must be one of the documented support outcomes.
+
+    - name: agentId
+      data_type: string
+      logical_type: internal_support_agent_identifier
+      required: true
+      nullable: true
+      accepted:
+        regex: '^AGENT-\d{4}$'
+        numeric_suffix_min: 1
+        numeric_suffix_max: 200
+      example: "AGENT-0037"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: EMPLOYEE_IDENTIFIER
+        handling: REDACT_FROM_CUSTOMER_AI
+      quality_rules:
+        - rule_id: SPI_AGENT_ID_PATTERN
+          type: REGEX_IF_PRESENT
+          parameters:
+            regex: '^AGENT-\d{4}$'
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            agentId must follow the AGENT-0000 pattern when supplied.
+
+        - rule_id: SPI_AGENT_ID_RANGE
+          type: REGEX_NUMERIC_COMPONENT_RANGE_IF_PRESENT
+          parameters:
+            regex: '^AGENT-(\d{4})$'
+            capture_group: 1
+            min: 1
+            max: 200
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            agentId must identify a documented source agent from AGENT-0001
+            through AGENT-0200.
+
+    - name: durationMinutes
+      data_type: int32
+      logical_type: interaction_duration_minutes
+      required: true
+      nullable: true
+      accepted:
+        min_exclusive: 0
+      example: 12
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: SPI_DURATION_POSITIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min_exclusive: 0
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            durationMinutes must be greater than zero when supplied.
+
+# -----------------------------------------------------------------------------
+# 6. Dataset-level quality rules
+# -----------------------------------------------------------------------------
+dataset_quality_rules:
+
+  - rule_id: SPI_INTERACTION_ID_UNIQUE
+    type: UNIQUE
+    columns:
+      - interactionId
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      interactionId must uniquely identify a business interaction. Repeated
+      interactionId values are treated as transport duplicates.
+
+  - rule_id: SPI_CUSTOMER_LINK_PRESENT
+    type: ALL_NOT_NULL
+    columns:
+      - global_id
+      - customerId
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A support interaction should identify its customer using both global_id
+      and customerId. The physical schema currently permits null values.
+
+  - rule_id: SPI_CUSTOMER_IDENTIFIERS_CONSISTENT
+    type: REFERENCE_PAIR_CONSISTENT
+    parameters:
+      reference_dataset: customers
+      source_columns:
+        - global_id
+        - customerId
+      reference_columns:
+        - global_id
+        - customerId
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      global_id and customerId must refer to the same customer record.
+
+  - rule_id: SPI_CORE_EVENT_FIELDS_PRESENT
+    type: ALL_NOT_NULL
+    columns:
+      - timestamp
+      - agentId
+      - durationMinutes
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A usable support interaction should contain its timestamp, handling agent,
+      and duration. The physical schema currently permits null values.
+
+  - rule_id: SPI_TIMESTAMP_NOT_IN_FUTURE
+    type: TIMESTAMP_NOT_IN_FUTURE
+    columns:
+      - timestamp
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      The interaction timestamp should not be later than the pipeline processing timestamp.
+
+  - rule_id: SPI_CHRONOLOGICAL_ORDER_PER_CUSTOMER
+    type: MONOTONIC_EVENT_TIME_PER_GROUP
+    parameters:
+      group_columns:
+        - global_id
+      timestamp_column: timestamp
+      tiebreaker_columns:
+        - interactionId
+      allow_equal_timestamps: true
+      comparison_scope: COMPLETE_SNAPSHOT
+      ignore_nulls: true
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Interactions for the same customer should be chronologically orderable.
+
+  - rule_id: SPI_MAX_ONE_IDENTICAL_INTERACTION
+    type: UNIQUE_WITHIN_GROUP
+    columns:
+      - global_id
+      - channel
+      - timestamp
+      - topic
+      - resolution
+      - agentId
+      - durationMinutes
+    parameters:
+      comparison_scope: COMPLETE_SNAPSHOT
+      ignore_nulls: true
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Identical interaction details may indicate duplicate event production even
+      when interactionId values differ.
+
+  - rule_id: SPI_CHANNEL_DISTRIBUTION_MONITORING
+    type: CATEGORICAL_DISTRIBUTION_TOLERANCE
+    parameters:
+      column: channel
+      expected_ratios:
+        chat: 0.40
+        phone: 0.30
+        email: 0.20
+        branch: 0.10
+      absolute_tolerance: 0.10
+      comparison_scope: COMPLETE_SNAPSHOT
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Channel proportions should remain reasonably close to the configured
+      mock-data distribution in a complete snapshot.
+
+  - rule_id: SPI_TOPIC_DISTRIBUTION_MONITORING
+    type: CATEGORICAL_DISTRIBUTION_TOLERANCE
+    parameters:
+      column: topic
+      expected_ratios:
+        Application_Status: 0.35
+        Account_Inquiry: 0.25
+        Document_Upload: 0.20
+        Complaint: 0.12
+        General: 0.08
+      absolute_tolerance: 0.10
+      comparison_scope: COMPLETE_SNAPSHOT
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Topic proportions should remain reasonably close to the configured
+      mock-data distribution in a complete snapshot.
+
+  - rule_id: SPI_RESOLUTION_DISTRIBUTION_MONITORING
+    type: CATEGORICAL_DISTRIBUTION_TOLERANCE
+    parameters:
+      column: resolution
+      expected_ratios:
+        resolved: 0.60
+        escalated: 0.20
+        follow_up_required: 0.15
+        unresolved: 0.05
+      absolute_tolerance: 0.10
+      comparison_scope: COMPLETE_SNAPSHOT
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Resolution proportions should remain reasonably close to the configured
+      mock-data distribution in a complete snapshot.
+
+  - rule_id: SPI_COMPLAINT_ESCALATION_MONITORING
+    type: CONDITIONAL_CATEGORY_RATIO_RANGE
+    parameters:
+      when:
+        column: topic
+        equals: Complaint
+      target_column: resolution
+      target_value: escalated
+      expected_ratio: 0.45
+      min_ratio: 0.30
+      max_ratio: 0.60
+      comparison_scope: COMPLETE_SNAPSHOT
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Complaint interactions are generated with a substantially higher
+      escalation rate, approximately forty-five percent.
+
+  - rule_id: SPI_AGENT_TIER_DISTRIBUTION_MONITORING
+    type: IDENTIFIER_RANGE_POPULATION_RATIO
+    parameters:
+      column: agentId
+      regex: '^AGENT-(\d{4})$'
+      capture_group: 1
+      tiers:
+        - name: primary_agents
+          min: 1
+          max: 40
+          expected_ratio: 0.80
+        - name: extended_agents
+          min: 41
+          max: 200
+          expected_ratio: 0.20
+      absolute_tolerance: 0.10
+      comparison_scope: COMPLETE_SNAPSHOT
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Approximately eighty percent of interactions should be handled by
+      AGENT-0001 through AGENT-0040 and twenty percent by AGENT-0041 through
+      AGENT-0200.
+
+  - rule_id: SPI_BUSINESS_HOURS_DISTRIBUTION_MONITORING
+    type: TIMESTAMP_HOUR_POPULATION_RATIO
+    parameters:
+      column: timestamp
+      timezone: SOURCE_TIMEZONE_TBD
+      start_hour_inclusive: 9
+      end_hour_exclusive: 17
+      expected_ratio: 0.75
+      absolute_tolerance: 0.12
+      comparison_scope: COMPLETE_SNAPSHOT
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Approximately seventy-five percent of interactions should occur between
+      09:00 and 17:00 in the source timezone.
+
+  - rule_id: SPI_WEEKDAY_DISTRIBUTION_MONITORING
+    type: TIMESTAMP_WEEKDAY_POPULATION_RATIO
+    parameters:
+      column: timestamp
+      timezone: SOURCE_TIMEZONE_TBD
+      weekdays:
+        - MONDAY
+        - TUESDAY
+        - WEDNESDAY
+        - THURSDAY
+        - FRIDAY
+      expected_ratio: 0.78
+      absolute_tolerance: 0.12
+      comparison_scope: COMPLETE_SNAPSHOT
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Approximately seventy-eight percent of interactions should occur on weekdays.
+
+  - rule_id: SPI_DURATION_CHANNEL_DISTRIBUTION_MONITORING
+    type: CONDITIONAL_LOGNORMAL_DISTRIBUTION_MONITORING
+    parameters:
+      value_column: durationMinutes
+      selector_column: channel
+      configured_parameters:
+        chat:
+          mu: 2.0
+          sigma: 0.4
+        phone:
+          mu: 2.4
+          sigma: 0.4
+        email:
+          mu: 1.5
+          sigma: 0.3
+        branch:
+          mu: 2.9
+          sigma: 0.4
+      comparison_scope: COMPLETE_SNAPSHOT
+      exact_test_thresholds_status: TBD_FROM_ANALYTICAL_IMPLEMENTATION
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Interaction duration follows a channel-specific log-normal distribution.
+      Exact statistical acceptance thresholds must be defined in the monitoring
+      implementation.
+
+# -----------------------------------------------------------------------------
+# 7. Event transport quality rules
+# -----------------------------------------------------------------------------
+event_quality_rules:
+
+  - rule_id: SPI_KAFKA_POSITION_UNIQUE
+    type: UNIQUE_EVENT_ENVELOPE_POSITION
+    columns:
+      - topic
+      - partition
+      - offset
+    severity: ERROR
+    action: DEDUPLICATE_TRANSPORT_COPY
+    description: >
+      A Kafka topic, partition, and offset combination must identify one landed
+      transport record.
+
+  - rule_id: SPI_EVENT_KEY_PRESENT
+    type: ENVELOPE_FIELD_NOT_NULL
+    field: key
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      The Kafka event key should be present for deterministic partitioning and replay.
+
+  - rule_id: SPI_EVENT_TIMESTAMP_PRESENT
+    type: ENVELOPE_FIELD_NOT_NULL
+    field: timestamp
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      The Kafka envelope should retain the broker event timestamp.
+
+# -----------------------------------------------------------------------------
+# 8. Derived checks for Silver and AI-ready context
+# -----------------------------------------------------------------------------
+derived_quality_checks:
+
+  - rule_id: SPI_RECENT_INTERACTION_RANK
+    type: WINDOW_DERIVATION
+    partition_by:
+      - global_id
+    order_by:
+      - timestamp DESC
+      - interactionId DESC
+    output_field: interaction_recency_rank
+    description: >
+      Silver may rank validated interactions from most recent to oldest for each
+      customer.
+
+  - rule_id: SPI_RECENT_SUPPORT_SUMMARY
+    type: APPROVED_CONTEXT_PROJECTION
+    approved_fields:
+      - channel
+      - timestamp
+      - topic
+      - resolution
+      - durationMinutes
+    prohibited_fields:
+      - agentId
+    description: >
+      Customer-facing support history may expose an approved high-level summary,
+      while the internal handling-agent identifier remains excluded.
+
+  - rule_id: SPI_AGENT_REDACTION
+    type: PRIVACY_TRANSFORMATION
+    source_field: agentId
+    output_field: agent_id_redacted
+    description: >
+      Internal support-agent identifiers must be excluded from Customer.AI output.
+
+  - rule_id: SPI_FOLLOW_UP_FLAG_DERIVATION
+    type: DERIVED_BOOLEAN
+    expression: "resolution IN ('escalated', 'follow_up_required', 'unresolved')"
+    output_field: requires_follow_up
+    description: >
+      Silver may derive a follow-up flag for interactions that were not fully resolved.
+
+# -----------------------------------------------------------------------------
+# 9. Notes for the team
+# -----------------------------------------------------------------------------
+notes:
+  - >
+    This contract follows the authoritative physical source schema and includes
+    all nine fields defined for support_interactions.
+  - >
+    support_interactions is an EVENT source and must remain append-only.
+    Transport duplicates may be removed, but valid historical interactions must
+    never be updated or deleted.
+  - >
+    The source explicitly documents channel, topic, resolution, agent-tier,
+    business-hour, weekday, and channel-specific duration distributions. These
+    are implemented as complete-snapshot monitoring warnings rather than
+    record-level validity rules.
+  - >
+    Complaint interactions have an escalation rate of approximately forty-five
+    percent, which is substantially above the overall escalation rate.
+  - >
+    agentId is an internal employee identifier and must not be exposed to
+    Customer.AI.
+  - >
+    The physical source does not contain free-text notes, interaction content,
+    caseId, applicationId, organisationId, satisfaction score, or contact
+    transcript. This contract must not imply that those details are available.
+  - >
+    The Kafka topic name, event-key convention, source timezone, and exact
+    statistical thresholds for duration monitoring remain TBD.
