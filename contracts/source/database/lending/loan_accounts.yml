@@ -1,0 +1,678 @@
+# =============================================================================
+# DATA CONTRACT: loan_accounts
+# =============================================================================
+# Purpose:
+# - Stores personal, car, education, and other loan arrangements.
+# - Records the original amount, remaining balance, interest rate, term,
+#   repayment details, status, start date, and maturity date.
+#
+# Important relationship:
+# - accountId links each loan to banking_accounts.
+# - global_id identifies the customer who owns the linked banking account.
+# - The physical source does not contain organisationId. Business context must
+#   be derived by joining accountId to banking_accounts.organisationId.
+#
+# Quick guide:
+# - required: the source column must exist.
+# - nullable: the physical source value may be null.
+# - ERROR + QUARANTINE: do not send the record to the trusted output.
+# - WARNING + ALLOW_WITH_WARNING: keep the record but report the issue.
+# =============================================================================
+
+contract_version: "1.0.0"
+contract_id: "source.database.loan_accounts"
+
+# -----------------------------------------------------------------------------
+# 1. Basic dataset information
+# -----------------------------------------------------------------------------
+dataset:
+  name: loan_accounts
+  domain: LENDING
+  description: >
+    Source dataset containing personal, car, education, and other loan
+    arrangements linked to banking accounts. Each record includes the original
+    amount, current balance, interest rate, term, repayment information,
+    lifecycle status, start date, and calculated maturity date.
+  expected_rows_scale_1: 375
+  physical_schema_ref: "dev-tools/datagen/output/master-schema.json#/loan_accounts"
+
+# -----------------------------------------------------------------------------
+# 2. Ownership and contract lifecycle
+# -----------------------------------------------------------------------------
+lifecycle:
+  # DRAFT -> IN_REVIEW -> APPROVED -> DEPRECATED / RETIRED
+  status: DRAFT
+  owner: TBD
+  approver: TBD
+  effective_from: null
+
+# -----------------------------------------------------------------------------
+# 3. Source and ingestion information
+# -----------------------------------------------------------------------------
+source:
+  category: DATABASE
+  system_type: POSTGRESQL
+  source_object: "public.loan_accounts"
+  authoritative: true
+
+ingestion:
+  mechanism: DEBEZIUM_CDC
+  transport: APACHE_KAFKA
+
+  landing:
+    format: JSONL
+    path_template: "s3://<bucket>/bronze/landing/cdc/loan_accounts/"
+    immutable: true
+
+  bronze_target: "bronze.cdc_changes"
+
+  cdc:
+    supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+
+    ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+
+# -----------------------------------------------------------------------------
+# 4. Keys and relationships
+# -----------------------------------------------------------------------------
+keys:
+  primary_key:
+    - loanId
+
+  alternate_keys: []
+
+  foreign_keys:
+    - columns:
+        - global_id
+      reference:
+        dataset: customers
+        columns:
+          - global_id
+      nullable: true
+
+    - columns:
+        - accountId
+      reference:
+        dataset: banking_accounts
+        columns:
+          - accountId
+      nullable: true
+
+# -----------------------------------------------------------------------------
+# 5. Field-level contract
+# -----------------------------------------------------------------------------
+schema:
+  fields:
+
+    - name: global_id
+      data_type: string
+      logical_type: person_identifier
+      required: true
+      nullable: true
+      accepted:
+        format: UUID
+      example: "65df84b8-4274-4dbd-9667-6c9967ae6538"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: LNA_GLOBAL_ID_UUID
+          type: FORMAT_IF_PRESENT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "global_id must be a valid UUID when supplied."
+
+        - rule_id: LNA_GLOBAL_ID_CUSTOMER_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: customers
+            reference_column: global_id
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            global_id must exist in customers.global_id when supplied.
+
+    - name: accountId
+      data_type: string
+      logical_type: account_identifier
+      required: true
+      nullable: true
+      accepted:
+        format: UUID
+      example: "a5ef7c5b-04b6-49fa-8a0a-6b6a86be900f"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: LNA_ACCOUNT_ID_UUID
+          type: FORMAT_IF_PRESENT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "accountId must be a valid UUID when supplied."
+
+        - rule_id: LNA_ACCOUNT_ID_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: banking_accounts
+            reference_column: accountId
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            accountId must exist in banking_accounts.accountId when supplied.
+
+    - name: loanId
+      data_type: string
+      logical_type: loan_identifier
+      required: true
+      nullable: false
+      accepted:
+        format: UUID
+      example: "a7aa02af-3ddd-4da3-8c95-cb97d32bbd39"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: LNA_ID_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "loanId must always be present."
+
+        - rule_id: LNA_ID_UUID
+          type: FORMAT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "loanId must be a valid UUID."
+
+    - name: loanType
+      data_type: string
+      logical_type: loan_type
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - PERSONAL
+          - CAR
+          - EDUCATION
+          - OTHER
+      example: "PERSONAL"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: LNA_LOAN_TYPE_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - PERSONAL
+              - CAR
+              - EDUCATION
+              - OTHER
+          severity: ERROR
+          action: QUARANTINE
+          description: "loanType must be one of the supported source values."
+
+    - name: originalAmount
+      data_type: string
+      logical_type: decimal_amount
+      required: true
+      nullable: true
+      accepted:
+        currency: AUD
+        min_exclusive: 0
+      example: "24000.00"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: LNA_ORIGINAL_AMOUNT_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            originalAmount must be parseable as a decimal amount when supplied.
+
+        - rule_id: LNA_ORIGINAL_AMOUNT_POSITIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min_exclusive: 0
+          severity: ERROR
+          action: QUARANTINE
+          description: "originalAmount must be greater than zero when supplied."
+
+    - name: currentBalance
+      data_type: string
+      logical_type: decimal_amount
+      required: true
+      nullable: true
+      accepted:
+        currency: AUD
+        min_exclusive: 0
+      example: "14880.00"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: LNA_CURRENT_BALANCE_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            currentBalance must be parseable as a decimal amount when supplied.
+
+        - rule_id: LNA_CURRENT_BALANCE_POSITIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min_exclusive: 0
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            currentBalance must be greater than zero in the current source model.
+
+    - name: interestRate
+      data_type: string
+      logical_type: annual_percentage_rate
+      required: true
+      nullable: true
+      accepted:
+        min: 3.0
+      example: "8.50"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: BANKER_ONLY_OR_RESTRICT
+      quality_rules:
+        - rule_id: LNA_INTEREST_RATE_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            interestRate must be parseable as a decimal percentage when supplied.
+
+        - rule_id: LNA_INTEREST_RATE_MINIMUM
+          type: RANGE_IF_PRESENT
+          parameters:
+            min: 3.0
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            interestRate must be at least 3.0 percent in the current source model.
+
+    - name: termMonths
+      data_type: int32
+      logical_type: term_months
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - 12
+          - 24
+          - 36
+          - 48
+          - 60
+      example: 36
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: LNA_TERM_MONTHS_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - 12
+              - 24
+              - 36
+              - 48
+              - 60
+          severity: ERROR
+          action: QUARANTINE
+          description: "termMonths must be one of the supported term lengths."
+
+    - name: repaymentAmount
+      data_type: string
+      logical_type: decimal_amount
+      required: true
+      nullable: true
+      accepted:
+        currency: AUD
+        min_exclusive: 0
+      example: "757.47"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: LNA_REPAYMENT_AMOUNT_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            repaymentAmount must be parseable as a decimal amount when supplied.
+
+        - rule_id: LNA_REPAYMENT_AMOUNT_POSITIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min_exclusive: 0
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            repaymentAmount must be greater than zero when supplied.
+
+    - name: repaymentFrequency
+      data_type: string
+      logical_type: repayment_frequency
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - MONTHLY
+          - FORTNIGHTLY
+          - WEEKLY
+      example: "MONTHLY"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: LNA_REPAYMENT_FREQUENCY_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - MONTHLY
+              - FORTNIGHTLY
+              - WEEKLY
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            repaymentFrequency must be one of the supported source values.
+
+    - name: status
+      data_type: string
+      logical_type: loan_status
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - ACTIVE
+          - CLOSED
+          - DEFAULT
+      example: "ACTIVE"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: CREDIT_STATUS_INFORMATION
+        handling: BANKER_ONLY_OR_RESTRICT
+      quality_rules:
+        - rule_id: LNA_STATUS_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - ACTIVE
+              - CLOSED
+              - DEFAULT
+          severity: ERROR
+          action: QUARANTINE
+          description: "status must be one of the supported source values."
+
+    - name: startDate
+      data_type: string
+      logical_type: date
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_DATE
+      example: "2024-03-12"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: LNA_START_DATE_PARSEABLE
+          type: PARSEABLE_DATE_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "startDate must be parseable as a date when supplied."
+
+    - name: maturityDate
+      data_type: string
+      logical_type: date
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_DATE
+      example: "2027-03-12"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: LNA_MATURITY_DATE_PARSEABLE
+          type: PARSEABLE_DATE_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "maturityDate must be parseable as a date when supplied."
+
+# -----------------------------------------------------------------------------
+# 6. Dataset-level quality rules
+# -----------------------------------------------------------------------------
+dataset_quality_rules:
+
+  - rule_id: LNA_ID_UNIQUE
+    type: UNIQUE
+    columns:
+      - loanId
+    severity: ERROR
+    action: QUARANTINE
+    description: "loanId must be unique across the dataset."
+
+  - rule_id: LNA_ACCOUNT_LINK_PRESENT
+    type: NOT_NULL
+    columns:
+      - accountId
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A loan should identify its banking account. The physical schema currently
+      permits accountId to be null.
+
+  - rule_id: LNA_CUSTOMER_LINK_PRESENT
+    type: NOT_NULL
+    columns:
+      - global_id
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A loan should identify its customer. The physical schema currently
+      permits global_id to be null.
+
+  - rule_id: LNA_ACCOUNT_CUSTOMER_CONSISTENT
+    type: REFERENCE_PAIR_CONSISTENT
+    parameters:
+      reference_dataset: banking_accounts
+      source_columns:
+        - accountId
+        - global_id
+      reference_columns:
+        - accountId
+        - global_id
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      accountId and global_id must refer to the same banking account record.
+
+  - rule_id: LNA_ACCOUNT_TYPE
+    type: REFERENCE_CONDITION
+    parameters:
+      reference_dataset: banking_accounts
+      source_key:
+        accountId: accountId
+      expected_condition:
+        column: accountType
+        equals: loan
+      ignore_missing_reference: false
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      A loan_accounts record must reference a banking account with accountType
+      equal to loan.
+
+  - rule_id: LNA_ACCOUNT_PRODUCT_CATEGORY
+    type: REFERENCE_CONDITION
+    parameters:
+      reference_dataset: banking_accounts
+      source_key:
+        accountId: accountId
+      expected_condition:
+        column: productCategory
+        equals: PERS_LOANS
+      ignore_missing_reference: false
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      A loan_accounts record must reference a banking account classified as
+      PERS_LOANS.
+
+  - rule_id: LNA_CURRENT_BALANCE_NOT_ABOVE_ORIGINAL
+    type: NUMERIC_COLUMN_COMPARISON
+    parameters:
+      left_column: currentBalance
+      operator: LESS_THAN_OR_EQUAL
+      right_column: originalAmount
+      parse_as: DECIMAL
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      currentBalance cannot exceed originalAmount in the current source model.
+
+  - rule_id: LNA_CURRENT_BALANCE_RATIO
+    type: NUMERIC_COLUMN_RATIO_RANGE
+    parameters:
+      numerator_column: currentBalance
+      denominator_column: originalAmount
+      min: 0.10
+      max: 0.95
+      parse_as: DECIMAL
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      currentBalance must be between ten and ninety-five percent of
+      originalAmount in the current source model.
+
+  - rule_id: LNA_REPAYMENT_FORMULA_CONSISTENT
+    type: AMORTISATION_PAYMENT_MATCH
+    parameters:
+      principal_column: originalAmount
+      annual_interest_rate_column: interestRate
+      term_months_column: termMonths
+      repayment_frequency_column: repaymentFrequency
+      target_column: repaymentAmount
+      tolerance_ratio: 0.02
+      ignore_nulls: true
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      repaymentAmount should be consistent with the standard amortisation
+      formula after accounting for repayment frequency and rounding.
+
+  - rule_id: LNA_MATURITY_DATE_FORMULA
+    type: DATE_ADD_MONTHS_MATCH
+    parameters:
+      start_date_column: startDate
+      months_column: termMonths
+      target_date_column: maturityDate
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      maturityDate must equal startDate plus termMonths.
+
+  - rule_id: LNA_DATE_ORDER
+    type: DATE_COLUMN_COMPARISON
+    parameters:
+      left_column: maturityDate
+      operator: GREATER_THAN
+      right_column: startDate
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: "maturityDate must be later than startDate."
+
+  - rule_id: LNA_START_DATE_NOT_IN_FUTURE
+    type: DATE_NOT_IN_FUTURE
+    columns:
+      - startDate
+    severity: ERROR
+    action: QUARANTINE
+    description: "startDate cannot be later than the processing date."
+
+  - rule_id: LNA_START_DATE_WITHIN_GENERATOR_WINDOW
+    type: DATE_AGE_MAX
+    parameters:
+      column: startDate
+      max_years: 5
+      reference: PROCESSING_DATE
+      ignore_nulls: true
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      The source generator creates loan start dates within the previous five
+      years; older values should be investigated.
+
+  - rule_id: LNA_CORE_FINANCIAL_VALUES_PRESENT
+    type: ALL_NOT_NULL
+    columns:
+      - originalAmount
+      - currentBalance
+      - interestRate
+      - repaymentAmount
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A loan arrangement should contain its core amount, balance, pricing, and
+      repayment values. The physical schema currently permits null values.
+
+# -----------------------------------------------------------------------------
+# 7. Notes for the team
+# -----------------------------------------------------------------------------
+notes:
+  - >
+    This contract follows the authoritative physical source schema and includes
+    all thirteen fields defined for loan_accounts.
+  - >
+    The physical loan_accounts dataset does not contain organisationId.
+    Business or personal context must be derived by joining accountId to
+    banking_accounts and reading banking_accounts.organisationId.
+  - >
+    originalAmount, currentBalance, and repaymentAmount must be converted to
+    approved range buckets or removed before AI consumption.
+  - >
+    status is sensitive credit servicing information. DEFAULT status should be
+    restricted to approved banker-facing consumers.
+  - >
+    The amortisation rule is a warning because exact repayment calculations can
+    vary with compounding, repayment timing, and rounding conventions.

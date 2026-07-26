@@ -1,0 +1,685 @@
+# =============================================================================
+# DATA CONTRACT: mortgage_accounts
+# =============================================================================
+# Purpose:
+# - Stores residential mortgage arrangements linked to banking accounts.
+# - Records property value, original loan amount, interest settings, loan term,
+#   repayment amount and frequency, offset account, start date, and LVR.
+#
+# Important relationship:
+# - accountId links the mortgage to banking_accounts.
+# - global_id identifies the customer who owns the linked banking account.
+# - The physical source does not contain organisationId. Business context must
+#   be derived by joining accountId to banking_accounts.organisationId.
+#
+# Quick guide:
+# - required: the source column must exist.
+# - nullable: the physical source value may be null.
+# - ERROR + QUARANTINE: do not send the record to the trusted output.
+# - WARNING + ALLOW_WITH_WARNING: keep the record but report the issue.
+# =============================================================================
+
+contract_version: "1.0.0"
+contract_id: "source.database.mortgage_accounts"
+
+# -----------------------------------------------------------------------------
+# 1. Basic dataset information
+# -----------------------------------------------------------------------------
+dataset:
+  name: mortgage_accounts
+  domain: LENDING
+  description: >
+    Source dataset containing Australian residential mortgage arrangements.
+    Each record is linked to a banking account and includes property value,
+    loan amount, interest configuration, term, repayment information, optional
+    offset account, start date, and calculated loan-to-value ratio.
+  expected_rows_scale_1: 525
+  physical_schema_ref: "dev-tools/datagen/output/master-schema.json#/mortgage_accounts"
+
+# -----------------------------------------------------------------------------
+# 2. Ownership and contract lifecycle
+# -----------------------------------------------------------------------------
+lifecycle:
+  # DRAFT -> IN_REVIEW -> APPROVED -> DEPRECATED / RETIRED
+  status: DRAFT
+  owner: TBD
+  approver: TBD
+  effective_from: null
+
+# -----------------------------------------------------------------------------
+# 3. Source and ingestion information
+# -----------------------------------------------------------------------------
+source:
+  category: DATABASE
+  system_type: POSTGRESQL
+  source_object: "public.mortgage_accounts"
+  authoritative: true
+
+ingestion:
+  mechanism: DEBEZIUM_CDC
+  transport: APACHE_KAFKA
+
+  landing:
+    format: JSONL
+    path_template: "s3://<bucket>/bronze/landing/cdc/mortgage_accounts/"
+    immutable: true
+
+  bronze_target: "bronze.cdc_changes"
+
+  cdc:
+    supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+
+    ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+
+# -----------------------------------------------------------------------------
+# 4. Keys and relationships
+# -----------------------------------------------------------------------------
+keys:
+  primary_key:
+    - mortgageId
+
+  alternate_keys: []
+
+  foreign_keys:
+    - columns:
+        - global_id
+      reference:
+        dataset: customers
+        columns:
+          - global_id
+      nullable: true
+
+    - columns:
+        - accountId
+      reference:
+        dataset: banking_accounts
+        columns:
+          - accountId
+      nullable: true
+
+    - columns:
+        - offsetAccountId
+      reference:
+        dataset: banking_accounts
+        columns:
+          - accountId
+      nullable: true
+
+# -----------------------------------------------------------------------------
+# 5. Field-level contract
+# -----------------------------------------------------------------------------
+schema:
+  fields:
+
+    - name: global_id
+      data_type: string
+      logical_type: person_identifier
+      required: true
+      nullable: true
+      accepted:
+        format: UUID
+      example: "65df84b8-4274-4dbd-9667-6c9967ae6538"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: MTG_GLOBAL_ID_UUID
+          type: FORMAT_IF_PRESENT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "global_id must be a valid UUID when supplied."
+
+        - rule_id: MTG_GLOBAL_ID_CUSTOMER_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: customers
+            reference_column: global_id
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            global_id must exist in customers.global_id when supplied.
+
+    - name: accountId
+      data_type: string
+      logical_type: account_identifier
+      required: true
+      nullable: true
+      accepted:
+        format: UUID
+      example: "a5ef7c5b-04b6-49fa-8a0a-6b6a86be900f"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: MTG_ACCOUNT_ID_UUID
+          type: FORMAT_IF_PRESENT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "accountId must be a valid UUID when supplied."
+
+        - rule_id: MTG_ACCOUNT_ID_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: banking_accounts
+            reference_column: accountId
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            accountId must exist in banking_accounts.accountId when supplied.
+
+    - name: mortgageId
+      data_type: string
+      logical_type: mortgage_identifier
+      required: true
+      nullable: false
+      accepted:
+        format: UUID
+      example: "9df1d3c0-dd5c-43c1-a68a-a0d83535c18f"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: MTG_ID_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "mortgageId must always be present."
+
+        - rule_id: MTG_ID_UUID
+          type: FORMAT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "mortgageId must be a valid UUID."
+
+    - name: propertyValue
+      data_type: string
+      logical_type: decimal_amount
+      required: true
+      nullable: true
+      accepted:
+        currency: AUD
+        min_exclusive: 0
+      example: "680000.00"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_AND_PROPERTY_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: MTG_PROPERTY_VALUE_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            propertyValue must be parseable as a decimal amount when supplied.
+
+        - rule_id: MTG_PROPERTY_VALUE_POSITIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min_exclusive: 0
+          severity: ERROR
+          action: QUARANTINE
+          description: "propertyValue must be greater than zero when supplied."
+
+    - name: loanAmount
+      data_type: string
+      logical_type: decimal_amount
+      required: true
+      nullable: true
+      accepted:
+        currency: AUD
+        min_exclusive: 0
+      example: "544000.00"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: MTG_LOAN_AMOUNT_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            loanAmount must be parseable as a decimal amount when supplied.
+
+        - rule_id: MTG_LOAN_AMOUNT_POSITIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min_exclusive: 0
+          severity: ERROR
+          action: QUARANTINE
+          description: "loanAmount must be greater than zero when supplied."
+
+    - name: interestRate
+      data_type: string
+      logical_type: annual_percentage_rate
+      required: true
+      nullable: true
+      accepted:
+        min: 2.0
+      example: "6.15"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: BANKER_ONLY_OR_RESTRICT
+      quality_rules:
+        - rule_id: MTG_INTEREST_RATE_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            interestRate must be parseable as a decimal percentage when supplied.
+
+        - rule_id: MTG_INTEREST_RATE_MINIMUM
+          type: RANGE_IF_PRESENT
+          parameters:
+            min: 2.0
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            interestRate must be at least 2.0 percent in the current source model.
+
+    - name: interestType
+      data_type: string
+      logical_type: mortgage_interest_type
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - FIXED
+          - VARIABLE
+          - SPLIT
+      example: "VARIABLE"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: MTG_INTEREST_TYPE_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - FIXED
+              - VARIABLE
+              - SPLIT
+          severity: ERROR
+          action: QUARANTINE
+          description: "interestType must be a supported source value."
+
+    - name: loanTerm
+      data_type: int32
+      logical_type: term_years
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - 15
+          - 20
+          - 25
+          - 30
+      example: 30
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: MTG_LOAN_TERM_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - 15
+              - 20
+              - 25
+              - 30
+          severity: ERROR
+          action: QUARANTINE
+          description: "loanTerm must be one of the supported term lengths."
+
+    - name: repaymentAmount
+      data_type: string
+      logical_type: decimal_amount
+      required: true
+      nullable: true
+      accepted:
+        currency: AUD
+        min_exclusive: 0
+      example: "3314.52"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: MTG_REPAYMENT_AMOUNT_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            repaymentAmount must be parseable as a decimal amount when supplied.
+
+        - rule_id: MTG_REPAYMENT_AMOUNT_POSITIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min_exclusive: 0
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            repaymentAmount must be greater than zero when supplied.
+
+    - name: repaymentFrequency
+      data_type: string
+      logical_type: repayment_frequency
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - MONTHLY
+          - FORTNIGHTLY
+          - WEEKLY
+      example: "MONTHLY"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: MTG_REPAYMENT_FREQUENCY_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - MONTHLY
+              - FORTNIGHTLY
+              - WEEKLY
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            repaymentFrequency must be one of the supported source values.
+
+    - name: offsetAccountId
+      data_type: string
+      logical_type: offset_account_identifier
+      required: true
+      nullable: true
+      accepted:
+        format: UUID
+      example: "827e7356-a506-44cf-bfcb-4e11aadf5e9e"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: MTG_OFFSET_ACCOUNT_ID_UUID
+          type: FORMAT_IF_PRESENT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            offsetAccountId must be a valid UUID when supplied.
+
+        - rule_id: MTG_OFFSET_ACCOUNT_ID_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: banking_accounts
+            reference_column: accountId
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            offsetAccountId must exist in banking_accounts.accountId when supplied.
+
+    - name: startDate
+      data_type: string
+      logical_type: date
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_DATE
+      example: "2021-04-19"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: MTG_START_DATE_PARSEABLE
+          type: PARSEABLE_DATE_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "startDate must be parseable as a date when supplied."
+
+    - name: lvrPercent
+      data_type: string
+      logical_type: loan_to_value_percentage
+      required: true
+      nullable: true
+      accepted:
+        min: 60.0
+        max: 95.0
+      example: "80.00"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: CREDIT_AND_PROPERTY_RISK_INFORMATION
+        handling: BANKER_ONLY_OR_RESTRICT
+      quality_rules:
+        - rule_id: MTG_LVR_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            lvrPercent must be parseable as a decimal percentage when supplied.
+
+        - rule_id: MTG_LVR_RANGE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min: 60.0
+            max: 95.0
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            lvrPercent must be between 60.0 and 95.0 in the current source model.
+
+# -----------------------------------------------------------------------------
+# 6. Dataset-level quality rules
+# -----------------------------------------------------------------------------
+dataset_quality_rules:
+
+  - rule_id: MTG_ID_UNIQUE
+    type: UNIQUE
+    columns:
+      - mortgageId
+    severity: ERROR
+    action: QUARANTINE
+    description: "mortgageId must be unique across the dataset."
+
+  - rule_id: MTG_ACCOUNT_LINK_PRESENT
+    type: NOT_NULL
+    columns:
+      - accountId
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A mortgage should identify its banking account. The physical schema
+      currently permits accountId to be null.
+
+  - rule_id: MTG_CUSTOMER_LINK_PRESENT
+    type: NOT_NULL
+    columns:
+      - global_id
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A mortgage should identify its customer. The physical schema currently
+      permits global_id to be null.
+
+  - rule_id: MTG_ACCOUNT_CUSTOMER_CONSISTENT
+    type: REFERENCE_PAIR_CONSISTENT
+    parameters:
+      reference_dataset: banking_accounts
+      source_columns:
+        - accountId
+        - global_id
+      reference_columns:
+        - accountId
+        - global_id
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      accountId and global_id must refer to the same banking account record.
+
+  - rule_id: MTG_ACCOUNT_PRODUCT_CATEGORY
+    type: REFERENCE_CONDITION
+    parameters:
+      reference_dataset: banking_accounts
+      source_key:
+        accountId: accountId
+      expected_condition:
+        column: productCategory
+        equals: RESIDENTIAL_MORTGAGES
+      ignore_missing_reference: false
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      A mortgage record must reference a banking account classified as
+      RESIDENTIAL_MORTGAGES.
+
+  - rule_id: MTG_LOAN_NOT_ABOVE_PROPERTY_VALUE
+    type: NUMERIC_COLUMN_COMPARISON
+    parameters:
+      left_column: loanAmount
+      operator: LESS_THAN_OR_EQUAL
+      right_column: propertyValue
+      parse_as: DECIMAL
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: "loanAmount cannot exceed propertyValue."
+
+  - rule_id: MTG_LVR_FORMULA
+    type: NUMERIC_FORMULA_MATCH
+    parameters:
+      target_column: lvrPercent
+      formula: "(loanAmount / propertyValue) * 100"
+      parse_as: DECIMAL
+      tolerance: 0.01
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      lvrPercent must equal loanAmount divided by propertyValue multiplied by 100.
+
+  - rule_id: MTG_REPAYMENT_FORMULA_CONSISTENT
+    type: AMORTISATION_PAYMENT_MATCH
+    parameters:
+      principal_column: loanAmount
+      annual_interest_rate_column: interestRate
+      term_years_column: loanTerm
+      repayment_frequency_column: repaymentFrequency
+      target_column: repaymentAmount
+      tolerance_ratio: 0.02
+      ignore_nulls: true
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      repaymentAmount should be consistent with the standard amortisation
+      formula after accounting for repayment frequency and rounding.
+
+  - rule_id: MTG_OFFSET_ACCOUNT_DIFFERENT
+    type: COLUMN_COMPARISON
+    parameters:
+      left_column: offsetAccountId
+      operator: NOT_EQUAL
+      right_column: accountId
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      offsetAccountId must not be the same as the mortgage accountId.
+
+  - rule_id: MTG_OFFSET_ACCOUNT_CUSTOMER_CONSISTENT
+    type: REFERENCE_PAIR_CONSISTENT
+    parameters:
+      reference_dataset: banking_accounts
+      source_columns:
+        - offsetAccountId
+        - global_id
+      reference_columns:
+        - accountId
+        - global_id
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      The offset account must belong to the same customer as the mortgage.
+
+  - rule_id: MTG_START_DATE_NOT_IN_FUTURE
+    type: DATE_NOT_IN_FUTURE
+    columns:
+      - startDate
+    severity: ERROR
+    action: QUARANTINE
+    description: "startDate cannot be later than the processing date."
+
+  - rule_id: MTG_START_DATE_WITHIN_GENERATOR_WINDOW
+    type: DATE_AGE_MAX
+    parameters:
+      column: startDate
+      max_years: 10
+      reference: PROCESSING_DATE
+      ignore_nulls: true
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      The source generator creates mortgage start dates within the previous ten
+      years; older values should be investigated.
+
+  - rule_id: MTG_CORE_FINANCIAL_VALUES_PRESENT
+    type: ALL_NOT_NULL
+    columns:
+      - propertyValue
+      - loanAmount
+      - interestRate
+      - repaymentAmount
+      - lvrPercent
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A mortgage arrangement should contain its core valuation, pricing, and
+      repayment values. The physical schema currently permits null values.
+
+# -----------------------------------------------------------------------------
+# 7. Notes for the team
+# -----------------------------------------------------------------------------
+notes:
+  - >
+    This contract follows the authoritative physical source schema and includes
+    all thirteen fields defined for mortgage_accounts.
+  - >
+    The source mortgage_accounts dataset does not contain organisationId.
+    Business or personal context must be derived by joining accountId to
+    banking_accounts and reading banking_accounts.organisationId.
+  - >
+    propertyValue, loanAmount, and repaymentAmount must be converted to approved
+    range buckets or removed before AI consumption.
+  - >
+    lvrPercent is sensitive credit and property risk information and should be
+    available only to approved banker-facing consumers.
+  - >
+    The amortisation rule is a warning because exact repayment calculations can
+    vary with compounding, repayment timing, and rounding conventions.

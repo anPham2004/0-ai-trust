@@ -1,0 +1,810 @@
+# =============================================================================
+# DATA CONTRACT: loan_applications
+# =============================================================================
+# Purpose:
+# - Stores loan applications with full lifecycle summary information.
+# - Records the customer, loan goal, application type, requested amount,
+#   credit score, final outcome, offer summary, timestamps, and optional
+#   organisation context.
+#
+# Important relationship:
+# - One customer may submit multiple loan applications.
+# - applicationId is reused by application events, missing documents, stage
+#   history, status history, and service cases.
+# - organisationId is populated for business loan applications.
+#
+# Quick guide:
+# - required: the source column must exist.
+# - nullable: the physical source value may be null.
+# - ERROR + QUARANTINE: do not send the record to the trusted output.
+# - WARNING + ALLOW_WITH_WARNING: keep the record but report the issue.
+# =============================================================================
+
+contract_version: "1.0.0"
+contract_id: "source.database.loan_applications"
+
+# -----------------------------------------------------------------------------
+# 1. Basic dataset information
+# -----------------------------------------------------------------------------
+dataset:
+  name: loan_applications
+  domain: LENDING_ORIGINATION
+  description: >
+    Source dataset containing loan applications with customer and optional
+    organisation context, requested lending details, credit score, lifecycle
+    timestamps, final outcome, and offer summary information.
+  expected_rows_scale_1: 500
+  physical_schema_ref: "dev-tools/datagen/output/master-schema.json#/loan_applications"
+
+# -----------------------------------------------------------------------------
+# 2. Ownership and contract lifecycle
+# -----------------------------------------------------------------------------
+lifecycle:
+  # DRAFT -> IN_REVIEW -> APPROVED -> DEPRECATED / RETIRED
+  status: DRAFT
+  owner: TBD
+  approver: TBD
+  effective_from: null
+
+# -----------------------------------------------------------------------------
+# 3. Source and ingestion information
+# -----------------------------------------------------------------------------
+source:
+  category: DATABASE
+  system_type: POSTGRESQL
+  source_object: "public.loan_applications"
+  authoritative: true
+
+ingestion:
+  mechanism: DEBEZIUM_CDC
+  transport: APACHE_KAFKA
+
+  landing:
+    format: JSONL
+    path_template: "s3://<bucket>/bronze/landing/cdc/loan_applications/"
+    immutable: true
+
+  bronze_target: "bronze.cdc_changes"
+
+  cdc:
+    supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+
+    ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+
+# -----------------------------------------------------------------------------
+# 4. Keys and relationships
+# -----------------------------------------------------------------------------
+keys:
+  primary_key:
+    - applicationId
+
+  alternate_keys: []
+
+  foreign_keys:
+    - columns:
+        - global_id
+      reference:
+        dataset: customers
+        columns:
+          - global_id
+      nullable: true
+
+    - columns:
+        - customerId
+      reference:
+        dataset: customers
+        columns:
+          - customerId
+      nullable: true
+
+    - columns:
+        - organisationId
+      reference:
+        dataset: organisations
+        columns:
+          - organisationId
+      nullable: true
+
+# -----------------------------------------------------------------------------
+# 5. Field-level contract
+# -----------------------------------------------------------------------------
+schema:
+  fields:
+
+    - name: global_id
+      data_type: string
+      logical_type: person_identifier
+      required: true
+      nullable: true
+      accepted:
+        format: UUID
+      example: "65df84b8-4274-4dbd-9667-6c9967ae6538"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: LAP_GLOBAL_ID_UUID
+          type: FORMAT_IF_PRESENT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "global_id must be a valid UUID when supplied."
+
+        - rule_id: LAP_GLOBAL_ID_CUSTOMER_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: customers
+            reference_column: global_id
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            global_id must exist in customers.global_id when supplied.
+
+    - name: applicationId
+      data_type: string
+      logical_type: loan_application_identifier
+      required: true
+      nullable: false
+      accepted:
+        regex: '^Application_\d{9}$'
+      example: "Application_000000042"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: LAP_APPLICATION_ID_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "applicationId must always be present."
+
+        - rule_id: LAP_APPLICATION_ID_PATTERN
+          type: REGEX
+          parameters:
+            regex: '^Application_\d{9}$'
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            applicationId must follow the Application_000000000 pattern.
+
+    - name: customerId
+      data_type: string
+      logical_type: customer_identifier
+      required: true
+      nullable: true
+      accepted:
+        regex: '^CUST-\d{5}$'
+      example: "CUST-00042"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: LAP_CUSTOMER_ID_PATTERN
+          type: REGEX_IF_PRESENT
+          parameters:
+            regex: '^CUST-\d{5}$'
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            customerId must follow the CUST-00000 pattern when supplied.
+
+        - rule_id: LAP_CUSTOMER_ID_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: customers
+            reference_column: customerId
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            customerId must exist in customers.customerId when supplied.
+
+    - name: loanGoal
+      data_type: string
+      logical_type: loan_purpose
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - Home improvement
+          - Existing loan takeover
+          - Car
+          - Business goal
+          - Extra spending limit
+          - Remaining debt home
+          - Tax payments
+          - Boat
+          - Motorcycle
+          - Caravan/Camper
+          - Not specified
+          - Other
+          - Unknown
+      example: "Home improvement"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_PURPOSE_INFORMATION
+        handling: RESTRICT_OR_GENERALISE
+      quality_rules:
+        - rule_id: LAP_LOAN_GOAL_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - Home improvement
+              - Existing loan takeover
+              - Car
+              - Business goal
+              - Extra spending limit
+              - Remaining debt home
+              - Tax payments
+              - Boat
+              - Motorcycle
+              - Caravan/Camper
+              - Not specified
+              - Other
+              - Unknown
+          severity: ERROR
+          action: QUARANTINE
+          description: "loanGoal must be one of the supported source values."
+
+    - name: applicationType
+      data_type: string
+      logical_type: application_type
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - New credit
+          - Limit raise
+      example: "New credit"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: LAP_APPLICATION_TYPE_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - New credit
+              - Limit raise
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            applicationType must be New credit or Limit raise.
+
+    - name: requestedAmount
+      data_type: string
+      logical_type: decimal_amount
+      required: true
+      nullable: true
+      accepted:
+        currency: AUD
+        min_exclusive: 0
+      example: "33000.00"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: LAP_REQUESTED_AMOUNT_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            requestedAmount must be parseable as a decimal amount when supplied.
+
+        - rule_id: LAP_REQUESTED_AMOUNT_POSITIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min_exclusive: 0
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            requestedAmount must be greater than zero when supplied.
+
+    - name: creditScore
+      data_type: int32
+      logical_type: credit_score
+      required: true
+      nullable: false
+      accepted:
+        min: 300
+        max: 1000
+      example: 750
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: CREDIT_RISK_INFORMATION
+        handling: BANKER_ONLY_OR_REDACT
+      quality_rules:
+        - rule_id: LAP_CREDIT_SCORE_RANGE
+          type: RANGE
+          parameters:
+            min: 300
+            max: 1000
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            creditScore must be between 300 and 1000.
+
+    - name: finalOutcome
+      data_type: string
+      logical_type: application_final_outcome
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - Accepted
+          - Denied
+          - Cancelled
+          - Incomplete
+          - Pending
+      example: "Accepted"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: CREDIT_DECISION_INFORMATION
+        handling: BANKER_ONLY_OR_RESTRICT
+      quality_rules:
+        - rule_id: LAP_FINAL_OUTCOME_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - Accepted
+              - Denied
+              - Cancelled
+              - Incomplete
+              - Pending
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            finalOutcome must be one of the supported source lifecycle outcomes.
+
+    - name: submittedAt
+      data_type: string
+      logical_type: timestamp
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_TIMESTAMP
+      example: "2026-02-14T10:20:00Z"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: APPLICATION_ACTIVITY_METADATA
+        handling: RESTRICT_OR_GENERALISE
+      quality_rules:
+        - rule_id: LAP_SUBMITTED_AT_PARSEABLE
+          type: PARSEABLE_TIMESTAMP_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "submittedAt must be parseable as a timestamp."
+
+    - name: lastUpdatedAt
+      data_type: string
+      logical_type: timestamp
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_TIMESTAMP
+      example: "2026-03-20T15:45:00Z"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: APPLICATION_ACTIVITY_METADATA
+        handling: RESTRICT_OR_GENERALISE
+      quality_rules:
+        - rule_id: LAP_LAST_UPDATED_AT_PARSEABLE
+          type: PARSEABLE_TIMESTAMP_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "lastUpdatedAt must be parseable as a timestamp."
+
+    - name: numOffers
+      data_type: string
+      logical_type: integer_count
+      required: true
+      nullable: false
+      accepted:
+        min: 0
+        max: 5
+      example: "2"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: LAP_NUM_OFFERS_INTEGER
+          type: PARSEABLE_INTEGER
+          severity: ERROR
+          action: QUARANTINE
+          description: "numOffers must be parseable as an integer."
+
+        - rule_id: LAP_NUM_OFFERS_RANGE
+          type: RANGE
+          parameters:
+            min: 0
+            max: 5
+            parse_as: INTEGER
+          severity: ERROR
+          action: QUARANTINE
+          description: "numOffers must be between zero and five."
+
+    - name: acceptedOfferAmount
+      data_type: string
+      logical_type: decimal_amount
+      required: true
+      nullable: true
+      accepted:
+        currency: AUD
+        min_exclusive: 0
+      example: "30000.00"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: LAP_ACCEPTED_OFFER_AMOUNT_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            acceptedOfferAmount must be parseable as a decimal amount when supplied.
+
+        - rule_id: LAP_ACCEPTED_OFFER_AMOUNT_POSITIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min_exclusive: 0
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            acceptedOfferAmount must be greater than zero when supplied.
+
+    - name: monthlyCost
+      data_type: string
+      logical_type: decimal_amount
+      required: true
+      nullable: true
+      accepted:
+        currency: AUD
+        min_exclusive: 0
+      example: "415.70"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: LAP_MONTHLY_COST_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            monthlyCost must be parseable as a decimal amount when supplied.
+
+        - rule_id: LAP_MONTHLY_COST_POSITIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min_exclusive: 0
+          severity: ERROR
+          action: QUARANTINE
+          description: "monthlyCost must be greater than zero when supplied."
+
+    - name: numberOfTerms
+      data_type: string
+      logical_type: term_months
+      required: true
+      nullable: true
+      accepted:
+        values:
+          - "12"
+          - "24"
+          - "36"
+          - "48"
+          - "60"
+          - "72"
+      example: "60"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: LAP_NUMBER_OF_TERMS_ENUM
+          type: ACCEPTED_VALUES_IF_PRESENT
+          parameters:
+            values:
+              - "12"
+              - "24"
+              - "36"
+              - "48"
+              - "60"
+              - "72"
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            numberOfTerms must be one of the supported month values when supplied.
+
+    - name: totalEvents
+      data_type: string
+      logical_type: integer_count
+      required: true
+      nullable: true
+      accepted:
+        min: 3
+        max: 15
+      example: "8"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: LAP_TOTAL_EVENTS_INTEGER
+          type: PARSEABLE_INTEGER_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            totalEvents must be parseable as an integer when supplied.
+
+        - rule_id: LAP_TOTAL_EVENTS_RANGE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min: 3
+            max: 15
+            parse_as: INTEGER
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            totalEvents must be between three and fifteen when supplied.
+
+    - name: organisationId
+      data_type: string
+      logical_type: organisation_identifier
+      required: true
+      nullable: true
+      accepted:
+        regex: '^ORG-\d{5}$'
+      example: "ORG-00042"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: LAP_ORGANISATION_ID_PATTERN
+          type: REGEX_IF_PRESENT
+          parameters:
+            regex: '^ORG-\d{5}$'
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            organisationId must follow the ORG-00000 pattern when supplied.
+
+        - rule_id: LAP_ORGANISATION_ID_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: organisations
+            reference_column: organisationId
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            organisationId must exist in organisations.organisationId when supplied.
+
+# -----------------------------------------------------------------------------
+# 6. Dataset-level quality rules
+# -----------------------------------------------------------------------------
+dataset_quality_rules:
+
+  - rule_id: LAP_APPLICATION_ID_UNIQUE
+    type: UNIQUE
+    columns:
+      - applicationId
+    severity: ERROR
+    action: QUARANTINE
+    description: "applicationId must be unique across the dataset."
+
+  - rule_id: LAP_CUSTOMER_LINK_PRESENT
+    type: ALL_NOT_NULL
+    columns:
+      - global_id
+      - customerId
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A loan application should identify its customer using both global_id and
+      customerId. The physical schema currently permits null values.
+
+  - rule_id: LAP_CUSTOMER_IDENTIFIERS_CONSISTENT
+    type: REFERENCE_PAIR_CONSISTENT
+    parameters:
+      reference_dataset: customers
+      source_columns:
+        - global_id
+        - customerId
+      reference_columns:
+        - global_id
+        - customerId
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      global_id and customerId must refer to the same customer record.
+
+  - rule_id: LAP_LAST_UPDATE_NOT_BEFORE_SUBMISSION
+    type: TIMESTAMP_COLUMN_COMPARISON
+    parameters:
+      left_column: lastUpdatedAt
+      operator: GREATER_THAN_OR_EQUAL
+      right_column: submittedAt
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      lastUpdatedAt cannot be earlier than submittedAt.
+
+  - rule_id: LAP_LAST_UPDATE_WITHIN_GENERATOR_WINDOW
+    type: TIMESTAMP_OFFSET_RANGE
+    parameters:
+      start_column: submittedAt
+      end_column: lastUpdatedAt
+      min_seconds: 0
+      max_seconds: 15552000
+      ignore_nulls: true
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      The source generator creates lastUpdatedAt no more than 180 days after
+      submittedAt; values outside that window should be investigated.
+
+  - rule_id: LAP_SUBMISSION_NOT_IN_FUTURE
+    type: TIMESTAMP_NOT_IN_FUTURE
+    columns:
+      - submittedAt
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      submittedAt cannot be later than the pipeline processing timestamp.
+
+  - rule_id: LAP_ACCEPTED_OFFER_PRESENT
+    type: CONDITIONAL_NOT_NULL
+    parameters:
+      when:
+        column: finalOutcome
+        equals: Accepted
+      target_column: acceptedOfferAmount
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      An Accepted application must include acceptedOfferAmount.
+
+  - rule_id: LAP_ACCEPTED_OFFER_ABSENT_FOR_NON_ACCEPTED
+    type: CONDITIONAL_NULL_EXCEPT_VALUES
+    parameters:
+      source_column: finalOutcome
+      allowed_source_values:
+        - Accepted
+      target_column: acceptedOfferAmount
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      acceptedOfferAmount should normally be null when finalOutcome is not Accepted.
+
+  - rule_id: LAP_ACCEPTED_APPLICATION_HAS_OFFER
+    type: CONDITIONAL_NUMERIC_MIN
+    parameters:
+      when:
+        column: finalOutcome
+        equals: Accepted
+      target_column: numOffers
+      min: 1
+      parse_as: INTEGER
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      An Accepted application must have at least one offer.
+
+  - rule_id: LAP_DENIED_OR_CANCELLED_TERMS_NULL
+    type: CONDITIONAL_NULL_FOR_VALUES
+    parameters:
+      source_column: finalOutcome
+      source_values:
+        - Denied
+        - Cancelled
+      target_column: numberOfTerms
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      numberOfTerms must be null for Denied or Cancelled applications.
+
+  - rule_id: LAP_ACCEPTED_TERMS_PRESENT
+    type: CONDITIONAL_NOT_NULL
+    parameters:
+      when:
+        column: finalOutcome
+        equals: Accepted
+      target_column: numberOfTerms
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      An Accepted application should include numberOfTerms.
+
+  - rule_id: LAP_ORGANISATION_CUSTOMER_CONTEXT
+    type: REFERENCE_RELATIONSHIP_EXISTS_IF_PRESENT
+    parameters:
+      when_column: organisationId
+      relationship_dataset: organisation_party_relationships
+      source_mapping:
+        global_id: global_id
+        organisationId: organisationId
+      required_relationship_status:
+        column: isActive
+        equals: true
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      When organisationId is populated, the customer should normally have an
+      active relationship with that organisation.
+
+  - rule_id: LAP_BUSINESS_GOAL_ORGANISATION_EXPECTED
+    type: CONDITIONAL_NOT_NULL
+    parameters:
+      when:
+        column: loanGoal
+        equals: Business goal
+      target_column: organisationId
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A Business goal application should normally include organisationId.
+
+  - rule_id: LAP_TOTAL_EVENTS_MATCH_CHILD_COUNT
+    type: CHILD_ROW_COUNT_MATCH
+    parameters:
+      child_dataset: loan_application_events
+      parent_key: applicationId
+      child_foreign_key: applicationId
+      target_count_column: totalEvents
+      parse_as: INTEGER
+      comparison_scope: COMPLETE_SNAPSHOT
+      ignore_nulls: true
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      In a complete snapshot, totalEvents should match the number of linked
+      loan_application_events records.
+
+# -----------------------------------------------------------------------------
+# 7. Notes for the team
+# -----------------------------------------------------------------------------
+notes:
+  - >
+    This contract follows the authoritative physical source schema and includes
+    all sixteen fields defined for loan_applications.
+  - >
+    The source finalOutcome values are Accepted, Denied, Cancelled, Incomplete,
+    and Pending. Any downstream normalisation to APPROVED, REJECTED, or PENDING
+    belongs in the Silver transformation rather than in this source contract.
+  - >
+    requestedAmount, acceptedOfferAmount, and monthlyCost must be converted to
+    approved range buckets or removed before AI consumption.
+  - >
+    creditScore and finalOutcome are sensitive credit decision information and
+    should only be exposed to approved banker-facing consumers.
+  - >
+    The accepted-offer consistency rules follow the source distribution, where
+    acceptedOfferAmount is populated for approximately the same proportion as
+    Accepted outcomes.
+  - >
+    The child-row-count rule should run only after a complete application-event
+    snapshot is available. It is not suitable for partially landed CDC batches.

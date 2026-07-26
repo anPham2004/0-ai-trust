@@ -1,0 +1,694 @@
+# =============================================================================
+# DATA CONTRACT: missing_documents
+# =============================================================================
+# Purpose:
+# - Stores the document checklist for each loan application.
+# - Tracks each requested document from request through receipt, verification,
+#   invalidation, or expiry.
+# - Supports application-status and customer follow-up use cases.
+#
+# Important relationship:
+# - One loan application may have multiple document checklist records.
+# - applicationId links each document to loan_applications.
+# - global_id and customerId identify the customer who owns the application.
+#
+# Quick guide:
+# - required: the source column must exist.
+# - nullable: the physical source value may be null.
+# - ERROR + QUARANTINE: do not send the record to the trusted output.
+# - WARNING + ALLOW_WITH_WARNING: keep the record but report the issue.
+# =============================================================================
+
+contract_version: "1.0.0"
+contract_id: "source.database.missing_documents"
+
+# -----------------------------------------------------------------------------
+# 1. Basic dataset information
+# -----------------------------------------------------------------------------
+dataset:
+  name: missing_documents
+  domain: LENDING_ORIGINATION
+  description: >
+    Source dataset containing the document checklist for loan applications.
+    Each record identifies one requested document and tracks its lifecycle from
+    request through receipt, verification, invalidation, or expiry.
+  expected_rows_scale_1: 1500
+  physical_schema_ref: "dev-tools/datagen/output/master-schema.json#/missing_documents"
+
+# -----------------------------------------------------------------------------
+# 2. Ownership and contract lifecycle
+# -----------------------------------------------------------------------------
+lifecycle:
+  # DRAFT -> IN_REVIEW -> APPROVED -> DEPRECATED / RETIRED
+  status: DRAFT
+  owner: TBD
+  approver: TBD
+  effective_from: null
+
+# -----------------------------------------------------------------------------
+# 3. Source and ingestion information
+# -----------------------------------------------------------------------------
+source:
+  category: DATABASE
+  system_type: POSTGRESQL
+  source_object: "public.missing_documents"
+  authoritative: true
+
+ingestion:
+  mechanism: DEBEZIUM_CDC
+  transport: APACHE_KAFKA
+
+  landing:
+    format: JSONL
+    path_template: "s3://<bucket>/bronze/landing/cdc/missing_documents/"
+    immutable: true
+
+  bronze_target: "bronze.cdc_changes"
+
+  cdc:
+    supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+
+    ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+
+# -----------------------------------------------------------------------------
+# 4. Keys and relationships
+# -----------------------------------------------------------------------------
+keys:
+  primary_key:
+    - documentId
+
+  alternate_keys: []
+
+  foreign_keys:
+    - columns:
+        - global_id
+      reference:
+        dataset: customers
+        columns:
+          - global_id
+      nullable: true
+
+    - columns:
+        - customerId
+      reference:
+        dataset: customers
+        columns:
+          - customerId
+      nullable: true
+
+    - columns:
+        - applicationId
+      reference:
+        dataset: loan_applications
+        columns:
+          - applicationId
+      nullable: true
+
+# -----------------------------------------------------------------------------
+# 5. Field-level contract
+# -----------------------------------------------------------------------------
+schema:
+  fields:
+
+    - name: global_id
+      data_type: string
+      logical_type: person_identifier
+      required: true
+      nullable: true
+      accepted:
+        format: UUID
+      example: "65df84b8-4274-4dbd-9667-6c9967ae6538"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: MDOC_GLOBAL_ID_UUID
+          type: FORMAT_IF_PRESENT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "global_id must be a valid UUID when supplied."
+
+        - rule_id: MDOC_GLOBAL_ID_CUSTOMER_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: customers
+            reference_column: global_id
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            global_id must exist in customers.global_id when supplied.
+
+    - name: documentId
+      data_type: string
+      logical_type: document_checklist_identifier
+      required: true
+      nullable: false
+      accepted:
+        format: UUID
+      example: "4fa4b0bf-6824-4f62-af91-f9cefa1bd938"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: MDOC_DOCUMENT_ID_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "documentId must always be present."
+
+        - rule_id: MDOC_DOCUMENT_ID_UUID
+          type: FORMAT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "documentId must be a valid UUID."
+
+    - name: applicationId
+      data_type: string
+      logical_type: loan_application_identifier
+      required: true
+      nullable: true
+      accepted:
+        regex: '^Application_\d{9}$'
+      example: "Application_000000042"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: MDOC_APPLICATION_ID_PATTERN
+          type: REGEX_IF_PRESENT
+          parameters:
+            regex: '^Application_\d{9}$'
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            applicationId must follow the Application_000000000 pattern when supplied.
+
+        - rule_id: MDOC_APPLICATION_ID_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: loan_applications
+            reference_column: applicationId
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            applicationId must exist in loan_applications.applicationId when supplied.
+
+    - name: customerId
+      data_type: string
+      logical_type: customer_identifier
+      required: true
+      nullable: true
+      accepted:
+        regex: '^CUST-\d{5}$'
+      example: "CUST-00042"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: MDOC_CUSTOMER_ID_PATTERN
+          type: REGEX_IF_PRESENT
+          parameters:
+            regex: '^CUST-\d{5}$'
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            customerId must follow the CUST-00000 pattern when supplied.
+
+        - rule_id: MDOC_CUSTOMER_ID_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: customers
+            reference_column: customerId
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            customerId must exist in customers.customerId when supplied.
+
+    - name: documentType
+      data_type: string
+      logical_type: required_document_type
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - payslip
+          - ID_proof
+          - address_proof
+          - bank_statement
+          - tax_return
+          - other
+      example: "bank_statement"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: APPLICATION_DOCUMENT_REQUIREMENT
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: MDOC_DOCUMENT_TYPE_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - payslip
+              - ID_proof
+              - address_proof
+              - bank_statement
+              - tax_return
+              - other
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            documentType must be one of the supported source document types.
+
+    - name: status
+      data_type: string
+      logical_type: document_lifecycle_status
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - verified
+          - received
+          - required
+          - invalid
+          - expired
+      example: "required"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: APPLICATION_DOCUMENT_STATUS
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: MDOC_STATUS_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - verified
+              - received
+              - required
+              - invalid
+              - expired
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            status must be one of the supported source lifecycle values.
+
+    - name: requestedAt
+      data_type: string
+      logical_type: timestamp
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_TIMESTAMP
+      example: "2026-02-16T09:15:00Z"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: APPLICATION_ACTIVITY_METADATA
+        handling: RESTRICT_OR_GENERALISE
+      quality_rules:
+        - rule_id: MDOC_REQUESTED_AT_PARSEABLE
+          type: PARSEABLE_TIMESTAMP_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "requestedAt must be parseable as a timestamp."
+
+    - name: receivedAt
+      data_type: string
+      logical_type: timestamp
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_TIMESTAMP
+      example: "2026-02-22T14:30:00Z"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: APPLICATION_ACTIVITY_METADATA
+        handling: RESTRICT_OR_GENERALISE
+      quality_rules:
+        - rule_id: MDOC_RECEIVED_AT_PARSEABLE
+          type: PARSEABLE_TIMESTAMP_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "receivedAt must be parseable as a timestamp."
+
+    - name: expiryDate
+      data_type: string
+      logical_type: date
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_DATE
+      example: "2027-02-22"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: APPLICATION_DOCUMENT_METADATA
+        handling: RESTRICT_OR_GENERALISE
+      quality_rules:
+        - rule_id: MDOC_EXPIRY_DATE_PARSEABLE
+          type: PARSEABLE_DATE_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "expiryDate must be parseable as a date."
+
+    - name: remindersSent
+      data_type: int32
+      logical_type: reminder_count
+      required: true
+      nullable: false
+      accepted:
+        min: 0
+        max: 10
+      example: 2
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: MDOC_REMINDERS_RANGE
+          type: RANGE
+          parameters:
+            min: 0
+            max: 10
+          severity: ERROR
+          action: QUARANTINE
+          description: "remindersSent must be between zero and ten."
+
+    - name: lastReminderAt
+      data_type: string
+      logical_type: timestamp
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_TIMESTAMP
+      example: "2026-03-01T09:15:00Z"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: CUSTOMER_CONTACT_METADATA
+        handling: RESTRICT_OR_GENERALISE
+      quality_rules:
+        - rule_id: MDOC_LAST_REMINDER_AT_PARSEABLE
+          type: PARSEABLE_TIMESTAMP_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "lastReminderAt must be parseable as a timestamp."
+
+    - name: rejectionReason
+      data_type: string
+      logical_type: document_rejection_reason
+      required: true
+      nullable: true
+      accepted:
+        values:
+          - blurry_scan
+          - document_expired
+          - name_mismatch
+          - wrong_document_type
+          - poor_quality
+      example: "name_mismatch"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: DOCUMENT_VERIFICATION_INFORMATION
+        handling: BANKER_ONLY_OR_RESTRICT
+      quality_rules:
+        - rule_id: MDOC_REJECTION_REASON_ENUM_IF_PRESENT
+          type: ACCEPTED_VALUES_IF_PRESENT
+          parameters:
+            values:
+              - blurry_scan
+              - document_expired
+              - name_mismatch
+              - wrong_document_type
+              - poor_quality
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            rejectionReason must be one of the supported source values when supplied.
+
+# -----------------------------------------------------------------------------
+# 6. Dataset-level quality rules
+# -----------------------------------------------------------------------------
+dataset_quality_rules:
+
+  - rule_id: MDOC_DOCUMENT_ID_UNIQUE
+    type: UNIQUE
+    columns:
+      - documentId
+    severity: ERROR
+    action: QUARANTINE
+    description: "documentId must be unique across the dataset."
+
+  - rule_id: MDOC_APPLICATION_LINK_PRESENT
+    type: NOT_NULL
+    columns:
+      - applicationId
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A document checklist record should identify its loan application. The
+      physical schema currently permits applicationId to be null.
+
+  - rule_id: MDOC_CUSTOMER_LINK_PRESENT
+    type: ALL_NOT_NULL
+    columns:
+      - global_id
+      - customerId
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A document checklist record should identify its customer using both
+      global_id and customerId. The physical schema currently permits nulls.
+
+  - rule_id: MDOC_APPLICATION_CUSTOMER_CONSISTENT
+    type: REFERENCE_TRIPLE_CONSISTENT
+    parameters:
+      reference_dataset: loan_applications
+      source_columns:
+        - applicationId
+        - global_id
+        - customerId
+      reference_columns:
+        - applicationId
+        - global_id
+        - customerId
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      applicationId, global_id, and customerId must refer to the same
+      loan application record.
+
+  - rule_id: MDOC_RECEIVED_NOT_BEFORE_REQUESTED
+    type: TIMESTAMP_COLUMN_COMPARISON
+    parameters:
+      left_column: receivedAt
+      operator: GREATER_THAN_OR_EQUAL
+      right_column: requestedAt
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: "receivedAt cannot be earlier than requestedAt."
+
+  - rule_id: MDOC_EXPIRY_AFTER_RECEIPT
+    type: DATE_AFTER_TIMESTAMP_DATE
+    parameters:
+      date_column: expiryDate
+      timestamp_column: receivedAt
+      operator: GREATER_THAN
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      expiryDate must be later than the calendar date of receivedAt.
+
+  - rule_id: MDOC_REQUIRED_FIELDS_NULL
+    type: CONDITIONAL_ALL_NULL
+    parameters:
+      when:
+        column: status
+        equals: required
+      target_columns:
+        - receivedAt
+        - expiryDate
+        - rejectionReason
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      A required document has not yet been received, so receivedAt,
+      expiryDate, and rejectionReason must be null.
+
+  - rule_id: MDOC_RECEIVED_TIMESTAMP_PRESENT
+    type: CONDITIONAL_NOT_NULL_FOR_VALUES
+    parameters:
+      source_column: status
+      source_values:
+        - verified
+        - received
+        - invalid
+        - expired
+      target_column: receivedAt
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      Documents that are verified, received, invalid, or expired must include
+      receivedAt.
+
+  - rule_id: MDOC_EXPIRY_DATE_PRESENT_AFTER_RECEIPT
+    type: CONDITIONAL_NOT_NULL_FOR_VALUES
+    parameters:
+      source_column: status
+      source_values:
+        - verified
+        - received
+        - invalid
+        - expired
+      target_column: expiryDate
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Documents that have been received should normally include expiryDate.
+
+  - rule_id: MDOC_INVALID_REASON_PRESENT
+    type: CONDITIONAL_NOT_NULL
+    parameters:
+      when:
+        column: status
+        equals: invalid
+      target_column: rejectionReason
+    severity: ERROR
+    action: QUARANTINE
+    description: "An invalid document must include rejectionReason."
+
+  - rule_id: MDOC_REJECTION_REASON_ONLY_FOR_INVALID
+    type: CONDITIONAL_NULL_EXCEPT_VALUES
+    parameters:
+      source_column: status
+      allowed_source_values:
+        - invalid
+      target_column: rejectionReason
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      rejectionReason must be null unless status is invalid.
+
+  - rule_id: MDOC_VERIFIED_HAS_NO_REMINDERS
+    type: CONDITIONAL_VALUE
+    parameters:
+      when:
+        column: status
+        equals: verified
+      target_column: remindersSent
+      expected_value: 0
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      remindersSent must be zero when status is verified in the current source model.
+
+  - rule_id: MDOC_LAST_REMINDER_REQUIRED_WHEN_SENT
+    type: CONDITIONAL_NOT_NULL_BY_NUMERIC_THRESHOLD
+    parameters:
+      source_column: remindersSent
+      operator: GREATER_THAN
+      threshold: 0
+      target_column: lastReminderAt
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      lastReminderAt must be present when one or more reminders were sent.
+
+  - rule_id: MDOC_LAST_REMINDER_NULL_WHEN_NONE
+    type: CONDITIONAL_NULL_BY_NUMERIC_VALUE
+    parameters:
+      source_column: remindersSent
+      equals: 0
+      target_column: lastReminderAt
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      lastReminderAt must be null when remindersSent is zero.
+
+  - rule_id: MDOC_LAST_REMINDER_NOT_BEFORE_REQUEST
+    type: TIMESTAMP_COLUMN_COMPARISON
+    parameters:
+      left_column: lastReminderAt
+      operator: GREATER_THAN_OR_EQUAL
+      right_column: requestedAt
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      lastReminderAt cannot be earlier than requestedAt.
+
+  - rule_id: MDOC_REMINDER_CADENCE_APPROXIMATE
+    type: TIMESTAMP_APPROXIMATE_OFFSET
+    parameters:
+      start_column: requestedAt
+      end_column: lastReminderAt
+      multiplier_column: remindersSent
+      expected_days_per_unit: 7
+      tolerance_days: 4
+      ignore_nulls: true
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      lastReminderAt should be approximately requestedAt plus seven days for
+      each reminder, allowing variation in the generated schedule.
+
+  - rule_id: MDOC_EXPIRED_STATUS_MATCHES_DATE
+    type: STATUS_DATE_CONSISTENCY
+    parameters:
+      status_column: status
+      expired_status: expired
+      expiry_date_column: expiryDate
+      reference_date: PROCESSING_DATE
+      require_past_date_for_expired: true
+      flag_past_date_for_non_expired: true
+      ignore_nulls: true
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      An expired record should have an expiryDate before the processing date,
+      and a non-expired record with a past expiryDate should be investigated.
+
+# -----------------------------------------------------------------------------
+# 7. Notes for the team
+# -----------------------------------------------------------------------------
+notes:
+  - >
+    This contract follows the authoritative physical source schema and includes
+    all twelve fields defined for missing_documents.
+  - >
+    The source status values are verified, received, required, invalid, and
+    expired. Any downstream normalisation to PENDING, RECEIVED, or REJECTED
+    belongs in the Silver transformation rather than in this source contract.
+  - >
+    rejectionReason is highly sensitive document-verification information and
+    should only be available to approved banker-facing consumers.
+  - >
+    The source stores document checklist metadata rather than the underlying
+    document files. This contract must not be interpreted as authorising access
+    to document contents.
+  - >
+    The reminder cadence rule is a warning because the source description uses
+    an approximate seven-day interval rather than an exact timestamp formula.
+  - >
+    These records support application-status questions such as identifying
+    outstanding, received, invalid, or expired application documents.
