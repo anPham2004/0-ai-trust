@@ -1,0 +1,1083 @@
+# =============================================================================
+# DATA CONTRACT: accepted_loans
+# =============================================================================
+# Purpose:
+# - Stores historical accepted-loan extracts modelled after the Lending Club
+#   public dataset structure.
+# - Covers borrower profile, loan terms, credit history, repayment performance,
+#   hardship programs, and debt-settlement information.
+#
+# Important FILE-source behaviour:
+# - The source is delivered as a CSV file through the S3 file drop-zone.
+# - Bronze copies the file byte-for-byte and records file metadata.
+# - Parsing, schema validation, data-quality checks, and masking occur after the
+#   immutable file arrival has been registered.
+#
+# Important schema limitation:
+# - The authoritative physical schema contains 152 columns.
+# - The available schema document intentionally lists only principal fields.
+# - This DRAFT contract therefore defines strict rules for documented principal
+#   fields and requires the generated master-schema.json for full enforcement.
+#
+# Quick guide:
+# - required: the physical CSV column must exist.
+# - nullable: the parsed field value may be null.
+# - ERROR + QUARANTINE: exclude the record from trusted outputs.
+# - WARNING + ALLOW_WITH_WARNING: retain the record and report the issue.
+# =============================================================================
+
+contract_version: "1.0.0"
+contract_id: "source.file.accepted_loans"
+
+# -----------------------------------------------------------------------------
+# 1. Basic dataset information
+# -----------------------------------------------------------------------------
+dataset:
+  name: accepted_loans
+  domain: LENDING_HISTORY
+  description: >
+    Historical accepted-loan extract modelled after Lending Club accepted-loan
+    records. The physical dataset contains 152 columns covering borrower
+    profile, credit history, loan terms, repayment performance, hardship
+    programs, and debt settlement.
+  expected_rows_scale_1: 500
+  expected_physical_column_count: 152
+  physical_schema_ref: "dev-tools/datagen/output/master-schema.json#/accepted_loans"
+
+# -----------------------------------------------------------------------------
+# 2. Ownership and contract lifecycle
+# -----------------------------------------------------------------------------
+lifecycle:
+  # DRAFT -> IN_REVIEW -> APPROVED -> DEPRECATED / RETIRED
+  status: DRAFT
+  owner: TBD
+  approver: TBD
+  effective_from: null
+
+  approval_blockers:
+    - FULL_152_COLUMN_SCHEMA_NOT_EMBEDDED
+    - CSV_PARSING_PROFILE_NOT_CONFIRMED
+    - FILE_FRESHNESS_SLA_NOT_CONFIRMED
+
+# -----------------------------------------------------------------------------
+# 3. File source and ingestion information
+# -----------------------------------------------------------------------------
+source:
+  category: FILE
+  system_type: LEGACY_OR_EXTERNAL_EXTRACT
+  authoritative: true
+  authoritative_for: HISTORICAL_ACCEPTED_LOAN_RECORDS
+  delivery_mode: PERIODIC_FILE_DROP
+
+ingestion:
+  mechanism: FILE_DROP
+  transport: S3
+
+  source_drop_zone:
+    path_template: "s3://<source-bucket>/<source-prefix>/accepted_loans/*.csv"
+    native_format: CSV
+
+  landing:
+    path_template: "s3://<bucket>/bronze/landing/file/accepted_loans/*.csv"
+    immutable: true
+    copy_mode: BYTE_FOR_BYTE
+
+  bronze_target: "bronze.file_arrivals"
+  bronze_reader: AUTO_LOADER_BINARY_FILE
+
+  bronze_metadata:
+    - file_path
+    - file_bytes
+    - file_size
+    - file_modification_time
+    - ingestion_timestamp
+    - pipeline_run_id
+    - source_reference
+
+  parsing:
+    stage: SILVER
+    format: CSV
+    encoding: TBD_FROM_EXPORTER_CONFIG
+    delimiter: TBD_FROM_EXPORTER_CONFIG
+    header: TBD_FROM_EXPORTER_CONFIG
+    quote_character: TBD_FROM_EXPORTER_CONFIG
+    escape_character: TBD_FROM_EXPORTER_CONFIG
+    malformed_row_action: QUARANTINE
+
+# -----------------------------------------------------------------------------
+# 4. Manifest and file-level reconciliation
+# -----------------------------------------------------------------------------
+manifest:
+  required: true
+  path_template: "s3://<bucket>/bronze/landing/manifests/manifest-<batch_id>.json"
+
+  required_attributes:
+    - batch_id
+    - heartbeat_status
+    - dataset_artifact_path
+    - record_count
+    - sha256
+    - native_format
+    - total_records
+
+  reconciliation_checks:
+    - rule_id: ACL_FILE_PATH_IN_MANIFEST
+      type: FILE_PATH_MATCH
+      severity: ERROR
+      action: REJECT_FILE
+      description: >
+        The landed accepted_loans file path must match the artifact path recorded
+        in the delivery manifest.
+
+    - rule_id: ACL_FILE_SHA256_MATCH
+      type: SHA256_MATCH
+      severity: ERROR
+      action: REJECT_FILE
+      description: >
+        The SHA-256 hash of the landed file must match the manifest hash.
+
+    - rule_id: ACL_FILE_RECORD_COUNT_MATCH
+      type: RECORD_COUNT_MATCH
+      severity: ERROR
+      action: REJECT_FILE
+      description: >
+        The parsed CSV record count must match the accepted_loans record count
+        declared in the delivery manifest.
+
+    - rule_id: ACL_NATIVE_FORMAT_CSV
+      type: MANIFEST_VALUE
+      parameters:
+        field: native_format
+        expected_value: CSV
+      severity: ERROR
+      action: REJECT_FILE
+      description: >
+        The manifest must identify the accepted_loans artifact as CSV.
+
+# -----------------------------------------------------------------------------
+# 5. Keys and relationships
+# -----------------------------------------------------------------------------
+keys:
+  primary_key:
+    - loanId
+
+  alternate_keys:
+    - memberId
+
+  foreign_keys:
+    - columns:
+        - global_id
+      reference:
+        dataset: customers
+        columns:
+          - global_id
+      nullable: true
+
+# -----------------------------------------------------------------------------
+# 6. Schema authority and completeness
+# -----------------------------------------------------------------------------
+schema:
+  contract_mode: AUTHORITATIVE_REFERENCE_WITH_PRINCIPAL_FIELD_RULES
+  expected_column_count: 152
+  authoritative_schema_required: true
+  authoritative_schema_ref: "dev-tools/datagen/output/master-schema.json#/accepted_loans"
+  full_field_catalogue_status: REQUIRED_BEFORE_APPROVAL
+
+  unknown_column_action: CAPTURE_AND_WARN
+  missing_authoritative_column_action: FAIL_FILE
+  incompatible_type_change_action: FAIL_FILE
+
+  notes:
+    - >
+      The available human-readable schema intentionally lists only principal
+      fields for accepted_loans.
+    - >
+      All 152 physical columns must be loaded from master-schema.json at runtime
+      before this contract can be promoted to APPROVED.
+    - >
+      The fields below are the documented principal fields with explicit
+      business and privacy rules.
+
+  fields:
+
+    - name: global_id
+      data_type: string
+      logical_type: person_identifier
+      required: true
+      nullable: true
+      accepted:
+        format: UUID
+      example: "65df84b8-4274-4dbd-9667-6c9967ae6538"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: ACL_GLOBAL_ID_UUID
+          type: FORMAT_IF_PRESENT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "global_id must be a valid UUID when supplied."
+
+        - rule_id: ACL_GLOBAL_ID_CUSTOMER_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: customers
+            reference_column: global_id
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            global_id must exist in customers.global_id when supplied.
+
+    - name: loanId
+      data_type: string
+      logical_type: accepted_loan_identifier
+      required: true
+      nullable: false
+      accepted:
+        format: UUID
+      example: "5e59fd45-1363-47d0-9cdd-27acd402219d"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: ACL_LOAN_ID_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "loanId must always be present."
+
+        - rule_id: ACL_LOAN_ID_UUID
+          type: FORMAT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "loanId must be a valid UUID."
+
+    - name: memberId
+      data_type: string
+      logical_type: lending_member_identifier
+      required: true
+      nullable: false
+      accepted:
+        format: UUID
+      example: "3dfbd049-6e49-4f34-8cad-cd0bf9717c98"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: LENDING_MEMBER_IDENTIFIER
+        handling: TOKENISE_OR_REMOVE
+      quality_rules:
+        - rule_id: ACL_MEMBER_ID_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "memberId must always be present."
+
+        - rule_id: ACL_MEMBER_ID_UUID
+          type: FORMAT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "memberId must be a valid UUID."
+
+    - name: loanAmount
+      data_type: string
+      logical_type: decimal_amount
+      required: true
+      nullable: true
+      accepted:
+        currency: AUD
+        min_exclusive: 0
+      example: "24000.00"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: ACL_LOAN_AMOUNT_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "loanAmount must be parseable as a decimal amount."
+
+        - rule_id: ACL_LOAN_AMOUNT_POSITIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min_exclusive: 0
+          severity: ERROR
+          action: QUARANTINE
+          description: "loanAmount must be greater than zero when supplied."
+
+    - name: fundedAmount
+      data_type: string
+      logical_type: decimal_amount
+      required: true
+      nullable: true
+      accepted:
+        currency: AUD
+        min_exclusive: 0
+      example: "23520.00"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: ACL_FUNDED_AMOUNT_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "fundedAmount must be parseable as a decimal amount."
+
+        - rule_id: ACL_FUNDED_AMOUNT_POSITIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min_exclusive: 0
+          severity: ERROR
+          action: QUARANTINE
+          description: "fundedAmount must be greater than zero when supplied."
+
+    - name: term
+      data_type: string
+      logical_type: loan_term
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - "36 months"
+          - "60 months"
+      example: "36 months"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: APPROVED_CONTEXT_ONLY
+      quality_rules:
+        - rule_id: ACL_TERM_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - "36 months"
+              - "60 months"
+          severity: ERROR
+          action: QUARANTINE
+          description: "term must be 36 months or 60 months."
+
+    - name: interestRate
+      data_type: string
+      logical_type: percentage
+      required: true
+      nullable: true
+      accepted:
+        min_exclusive: 0
+      example: "12.50"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: LOAN_PRICING_INFORMATION
+        handling: RANGE_BUCKET_OR_RESTRICT
+      quality_rules:
+        - rule_id: ACL_INTEREST_RATE_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "interestRate must be parseable as a decimal percentage."
+
+        - rule_id: ACL_INTEREST_RATE_POSITIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min_exclusive: 0
+          severity: ERROR
+          action: QUARANTINE
+          description: "interestRate must be greater than zero when supplied."
+
+    - name: grade
+      data_type: string
+      logical_type: credit_grade
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - A
+          - B
+          - C
+          - D
+          - E
+          - F
+          - G
+      example: "B"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: CREDIT_RISK_INFORMATION
+        handling: BANKER_ONLY_OR_REDACT
+      quality_rules:
+        - rule_id: ACL_GRADE_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - A
+              - B
+              - C
+              - D
+              - E
+              - F
+              - G
+          severity: ERROR
+          action: QUARANTINE
+          description: "grade must be one of A through G."
+
+    - name: subGrade
+      data_type: string
+      logical_type: credit_subgrade
+      required: true
+      nullable: true
+      accepted:
+        regex: '^[A-G][1-5]$'
+      example: "B3"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: CREDIT_RISK_INFORMATION
+        handling: BANKER_ONLY_OR_REDACT
+      quality_rules:
+        - rule_id: ACL_SUBGRADE_PATTERN
+          type: REGEX_IF_PRESENT
+          parameters:
+            regex: '^[A-G][1-5]$'
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            subGrade must contain a grade letter followed by a suffix from 1 to 5.
+
+    - name: empLength
+      data_type: string
+      logical_type: employment_length
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - "< 1 year"
+          - "1 year"
+          - "2 years"
+          - "3 years"
+          - "4 years"
+          - "5 years"
+          - "6 years"
+          - "7 years"
+          - "8 years"
+          - "9 years"
+          - "10+ years"
+      example: "5 years"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: EMPLOYMENT_INFORMATION
+        handling: GENERALISE_OR_RESTRICT
+      quality_rules:
+        - rule_id: ACL_EMP_LENGTH_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - "< 1 year"
+              - "1 year"
+              - "2 years"
+              - "3 years"
+              - "4 years"
+              - "5 years"
+              - "6 years"
+              - "7 years"
+              - "8 years"
+              - "9 years"
+              - "10+ years"
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            empLength must be one of the documented employment-length values.
+
+    - name: homeOwnership
+      data_type: string
+      logical_type: home_ownership_status
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - RENT
+          - MORTGAGE
+          - OWN
+          - OTHER
+      example: "MORTGAGE"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: PERSONAL_FINANCIAL_PROFILE
+        handling: RESTRICT_OR_GENERALISE
+      quality_rules:
+        - rule_id: ACL_HOME_OWNERSHIP_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - RENT
+              - MORTGAGE
+              - OWN
+              - OTHER
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            homeOwnership must be RENT, MORTGAGE, OWN, or OTHER.
+
+    - name: annualIncome
+      data_type: string
+      logical_type: decimal_amount
+      required: true
+      nullable: true
+      accepted:
+        currency: AUD
+        min_exclusive: 0
+      example: "85000.00"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: INCOME_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: ACL_ANNUAL_INCOME_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "annualIncome must be parseable as a decimal amount."
+
+        - rule_id: ACL_ANNUAL_INCOME_POSITIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min_exclusive: 0
+          severity: ERROR
+          action: QUARANTINE
+          description: "annualIncome must be greater than zero when supplied."
+
+    - name: verification_status
+      data_type: string
+      logical_type: income_verification_status
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - Not Verified
+          - Source Verified
+          - Verified
+      example: "Source Verified"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: INCOME_VERIFICATION_INFORMATION
+        handling: BANKER_ONLY_OR_RESTRICT
+      quality_rules:
+        - rule_id: ACL_VERIFICATION_STATUS_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - Not Verified
+              - Source Verified
+              - Verified
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            verification_status must be one of the documented verification values.
+
+    - name: application_type
+      data_type: string
+      logical_type: accepted_loan_application_type
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - Individual
+          - Joint App
+      example: "Individual"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: APPROVED_CONTEXT_ONLY
+      quality_rules:
+        - rule_id: ACL_APPLICATION_TYPE_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - Individual
+              - Joint App
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            application_type must be Individual or Joint App.
+
+    - name: loanStatus
+      data_type: string
+      logical_type: accepted_loan_status
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - Fully Paid
+          - Charged Off
+          - Current
+          - Late
+          - Default
+          - In Grace
+      example: "Current"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: CREDIT_PERFORMANCE_INFORMATION
+        handling: BANKER_ONLY_OR_RESTRICT
+      quality_rules:
+        - rule_id: ACL_LOAN_STATUS_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - Fully Paid
+              - Charged Off
+              - Current
+              - Late
+              - Default
+              - In Grace
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            loanStatus must be one of the documented repayment-performance values.
+
+    - name: fico_range_low
+      data_type: string
+      logical_type: fico_score_lower_bound
+      required: true
+      nullable: true
+      accepted:
+        min: 660
+        max: 845
+      example: "720"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: CREDIT_SCORE_INFORMATION
+        handling: BANKER_ONLY_OR_REDACT
+      quality_rules:
+        - rule_id: ACL_FICO_LOW_INTEGER
+          type: PARSEABLE_INTEGER_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            fico_range_low must be parseable as an integer when supplied.
+
+        - rule_id: ACL_FICO_LOW_RANGE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min: 660
+            max: 845
+            parse_as: INTEGER
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            fico_range_low must be between 660 and 845.
+
+    - name: hardship_flag
+      data_type: string
+      logical_type: hardship_program_flag
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - Y
+          - N
+      example: "N"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_HARDSHIP_INFORMATION
+        handling: BANKER_ONLY_OR_REDACT
+      quality_rules:
+        - rule_id: ACL_HARDSHIP_FLAG_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - Y
+              - N
+          severity: ERROR
+          action: QUARANTINE
+          description: "hardship_flag must be Y or N."
+
+    - name: debt_settlement_flag
+      data_type: string
+      logical_type: debt_settlement_flag
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - Y
+          - N
+      example: "N"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: DEBT_SETTLEMENT_INFORMATION
+        handling: BANKER_ONLY_OR_REDACT
+      quality_rules:
+        - rule_id: ACL_DEBT_SETTLEMENT_FLAG_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - Y
+              - N
+          severity: ERROR
+          action: QUARANTINE
+          description: "debt_settlement_flag must be Y or N."
+
+    - name: purpose
+      data_type: string
+      logical_type: loan_purpose
+      required: true
+      nullable: TBD_FROM_MASTER_SCHEMA_JSON
+      accepted:
+        exact_value_catalogue_status: TBD_FROM_MASTER_SCHEMA_JSON
+      example: "debt_consolidation"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: LOAN_PURPOSE_INFORMATION
+        handling: APPROVED_CONTEXT_ONLY
+      quality_rules:
+        - rule_id: ACL_PURPOSE_NON_BLANK_IF_PRESENT
+          type: NON_BLANK_IF_PRESENT
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: "purpose must not be blank when supplied."
+
+    - name: issuedAt
+      data_type: string
+      logical_type: date
+      required: true
+      nullable: TBD_FROM_MASTER_SCHEMA_JSON
+      accepted:
+        format: ISO_8601_DATE
+      example: "2025-11-01"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: LOAN_ACTIVITY_METADATA
+        handling: RESTRICT_OR_GENERALISE
+      quality_rules:
+        - rule_id: ACL_ISSUED_AT_PARSEABLE
+          type: PARSEABLE_DATE_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "issuedAt must be parseable as a date when supplied."
+
+  documented_financial_field_families:
+    borrower_risk_and_capacity:
+      fields:
+        - dti
+        - revol_bal
+        - revol_util
+      physical_rules:
+        - PARSEABLE_NUMERIC_IF_PRESENT
+      full_schema_details_status: TBD_FROM_MASTER_SCHEMA_JSON
+
+    repayment_performance:
+      fields:
+        - out_prncp
+        - total_pymnt
+        - total_rec_prncp
+        - total_rec_int
+        - recoveries
+      physical_rules:
+        - PARSEABLE_NUMERIC_IF_PRESENT
+      full_schema_details_status: TBD_FROM_MASTER_SCHEMA_JSON
+
+    hardship_and_settlement:
+      fields:
+        - settlement_amount
+        - hardship_amount
+      physical_rules:
+        - PARSEABLE_NUMERIC_IF_PRESENT
+      full_schema_details_status: TBD_FROM_MASTER_SCHEMA_JSON
+
+# -----------------------------------------------------------------------------
+# 7. Dataset-level quality rules
+# -----------------------------------------------------------------------------
+dataset_quality_rules:
+
+  - rule_id: ACL_LOAN_ID_UNIQUE
+    type: UNIQUE
+    columns:
+      - loanId
+    severity: ERROR
+    action: QUARANTINE
+    description: "loanId must be unique within the parsed file."
+
+  - rule_id: ACL_MEMBER_ID_UNIQUE
+    type: UNIQUE
+    columns:
+      - memberId
+    severity: ERROR
+    action: QUARANTINE
+    description: "memberId must be unique within the parsed file."
+
+  - rule_id: ACL_CUSTOMER_LINK_PRESENT
+    type: NOT_NULL
+    columns:
+      - global_id
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      An accepted-loan record should identify its customer. The physical schema
+      currently permits global_id to be null.
+
+  - rule_id: ACL_FUNDED_AMOUNT_WITHIN_SOURCE_RATIO
+    type: NUMERIC_RATIO_RANGE
+    parameters:
+      numerator_column: fundedAmount
+      denominator_column: loanAmount
+      min_ratio: 0.95
+      max_ratio: 1.00
+      parse_as: DECIMAL
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      fundedAmount must be between ninety-five and one hundred percent of
+      loanAmount.
+
+  - rule_id: ACL_SUBGRADE_MATCHES_GRADE
+    type: PREFIX_MATCH
+    parameters:
+      prefix_source_column: grade
+      target_column: subGrade
+      prefix_length: 1
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      The first character of subGrade must equal grade.
+
+  - rule_id: ACL_ISSUED_AT_NOT_IN_FUTURE
+    type: DATE_NOT_IN_FUTURE
+    columns:
+      - issuedAt
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      issuedAt should not be later than the file processing date.
+
+  - rule_id: ACL_FULL_SCHEMA_COLUMN_COUNT
+    type: EXACT_COLUMN_COUNT
+    parameters:
+      expected: 152
+      schema_reference: "dev-tools/datagen/output/master-schema.json#/accepted_loans"
+    severity: ERROR
+    action: REJECT_FILE
+    description: >
+      The parsed file must contain exactly the 152 physical columns defined in
+      the authoritative generated schema.
+
+  - rule_id: ACL_FULL_SCHEMA_NAME_AND_TYPE_MATCH
+    type: AUTHORITATIVE_SCHEMA_MATCH
+    parameters:
+      schema_reference: "dev-tools/datagen/output/master-schema.json#/accepted_loans"
+      compare:
+        - column_names
+        - physical_types
+        - nullability
+    severity: ERROR
+    action: REJECT_FILE
+    description: >
+      Column names, physical types, and nullability must match the generated
+      authoritative schema.
+
+  - rule_id: ACL_EXPECTED_SCALE_ONE_RECORD_COUNT
+    type: RECORD_COUNT_EXPECTATION
+    parameters:
+      expected: 500
+      applies_when:
+        scale: 1
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      At SCALE=1, the accepted_loans extract is expected to contain 500 records.
+
+  - rule_id: ACL_HARDSHIP_AMOUNT_CONSISTENCY_REVIEW
+    type: CONDITIONAL_NUMERIC_CONSISTENCY
+    parameters:
+      when:
+        column: hardship_flag
+        equals: Y
+      target_column: hardship_amount
+      expected: POSITIVE_IF_PRESENT
+      status: PROPOSED_RULE_REQUIRES_CONFIRMATION
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A hardship record would normally be expected to contain a positive
+      hardship_amount, but the exact source rule must be confirmed.
+
+  - rule_id: ACL_SETTLEMENT_AMOUNT_CONSISTENCY_REVIEW
+    type: CONDITIONAL_NUMERIC_CONSISTENCY
+    parameters:
+      when:
+        column: debt_settlement_flag
+        equals: Y
+      target_column: settlement_amount
+      expected: POSITIVE_IF_PRESENT
+      status: PROPOSED_RULE_REQUIRES_CONFIRMATION
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A debt-settlement record would normally be expected to contain a positive
+      settlement_amount, but the exact source rule must be confirmed.
+
+  - rule_id: ACL_SENSITIVE_FIELD_LEAKAGE
+    type: PROHIBITED_RAW_FIELDS_IN_AI_OUTPUT
+    parameters:
+      fields:
+        - memberId
+        - loanAmount
+        - fundedAmount
+        - interestRate
+        - annualIncome
+        - verification_status
+        - grade
+        - subGrade
+        - fico_range_low
+        - hardship_flag
+        - debt_settlement_flag
+        - dti
+        - revol_bal
+        - revol_util
+        - out_prncp
+        - total_pymnt
+        - total_rec_prncp
+        - total_rec_int
+        - recoveries
+        - settlement_amount
+        - hardship_amount
+    severity: ERROR
+    action: BLOCK_AI_OUTPUT
+    description: >
+      Raw sensitive borrower, pricing, repayment, hardship, settlement, and
+      credit-risk fields must not appear in AI-ready output.
+
+# -----------------------------------------------------------------------------
+# 8. File freshness and duplicate-delivery controls
+# -----------------------------------------------------------------------------
+file_quality_rules:
+
+  - rule_id: ACL_FILE_NON_EMPTY
+    type: FILE_SIZE_MIN
+    parameters:
+      min_bytes: 1
+    severity: ERROR
+    action: REJECT_FILE
+    description: "The delivered CSV file must not be empty."
+
+  - rule_id: ACL_DUPLICATE_FILE_HASH
+    type: DUPLICATE_FILE_HASH
+    parameters:
+      hash_field: sha256
+      scope: accepted_loans
+    severity: WARNING
+    action: SKIP_DUPLICATE_DELIVERY
+    description: >
+      A file with an already processed SHA-256 hash should be treated as a
+      duplicate delivery rather than reprocessed as new data.
+
+  - rule_id: ACL_FILE_FRESHNESS
+    type: FILE_MODIFICATION_AGE
+    parameters:
+      modification_time_field: file_modification_time
+      max_age: TBD
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      The file freshness threshold must be agreed before the contract is
+      promoted to APPROVED.
+
+# -----------------------------------------------------------------------------
+# 9. Derived checks for Silver and AI-ready context
+# -----------------------------------------------------------------------------
+derived_quality_checks:
+
+  - rule_id: ACL_LOAN_AMOUNT_BUCKET
+    type: PRIVACY_TRANSFORMATION
+    source_field: loanAmount
+    output_field: loan_amount_masked
+    description: >
+      Silver must convert exact loanAmount into an approved monetary range bucket.
+
+  - rule_id: ACL_APPROVED_LOAN_CONTEXT_PROJECTION
+    type: APPROVED_CONTEXT_PROJECTION
+    approved_fields:
+      - loanStatus
+      - purpose
+      - term
+      - issuedAt
+    banker_only_fields:
+      - grade
+    masked_fields:
+      - loanAmount
+    prohibited_fields:
+      - memberId
+      - annualIncome
+      - fico_range_low
+      - hardship_flag
+      - debt_settlement_flag
+      - hardship_amount
+      - settlement_amount
+    description: >
+      Silver may expose a restricted accepted-loan summary after validation,
+      masking, access checks, and lineage enrichment.
+
+  - rule_id: ACL_FILE_LINEAGE_PROJECTION
+    type: LINEAGE_ENRICHMENT
+    output_fields:
+      - source_dataset
+      - source_file_path
+      - source_file_sha256
+      - source_record_id
+      - pipeline_run_id
+      - processed_at
+      - dq_status
+      - masking_status
+      - context_version
+    description: >
+      Curated records must retain enough file and record lineage for answer
+      verification and audit.
+
+# -----------------------------------------------------------------------------
+# 10. Notes for the team
+# -----------------------------------------------------------------------------
+notes:
+  - >
+    This is the first FILE-source contract. Unlike DATABASE and EVENT sources,
+    Bronze stores the file bytes and file metadata before parsing the CSV.
+  - >
+    The current human-readable schema explicitly states that accepted_loans has
+    152 physical columns but intentionally lists only principal fields.
+  - >
+    This contract is therefore valid as a DRAFT principal-field contract, but it
+    cannot be promoted to APPROVED until all 152 columns are loaded from the
+    generated master-schema.json and validated.
+  - >
+    purpose and issuedAt are included because they are used by the approved
+    Silver accepted-loan projection. Their exact physical nullability must still
+    be confirmed from master-schema.json.
+  - >
+    Exact borrower, pricing, credit-risk, repayment, hardship, and settlement
+    details are highly sensitive and must be masked, restricted, or removed
+    before AI consumption.
+  - >
+    The source does not provide an explicit file freshness SLA, CSV parser
+    profile, or delivery filename convention. Those values remain TBD rather
+    than being invented.

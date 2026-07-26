@@ -16,8 +16,6 @@
 # - nullable: the field value may be null.
 # - ERROR + QUARANTINE: do not send the record to the trusted output.
 # - WARNING + ALLOW_WITH_WARNING: keep the record but report the issue.
-#
-# All delivery content and comments are written in English.
 # =============================================================================
 
 contract_version: "1.0.0"

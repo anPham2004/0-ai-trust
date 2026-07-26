@@ -1,0 +1,817 @@
+# =============================================================================
+# DATA CONTRACT: banking_products
+# =============================================================================
+# Purpose:
+# - Stores the CDR banking product catalogue delivered as a periodic file.
+# - Provides governed product names, categories, brand details, application
+#   links, effective dates, additional information, and optional card artwork.
+#
+# Important catalogue behaviour:
+# - This dataset is a catalogue and intentionally has no global_id.
+# - It is excluded from customer foreign-key integrity validation.
+# - Product records describe available banking products rather than products
+#   held by a specific customer.
+#
+# Important FILE-source behaviour:
+# - The source is delivered as a CSV file through the S3 file drop-zone.
+# - Bronze copies the file byte-for-byte and records file metadata.
+# - Parsing, schema validation, data-quality checks, and curation occur after the
+#   immutable file arrival has been registered.
+#
+# Quick guide:
+# - required: the physical CSV column must exist.
+# - nullable: the parsed field value may be null.
+# - ERROR + QUARANTINE: exclude the record from trusted outputs.
+# - WARNING + ALLOW_WITH_WARNING: retain the record and report the issue.
+# =============================================================================
+
+contract_version: "1.0.0"
+contract_id: "source.file.banking_products"
+
+# -----------------------------------------------------------------------------
+# 1. Basic dataset information
+# -----------------------------------------------------------------------------
+dataset:
+  name: banking_products
+  domain: PRODUCT_CATALOGUE
+  description: >
+    CDR BankingProduct catalogue containing fifty fixed product records across
+    nine banking product categories. Each record includes product identity,
+    descriptive content, BankCorp branding, an application URI, tailoring flag,
+    effective dates, update timestamp, additional-information JSON, and optional
+    card-art JSON.
+  expected_rows_scale_1: 50
+  expected_physical_column_count: 13
+  fixed_row_count: true
+  physical_schema_ref: "dev-tools/datagen/output/master-schema.json#/banking_products"
+
+# -----------------------------------------------------------------------------
+# 2. Ownership and contract lifecycle
+# -----------------------------------------------------------------------------
+lifecycle:
+  # DRAFT -> IN_REVIEW -> APPROVED -> DEPRECATED / RETIRED
+  status: DRAFT
+  owner: TBD
+  approver: TBD
+  effective_from: null
+
+  approval_blockers:
+    - CSV_PARSING_PROFILE_NOT_CONFIRMED
+    - FILE_FRESHNESS_SLA_NOT_CONFIRMED
+    - PRODUCT_NAME_CATALOGUE_NOT_EXTRACTED
+    - ADDITIONAL_INFORMATION_SCHEMA_NOT_CONFIRMED
+    - CARD_ART_SCHEMA_NOT_CONFIRMED
+
+# -----------------------------------------------------------------------------
+# 3. File source and ingestion information
+# -----------------------------------------------------------------------------
+source:
+  category: FILE
+  system_type: PRODUCT_CATALOGUE_EXTRACT
+  authoritative: true
+  authoritative_for: BANKING_PRODUCT_CATALOGUE
+  delivery_mode: PERIODIC_FILE_DROP
+  catalogue: true
+  contains_global_id: false
+  customer_fk_validation_exempt: true
+
+ingestion:
+  mechanism: FILE_DROP
+  transport: S3
+
+  source_drop_zone:
+    path_template: "s3://<source-bucket>/<source-prefix>/banking_products/*.csv"
+    native_format: CSV
+
+  landing:
+    path_template: "s3://<bucket>/bronze/landing/file/banking_products/*.csv"
+    immutable: true
+    copy_mode: BYTE_FOR_BYTE
+
+  bronze_target: "bronze.file_arrivals"
+  bronze_reader: AUTO_LOADER_BINARY_FILE
+
+  bronze_metadata:
+    - file_path
+    - file_bytes
+    - file_size
+    - file_modification_time
+    - ingestion_timestamp
+    - pipeline_run_id
+    - source_reference
+
+  parsing:
+    stage: SILVER
+    format: CSV
+    encoding: TBD_FROM_EXPORTER_CONFIG
+    delimiter: TBD_FROM_EXPORTER_CONFIG
+    header: TBD_FROM_EXPORTER_CONFIG
+    quote_character: TBD_FROM_EXPORTER_CONFIG
+    escape_character: TBD_FROM_EXPORTER_CONFIG
+    malformed_row_action: QUARANTINE
+
+# -----------------------------------------------------------------------------
+# 4. Manifest and file-level reconciliation
+# -----------------------------------------------------------------------------
+manifest:
+  required: true
+  path_template: "s3://<bucket>/bronze/landing/manifests/manifest-<batch_id>.json"
+
+  required_attributes:
+    - batch_id
+    - heartbeat_status
+    - dataset_artifact_path
+    - record_count
+    - sha256
+    - native_format
+    - total_records
+
+  reconciliation_checks:
+
+    - rule_id: BPR_FILE_PATH_IN_MANIFEST
+      type: FILE_PATH_MATCH
+      severity: ERROR
+      action: REJECT_FILE
+      description: >
+        The landed banking_products file path must match the artifact path
+        recorded in the delivery manifest.
+
+    - rule_id: BPR_FILE_SHA256_MATCH
+      type: SHA256_MATCH
+      severity: ERROR
+      action: REJECT_FILE
+      description: >
+        The SHA-256 hash of the landed file must match the manifest hash.
+
+    - rule_id: BPR_FILE_RECORD_COUNT_MATCH
+      type: RECORD_COUNT_MATCH
+      severity: ERROR
+      action: REJECT_FILE
+      description: >
+        The parsed CSV record count must match the banking_products record count
+        declared in the delivery manifest.
+
+    - rule_id: BPR_NATIVE_FORMAT_CSV
+      type: MANIFEST_VALUE
+      parameters:
+        field: native_format
+        expected_value: CSV
+      severity: ERROR
+      action: REJECT_FILE
+      description: >
+        The manifest must identify the banking_products artifact as CSV.
+
+# -----------------------------------------------------------------------------
+# 5. Keys and relationships
+# -----------------------------------------------------------------------------
+keys:
+  primary_key:
+    - productId
+
+  alternate_keys: []
+
+  foreign_keys: []
+
+  relationship_notes:
+    - >
+      banking_products is a catalogue and has no global_id.
+    - >
+      The authoritative source schema does not declare a physical foreign key
+      from customer account records to productId.
+    - >
+      Product enrichment must use only an approved mapping defined by the
+      downstream model; category or name similarity must not be treated as an
+      implicit source foreign key.
+
+# -----------------------------------------------------------------------------
+# 6. Field-level contract
+# -----------------------------------------------------------------------------
+schema:
+  expected_column_count: 13
+  unknown_column_action: REJECT_FILE
+  missing_column_action: REJECT_FILE
+  incompatible_type_change_action: REJECT_FILE
+
+  fields:
+
+    - name: productId
+      data_type: string
+      logical_type: banking_product_identifier
+      required: true
+      nullable: false
+      accepted:
+        regex: '^PROD-\d{3}$'
+        numeric_suffix_min: 0
+        numeric_suffix_max: 49
+      example: "PROD-007"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: BPR_PRODUCT_ID_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "productId must always be present."
+
+        - rule_id: BPR_PRODUCT_ID_PATTERN
+          type: REGEX
+          parameters:
+            regex: '^PROD-\d{3}$'
+          severity: ERROR
+          action: QUARANTINE
+          description: "productId must follow the PROD-000 pattern."
+
+        - rule_id: BPR_PRODUCT_ID_RANGE
+          type: REGEX_NUMERIC_COMPONENT_RANGE
+          parameters:
+            regex: '^PROD-(\d{3})$'
+            capture_group: 1
+            min: 0
+            max: 49
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            productId must be between PROD-000 and PROD-049 in the fixed
+            catalogue.
+
+    - name: name
+      data_type: string
+      logical_type: banking_product_name
+      required: true
+      nullable: false
+      accepted:
+        documented_weighted_name_count: 11
+        exact_value_catalogue_status: TBD_FROM_GENERATOR_CONFIG
+        documented_examples:
+          - Everyday Transaction
+          - Online Saver
+      example: "Online Saver"
+      sensitivity:
+        classification: PUBLIC
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: BPR_NAME_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "name must always be present."
+
+        - rule_id: BPR_NAME_NON_BLANK
+          type: NON_BLANK
+          severity: ERROR
+          action: QUARANTINE
+          description: "name must not be empty or whitespace-only."
+
+    - name: description
+      data_type: string
+      logical_type: banking_product_description
+      required: true
+      nullable: true
+      accepted:
+        min_length: 1
+        generator_style: FAKER_TWO_SENTENCE_PARAGRAPH
+        exact_max_length_status: NOT_DOCUMENTED
+      example: "A flexible account for everyday banking. Digital access is available."
+      sensitivity:
+        classification: PUBLIC
+        is_pii: false
+        handling: CONTENT_SANITISE
+      quality_rules:
+        - rule_id: BPR_DESCRIPTION_NON_BLANK
+          type: NON_BLANK_IF_PRESENT
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: "description must not be blank when supplied."
+
+    - name: productCategory
+      data_type: string
+      logical_type: cdr_banking_product_category
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - TRANS_AND_SAVINGS_ACCOUNTS
+          - TERM_DEPOSITS
+          - RESIDENTIAL_MORTGAGES
+          - CRED_AND_CHRG_CARDS
+          - PERS_LOANS
+          - TRAVEL_CARDS
+          - REGULATED_TRUST_ACCOUNTS
+          - MARGIN_LOANS
+          - LEASES
+      example: "TRANS_AND_SAVINGS_ACCOUNTS"
+      sensitivity:
+        classification: PUBLIC
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: BPR_PRODUCT_CATEGORY_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - TRANS_AND_SAVINGS_ACCOUNTS
+              - TERM_DEPOSITS
+              - RESIDENTIAL_MORTGAGES
+              - CRED_AND_CHRG_CARDS
+              - PERS_LOANS
+              - TRAVEL_CARDS
+              - REGULATED_TRUST_ACCOUNTS
+              - MARGIN_LOANS
+              - LEASES
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            productCategory must be one of the nine documented CDR categories.
+
+    - name: brand
+      data_type: string
+      logical_type: product_brand_code
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - BankCorp
+      example: "BankCorp"
+      sensitivity:
+        classification: PUBLIC
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: BPR_BRAND_CONSTANT
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - BankCorp
+          severity: ERROR
+          action: QUARANTINE
+          description: "brand must always equal BankCorp."
+
+    - name: brandName
+      data_type: string
+      logical_type: product_brand_display_name
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - BankCorp Australia
+      example: "BankCorp Australia"
+      sensitivity:
+        classification: PUBLIC
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: BPR_BRAND_NAME_CONSTANT
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - BankCorp Australia
+          severity: ERROR
+          action: QUARANTINE
+          description: "brandName must always equal BankCorp Australia."
+
+    - name: applicationUri
+      data_type: string
+      logical_type: product_application_uri
+      required: true
+      nullable: false
+      accepted:
+        scheme: HTTPS
+        host: www.bankcorp.com.au
+        path_prefix: /apply/
+      example: "https://www.bankcorp.com.au/apply/7"
+      sensitivity:
+        classification: PUBLIC
+        is_pii: false
+        handling: ALLOW_APPROVED_DOMAIN_ONLY
+      quality_rules:
+        - rule_id: BPR_APPLICATION_URI_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "applicationUri must always be present."
+
+        - rule_id: BPR_APPLICATION_URI_PATTERN
+          type: REGEX
+          parameters:
+            regex: '^https://www\.bankcorp\.com\.au/apply/.+$'
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            applicationUri must use HTTPS and the approved BankCorp application
+            path.
+
+    - name: isTailored
+      data_type: bool
+      logical_type: tailored_product_flag
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - true
+          - false
+      example: false
+      sensitivity:
+        classification: PUBLIC
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: BPR_IS_TAILORED_BOOLEAN
+          type: BOOLEAN
+          severity: ERROR
+          action: QUARANTINE
+          description: "isTailored must be a boolean value."
+
+    - name: effectiveFrom
+      data_type: string
+      logical_type: date
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_DATE
+        generated_start_date: "2020-01-01"
+      example: "2023-04-15"
+      sensitivity:
+        classification: PUBLIC
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: BPR_EFFECTIVE_FROM_PARSEABLE
+          type: PARSEABLE_DATE_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "effectiveFrom must be parseable as a date when supplied."
+
+        - rule_id: BPR_EFFECTIVE_FROM_LOWER_BOUND
+          type: DATE_RANGE_IF_PRESENT
+          parameters:
+            min_inclusive: "2020-01-01"
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            effectiveFrom cannot be earlier than the documented generator start
+            date.
+
+    - name: effectiveTo
+      data_type: string
+      logical_type: date
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_DATE
+        null_ratio_approximate: 0.70
+        offset_from_effective_from_years:
+          min: 2
+          max: 5
+      example: "2027-04-15"
+      sensitivity:
+        classification: PUBLIC
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: BPR_EFFECTIVE_TO_PARSEABLE
+          type: PARSEABLE_DATE_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "effectiveTo must be parseable as a date when supplied."
+
+    - name: lastUpdated
+      data_type: string
+      logical_type: timestamp
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_TIMESTAMP
+      example: "2026-06-30T12:10:00Z"
+      sensitivity:
+        classification: PUBLIC
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: BPR_LAST_UPDATED_PARSEABLE
+          type: PARSEABLE_TIMESTAMP_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "lastUpdated must be parseable as a timestamp when supplied."
+
+    - name: additionalInformation
+      data_type: string
+      logical_type: cdr_banking_product_additional_information_json
+      required: true
+      nullable: true
+      accepted:
+        format: JSON_OBJECT
+        schema_reference: CDR_BankingProductAdditionalInformation
+        exact_schema_status: TBD_FROM_GENERATOR_CONFIG
+      example: "{}"
+      sensitivity:
+        classification: PUBLIC
+        is_pii: false
+        handling: CONTENT_SANITISE
+      quality_rules:
+        - rule_id: BPR_ADDITIONAL_INFORMATION_JSON
+          type: VALID_JSON_OBJECT_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            additionalInformation must contain a valid JSON object when supplied.
+
+    - name: cardArt
+      data_type: string
+      logical_type: cdr_product_card_art_json
+      required: true
+      nullable: true
+      accepted:
+        format: JSON_OBJECT
+        population_ratio_approximate: 0.25
+        contains_image_uri: true
+        exact_schema_status: TBD_FROM_GENERATOR_CONFIG
+      example: '{"imageUri":"https://www.bankcorp.com.au/assets/cards/product.png"}'
+      sensitivity:
+        classification: PUBLIC
+        is_pii: false
+        handling: ALLOW_APPROVED_DOMAIN_ONLY
+      quality_rules:
+        - rule_id: BPR_CARD_ART_JSON
+          type: VALID_JSON_OBJECT_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "cardArt must contain a valid JSON object when supplied."
+
+        - rule_id: BPR_CARD_ART_URI_REVIEW
+          type: JSON_URI_APPROVED_DOMAIN_IF_PRESENT
+          parameters:
+            approved_domains:
+              - www.bankcorp.com.au
+            uri_path_status: TBD_FROM_GENERATOR_CONFIG
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: >
+            Any card-art image URI should use an approved BankCorp domain. The
+            exact JSON path must be confirmed from the generator schema.
+
+# -----------------------------------------------------------------------------
+# 7. Dataset-level quality rules
+# -----------------------------------------------------------------------------
+dataset_quality_rules:
+
+  - rule_id: BPR_PRODUCT_ID_UNIQUE
+    type: UNIQUE
+    columns:
+      - productId
+    severity: ERROR
+    action: QUARANTINE
+    description: "productId must be unique within the catalogue file."
+
+  - rule_id: BPR_FIXED_RECORD_COUNT
+    type: RECORD_COUNT_EXACT
+    parameters:
+      expected: 50
+    severity: ERROR
+    action: REJECT_FILE
+    description: >
+      The fixed banking product catalogue must contain exactly fifty records.
+
+  - rule_id: BPR_EFFECTIVE_PERIOD_ORDER
+    type: DATE_COLUMN_COMPARISON
+    parameters:
+      left_column: effectiveTo
+      operator: GREATER_THAN
+      right_column: effectiveFrom
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: "effectiveTo must be later than effectiveFrom when populated."
+
+  - rule_id: BPR_EFFECTIVE_TO_OFFSET
+    type: DATE_YEAR_OFFSET_RANGE
+    parameters:
+      start_column: effectiveFrom
+      end_column: effectiveTo
+      min_years: 2
+      max_years: 5
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      A populated effectiveTo must be between two and five years after
+      effectiveFrom in the current source generator.
+
+  - rule_id: BPR_LAST_UPDATED_NOT_IN_FUTURE
+    type: TIMESTAMP_NOT_IN_FUTURE
+    columns:
+      - lastUpdated
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      lastUpdated should not be later than the file processing timestamp.
+
+  - rule_id: BPR_PRODUCT_CATEGORY_DISTRIBUTION
+    type: CATEGORICAL_DISTRIBUTION_TOLERANCE
+    parameters:
+      column: productCategory
+      expected_ratios:
+        TRANS_AND_SAVINGS_ACCOUNTS: 0.30
+        TERM_DEPOSITS: 0.15
+        RESIDENTIAL_MORTGAGES: 0.15
+        CRED_AND_CHRG_CARDS: 0.15
+        PERS_LOANS: 0.10
+        TRAVEL_CARDS: 0.05
+        REGULATED_TRUST_ACCOUNTS: 0.05
+        MARGIN_LOANS: 0.03
+        LEASES: 0.02
+      absolute_tolerance: 0.10
+      comparison_scope: COMPLETE_FILE
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Product-category proportions should remain reasonably close to the
+      configured fixed-catalogue distribution.
+
+  - rule_id: BPR_TAILORED_RATIO_MONITORING
+    type: POPULATION_RATIO_RANGE
+    parameters:
+      column: isTailored
+      condition:
+        equals: true
+      min_ratio: 0.02
+      max_ratio: 0.20
+      comparison_scope: COMPLETE_FILE
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Approximately ten percent of products are tailored; a complete-file ratio
+      outside two to twenty percent should be investigated.
+
+  - rule_id: BPR_EFFECTIVE_TO_NULL_RATIO_MONITORING
+    type: NULL_RATIO_RANGE
+    parameters:
+      column: effectiveTo
+      min_ratio: 0.55
+      max_ratio: 0.85
+      comparison_scope: COMPLETE_FILE
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Approximately seventy percent of products have no effectiveTo date.
+
+  - rule_id: BPR_CARD_ART_RATIO_MONITORING
+    type: POPULATION_RATIO_RANGE
+    parameters:
+      column: cardArt
+      condition: IS_NOT_NULL
+      min_ratio: 0.12
+      max_ratio: 0.38
+      comparison_scope: COMPLETE_FILE
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Card artwork is populated for approximately twenty-five percent of products.
+
+  - rule_id: BPR_PRODUCT_NAME_CATALOGUE_REVIEW
+    type: REFERENCE_CATALOGUE_PENDING
+    parameters:
+      column: name
+      documented_count: 11
+      source: GENERATOR_CONFIG
+      status: TBD_FROM_GENERATOR_CONFIG
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      The source documents eleven weighted product names but does not publish
+      the complete list. The exact catalogue must be extracted before approval.
+
+  - rule_id: BPR_NO_GLOBAL_ID
+    type: COLUMN_MUST_NOT_EXIST
+    parameters:
+      column: global_id
+    severity: ERROR
+    action: REJECT_FILE
+    description: >
+      banking_products is a catalogue and must not contain a customer global_id.
+
+# -----------------------------------------------------------------------------
+# 8. File freshness and duplicate-delivery controls
+# -----------------------------------------------------------------------------
+file_quality_rules:
+
+  - rule_id: BPR_FILE_NON_EMPTY
+    type: FILE_SIZE_MIN
+    parameters:
+      min_bytes: 1
+    severity: ERROR
+    action: REJECT_FILE
+    description: "The delivered CSV file must not be empty."
+
+  - rule_id: BPR_EXACT_COLUMN_COUNT
+    type: EXACT_COLUMN_COUNT
+    parameters:
+      expected: 13
+    severity: ERROR
+    action: REJECT_FILE
+    description: >
+      The parsed CSV file must contain exactly thirteen physical columns.
+
+  - rule_id: BPR_DUPLICATE_FILE_HASH
+    type: DUPLICATE_FILE_HASH
+    parameters:
+      hash_field: sha256
+      scope: banking_products
+    severity: WARNING
+    action: SKIP_DUPLICATE_DELIVERY
+    description: >
+      A file with an already processed SHA-256 hash should be treated as a
+      duplicate delivery rather than new catalogue data.
+
+  - rule_id: BPR_FILE_FRESHNESS
+    type: FILE_MODIFICATION_AGE
+    parameters:
+      modification_time_field: file_modification_time
+      max_age: TBD
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      The product-catalogue freshness SLA must be agreed before the contract is
+      promoted to APPROVED.
+
+# -----------------------------------------------------------------------------
+# 9. Derived checks for Silver and AI-ready product context
+# -----------------------------------------------------------------------------
+derived_quality_checks:
+
+  - rule_id: BPR_CURRENTLY_EFFECTIVE_DERIVATION
+    type: DERIVED_BOOLEAN
+    expression: >
+      (effectiveFrom IS NULL OR effectiveFrom <= CURRENT_DATE)
+      AND (effectiveTo IS NULL OR effectiveTo > CURRENT_DATE)
+    output_field: is_currently_effective
+    description: >
+      Silver may derive whether the product is currently within its effective
+      date window.
+
+  - rule_id: BPR_SAFE_PRODUCT_PROJECTION
+    type: APPROVED_CONTEXT_PROJECTION
+    approved_fields:
+      - productId
+      - name
+      - description
+      - productCategory
+      - brand
+      - brandName
+      - applicationUri
+      - isTailored
+      - effectiveFrom
+      - effectiveTo
+      - lastUpdated
+    governed_json_fields:
+      - additionalInformation
+      - cardArt
+    description: >
+      Product knowledge may be exposed after schema validation, content
+      sanitisation, URI allow-list checks, and effective-date derivation.
+
+  - rule_id: BPR_FILE_LINEAGE_PROJECTION
+    type: LINEAGE_ENRICHMENT
+    output_fields:
+      - source_dataset
+      - source_file_path
+      - source_file_sha256
+      - source_record_id
+      - pipeline_run_id
+      - processed_at
+      - dq_status
+      - content_sanitisation_status
+      - context_version
+    description: >
+      Curated product records must retain enough file and record lineage for
+      answer verification, freshness review, and audit.
+
+# -----------------------------------------------------------------------------
+# 10. Notes for the team
+# -----------------------------------------------------------------------------
+notes:
+  - >
+    This contract follows the authoritative physical source schema and includes
+    all thirteen fields defined for banking_products.
+  - >
+    banking_products is one of three catalogue datasets without global_id. It is
+    excluded from customer foreign-key integrity validation.
+  - >
+    The catalogue describes available products, not a customer's held products.
+    Customer holdings must be sourced from governed arrangement datasets.
+  - >
+    The source documents eleven weighted product names but provides only examples.
+    The complete name catalogue must be copied from the generator rather than
+    invented.
+  - >
+    The exact nested schemas for additionalInformation and cardArt must be copied
+    from the generator or approved CDR schema before promotion to APPROVED.
+  - >
+    Product descriptions and nested JSON are public product content but still
+    require sanitisation before AI indexing to prevent malformed or unsafe text
+    and unapproved external links.
+  - >
+    The CSV parser profile, file freshness SLA, filename convention, exact
+    product-name catalogue, and nested JSON schemas remain TBD.

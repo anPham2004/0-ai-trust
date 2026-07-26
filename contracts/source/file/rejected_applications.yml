@@ -1,0 +1,816 @@
+# =============================================================================
+# DATA CONTRACT: rejected_applications
+# =============================================================================
+# Purpose:
+# - Stores historical rejected-loan application extracts.
+# - Records the requested amount, application date, risk score,
+#   debt-to-income ratio, rejection reason, application title, location,
+#   employment length, and policy code.
+#
+# Important FILE-source behaviour:
+# - The source is delivered as a CSV file through the S3 file drop-zone.
+# - Bronze copies the file byte-for-byte and records file metadata.
+# - Parsing, schema validation, data-quality checks, and masking occur after the
+#   immutable file arrival has been registered.
+#
+# Quick guide:
+# - required: the physical CSV column must exist.
+# - nullable: the parsed field value may be null.
+# - ERROR + QUARANTINE: exclude the record from trusted outputs.
+# - WARNING + ALLOW_WITH_WARNING: retain the record and report the issue.
+# =============================================================================
+
+contract_version: "1.0.0"
+contract_id: "source.file.rejected_applications"
+
+# -----------------------------------------------------------------------------
+# 1. Basic dataset information
+# -----------------------------------------------------------------------------
+dataset:
+  name: rejected_applications
+  domain: LENDING_HISTORY
+  description: >
+    Historical rejected-loan application extract modelled after Lending Club
+    rejected-application records. Each record contains customer linkage,
+    requested lending details, source risk indicators, rejection reason,
+    application title, geographic context, employment length, and policy code.
+  expected_rows_scale_1: 250
+  expected_physical_column_count: 12
+  physical_schema_ref: "dev-tools/datagen/output/master-schema.json#/rejected_applications"
+
+# -----------------------------------------------------------------------------
+# 2. Ownership and contract lifecycle
+# -----------------------------------------------------------------------------
+lifecycle:
+  # DRAFT -> IN_REVIEW -> APPROVED -> DEPRECATED / RETIRED
+  status: DRAFT
+  owner: TBD
+  approver: TBD
+  effective_from: null
+
+  approval_blockers:
+    - CSV_PARSING_PROFILE_NOT_CONFIRMED
+    - FILE_FRESHNESS_SLA_NOT_CONFIRMED
+    - CUSTOMER_SAFE_REJECTION_REASON_CATALOGUE_NOT_APPROVED
+
+# -----------------------------------------------------------------------------
+# 3. File source and ingestion information
+# -----------------------------------------------------------------------------
+source:
+  category: FILE
+  system_type: LEGACY_OR_EXTERNAL_EXTRACT
+  authoritative: true
+  authoritative_for: HISTORICAL_REJECTED_APPLICATION_RECORDS
+  delivery_mode: PERIODIC_FILE_DROP
+
+ingestion:
+  mechanism: FILE_DROP
+  transport: S3
+
+  source_drop_zone:
+    path_template: "s3://<source-bucket>/<source-prefix>/rejected_applications/*.csv"
+    native_format: CSV
+
+  landing:
+    path_template: "s3://<bucket>/bronze/landing/file/rejected_applications/*.csv"
+    immutable: true
+    copy_mode: BYTE_FOR_BYTE
+
+  bronze_target: "bronze.file_arrivals"
+  bronze_reader: AUTO_LOADER_BINARY_FILE
+
+  bronze_metadata:
+    - file_path
+    - file_bytes
+    - file_size
+    - file_modification_time
+    - ingestion_timestamp
+    - pipeline_run_id
+    - source_reference
+
+  parsing:
+    stage: SILVER
+    format: CSV
+    encoding: TBD_FROM_EXPORTER_CONFIG
+    delimiter: TBD_FROM_EXPORTER_CONFIG
+    header: TBD_FROM_EXPORTER_CONFIG
+    quote_character: TBD_FROM_EXPORTER_CONFIG
+    escape_character: TBD_FROM_EXPORTER_CONFIG
+    malformed_row_action: QUARANTINE
+
+# -----------------------------------------------------------------------------
+# 4. Manifest and file-level reconciliation
+# -----------------------------------------------------------------------------
+manifest:
+  required: true
+  path_template: "s3://<bucket>/bronze/landing/manifests/manifest-<batch_id>.json"
+
+  required_attributes:
+    - batch_id
+    - heartbeat_status
+    - dataset_artifact_path
+    - record_count
+    - sha256
+    - native_format
+    - total_records
+
+  reconciliation_checks:
+
+    - rule_id: RAP_FILE_PATH_IN_MANIFEST
+      type: FILE_PATH_MATCH
+      severity: ERROR
+      action: REJECT_FILE
+      description: >
+        The landed rejected_applications file path must match the artifact path
+        recorded in the delivery manifest.
+
+    - rule_id: RAP_FILE_SHA256_MATCH
+      type: SHA256_MATCH
+      severity: ERROR
+      action: REJECT_FILE
+      description: >
+        The SHA-256 hash of the landed file must match the manifest hash.
+
+    - rule_id: RAP_FILE_RECORD_COUNT_MATCH
+      type: RECORD_COUNT_MATCH
+      severity: ERROR
+      action: REJECT_FILE
+      description: >
+        The parsed CSV record count must match the rejected_applications record
+        count declared in the delivery manifest.
+
+    - rule_id: RAP_NATIVE_FORMAT_CSV
+      type: MANIFEST_VALUE
+      parameters:
+        field: native_format
+        expected_value: CSV
+      severity: ERROR
+      action: REJECT_FILE
+      description: >
+        The manifest must identify the rejected_applications artifact as CSV.
+
+# -----------------------------------------------------------------------------
+# 5. Keys and relationships
+# -----------------------------------------------------------------------------
+keys:
+  primary_key:
+    - loanId
+
+  alternate_keys: []
+
+  foreign_keys:
+    - columns:
+        - global_id
+      reference:
+        dataset: customers
+        columns:
+          - global_id
+      nullable: true
+
+# -----------------------------------------------------------------------------
+# 6. Field-level contract
+# -----------------------------------------------------------------------------
+schema:
+  expected_column_count: 12
+  unknown_column_action: REJECT_FILE
+  missing_column_action: REJECT_FILE
+  incompatible_type_change_action: REJECT_FILE
+
+  fields:
+
+    - name: global_id
+      data_type: string
+      logical_type: person_identifier
+      required: true
+      nullable: true
+      accepted:
+        format: UUID
+      example: "65df84b8-4274-4dbd-9667-6c9967ae6538"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: RAP_GLOBAL_ID_UUID
+          type: FORMAT_IF_PRESENT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "global_id must be a valid UUID when supplied."
+
+        - rule_id: RAP_GLOBAL_ID_CUSTOMER_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: customers
+            reference_column: global_id
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            global_id must exist in customers.global_id when supplied.
+
+    - name: loanId
+      data_type: string
+      logical_type: rejected_loan_application_identifier
+      required: true
+      nullable: false
+      accepted:
+        format: UUID
+      example: "feab9fdb-5040-4294-baf7-30c5a9518ec3"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: RAP_LOAN_ID_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "loanId must always be present."
+
+        - rule_id: RAP_LOAN_ID_UUID
+          type: FORMAT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "loanId must be a valid UUID."
+
+    - name: requestedAmount
+      data_type: string
+      logical_type: decimal_amount
+      required: true
+      nullable: true
+      accepted:
+        currency: AUD
+        min_exclusive: 0
+      example: "22000.00"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: RAP_REQUESTED_AMOUNT_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            requestedAmount must be parseable as a decimal amount when supplied.
+
+        - rule_id: RAP_REQUESTED_AMOUNT_POSITIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min_exclusive: 0
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            requestedAmount must be greater than zero when supplied.
+
+    - name: applicationDate
+      data_type: string
+      logical_type: date
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_DATE
+      example: "2026-01-18"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: LOAN_APPLICATION_ACTIVITY_METADATA
+        handling: RESTRICT_OR_GENERALISE
+      quality_rules:
+        - rule_id: RAP_APPLICATION_DATE_PARSEABLE
+          type: PARSEABLE_DATE_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            applicationDate must be parseable as a date when supplied.
+
+    - name: riskScore
+      data_type: string
+      logical_type: lending_risk_score
+      required: true
+      nullable: true
+      accepted:
+        distribution:
+          family: NORMAL
+          mean: 600
+          standard_deviation: 80
+        hard_range_status: NOT_DOCUMENTED
+      example: "612"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: CREDIT_RISK_INFORMATION
+        handling: BANKER_ONLY_OR_REDACT
+      quality_rules:
+        - rule_id: RAP_RISK_SCORE_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            riskScore must be parseable as a numeric value when supplied.
+
+    - name: debtToIncomeRatio
+      data_type: string
+      logical_type: percentage
+      required: true
+      nullable: true
+      accepted:
+        distribution:
+          family: NORMAL
+          mean: 22.0
+          standard_deviation: 8.0
+        hard_range_status: NOT_DOCUMENTED
+      example: "24.50"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: DEBT_CAPACITY_INFORMATION
+        handling: BANKER_ONLY_OR_REDACT
+      quality_rules:
+        - rule_id: RAP_DTI_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            debtToIncomeRatio must be parseable as a numeric value when supplied.
+
+    - name: rejectionReason
+      data_type: string
+      logical_type: rejected_application_reason
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - Debt-to-income too high
+          - Insufficient credit history
+          - Employment not verified
+          - High credit utilization
+          - Too many recent inquiries
+      example: "Employment not verified"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: CREDIT_DECISION_REASON
+        handling: BANKER_ONLY_OR_GOVERNED_CUSTOMER_SUMMARY
+      quality_rules:
+        - rule_id: RAP_REJECTION_REASON_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "rejectionReason must always be present."
+
+        - rule_id: RAP_REJECTION_REASON_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - Debt-to-income too high
+              - Insufficient credit history
+              - Employment not verified
+              - High credit utilization
+              - Too many recent inquiries
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            rejectionReason must be one of the five documented source values.
+
+    - name: applicationTitle
+      data_type: string
+      logical_type: rejected_application_title
+      required: true
+      nullable: true
+      accepted:
+        min_length: 1
+        exact_max_length_status: NOT_DOCUMENTED
+      example: "Loan application for household expenses."
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: LOAN_APPLICATION_FREE_TEXT
+        handling: REDACT_OR_BANKER_ONLY
+      quality_rules:
+        - rule_id: RAP_APPLICATION_TITLE_NON_BLANK
+          type: NON_BLANK_IF_PRESENT
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: >
+            applicationTitle must not be blank when supplied.
+
+    - name: zipCode
+      data_type: string
+      logical_type: australian_postcode
+      required: true
+      nullable: true
+      accepted:
+        pattern_status: TBD_FROM_GENERATOR_OUTPUT
+        expected_representation: AUSTRALIAN_POSTCODE
+      example: "3000"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: APPROXIMATE_LOCATION_INFORMATION
+        handling: GENERALISE_OR_RESTRICT
+      quality_rules:
+        - rule_id: RAP_ZIP_CODE_NON_BLANK
+          type: NON_BLANK_IF_PRESENT
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: >
+            zipCode must not be blank when supplied.
+
+        - rule_id: RAP_ZIP_CODE_PATTERN_REVIEW
+          type: FORMAT_REVIEW_PENDING
+          parameters:
+            expected_representation: AUSTRALIAN_POSTCODE
+            status: TBD_FROM_GENERATOR_OUTPUT
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: >
+            The exact postcode formatting rule must be confirmed from generated
+            output before the contract is promoted to APPROVED.
+
+    - name: state
+      data_type: string
+      logical_type: australian_state_or_territory_code
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - NSW
+          - VIC
+          - QLD
+          - WA
+          - SA
+          - TAS
+          - ACT
+          - NT
+      example: "VIC"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: APPROXIMATE_LOCATION_INFORMATION
+        handling: APPROVED_CONTEXT_ONLY
+      quality_rules:
+        - rule_id: RAP_STATE_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - NSW
+              - VIC
+              - QLD
+              - WA
+              - SA
+              - TAS
+              - ACT
+              - NT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            state must be a supported Australian state or territory code.
+
+    - name: employmentLength
+      data_type: string
+      logical_type: employment_length
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - "< 1 year"
+          - "1 year"
+          - "2 years"
+          - "3 years"
+          - "4 years"
+          - "5 years"
+          - "6 years"
+          - "7 years"
+          - "8 years"
+          - "9 years"
+          - "10+ years"
+      example: "5 years"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: EMPLOYMENT_INFORMATION
+        handling: GENERALISE_OR_RESTRICT
+      quality_rules:
+        - rule_id: RAP_EMPLOYMENT_LENGTH_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - "< 1 year"
+              - "1 year"
+              - "2 years"
+              - "3 years"
+              - "4 years"
+              - "5 years"
+              - "6 years"
+              - "7 years"
+              - "8 years"
+              - "9 years"
+              - "10+ years"
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            employmentLength must use the same documented values as
+            accepted_loans.empLength.
+
+    - name: policyCode
+      data_type: string
+      logical_type: lending_policy_code
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - PC1
+      example: "PC1"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: RAP_POLICY_CODE_CONSTANT
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - PC1
+          severity: ERROR
+          action: QUARANTINE
+          description: "policyCode must always equal PC1."
+
+# -----------------------------------------------------------------------------
+# 7. Dataset-level quality rules
+# -----------------------------------------------------------------------------
+dataset_quality_rules:
+
+  - rule_id: RAP_LOAN_ID_UNIQUE
+    type: UNIQUE
+    columns:
+      - loanId
+    severity: ERROR
+    action: QUARANTINE
+    description: "loanId must be unique within the parsed file."
+
+  - rule_id: RAP_CUSTOMER_LINK_PRESENT
+    type: NOT_NULL
+    columns:
+      - global_id
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A rejected-application record should identify its customer. The physical
+      schema currently permits global_id to be null.
+
+  - rule_id: RAP_APPLICATION_DATE_NOT_IN_FUTURE
+    type: DATE_NOT_IN_FUTURE
+    columns:
+      - applicationDate
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      applicationDate should not be later than the file processing date.
+
+  - rule_id: RAP_CORE_DECISION_FIELDS_PRESENT
+    type: ALL_NOT_NULL
+    columns:
+      - requestedAmount
+      - applicationDate
+      - riskScore
+      - debtToIncomeRatio
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A useful rejected-application record should normally include the requested
+      amount, date, risk score, and debt-to-income ratio. The physical schema
+      permits these values to be null.
+
+  - rule_id: RAP_STATE_DISTRIBUTION_MONITORING
+    type: CATEGORICAL_DISTRIBUTION_TOLERANCE
+    parameters:
+      column: state
+      expected_ratios:
+        NSW: 0.32
+        VIC: 0.26
+        QLD: 0.20
+        WA: 0.12
+        SA: 0.06
+        TAS: 0.02
+        ACT: 0.01
+        NT: 0.01
+      absolute_tolerance: 0.12
+      comparison_scope: COMPLETE_FILE
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      State proportions should remain reasonably close to the customer-state
+      distribution in a complete SCALE=1 file.
+
+  - rule_id: RAP_RISK_SCORE_DISTRIBUTION_MONITORING
+    type: NUMERIC_DISTRIBUTION_MONITORING
+    parameters:
+      column: riskScore
+      parse_as: DECIMAL
+      expected_distribution:
+        family: NORMAL
+        mean: 600
+        standard_deviation: 80
+      comparison_scope: COMPLETE_FILE
+      exact_test_thresholds_status: TBD_FROM_ANALYTICAL_IMPLEMENTATION
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      riskScore should remain reasonably close to the configured normal
+      distribution in a complete file.
+
+  - rule_id: RAP_DTI_DISTRIBUTION_MONITORING
+    type: NUMERIC_DISTRIBUTION_MONITORING
+    parameters:
+      column: debtToIncomeRatio
+      parse_as: DECIMAL
+      expected_distribution:
+        family: NORMAL
+        mean: 22.0
+        standard_deviation: 8.0
+      comparison_scope: COMPLETE_FILE
+      exact_test_thresholds_status: TBD_FROM_ANALYTICAL_IMPLEMENTATION
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      debtToIncomeRatio should remain reasonably close to the configured normal
+      distribution in a complete file.
+
+  - rule_id: RAP_REJECTION_REASON_RISK_ALIGNMENT_REVIEW
+    type: REFERENCE_MAPPING_PENDING
+    parameters:
+      selector_columns:
+        - riskScore
+        - debtToIncomeRatio
+        - employmentLength
+      target_column: rejectionReason
+      status: NOT_DOCUMENTED_BY_SOURCE
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      The source provides rejection-reason values but does not document a
+      deterministic mapping from risk indicators to a reason. The contract must
+      not infer or recreate underwriting logic.
+
+  - rule_id: RAP_SENSITIVE_FIELD_LEAKAGE
+    type: PROHIBITED_RAW_FIELDS_IN_AI_OUTPUT
+    parameters:
+      fields:
+        - requestedAmount
+        - riskScore
+        - debtToIncomeRatio
+        - rejectionReason
+        - applicationTitle
+        - zipCode
+        - employmentLength
+    severity: ERROR
+    action: BLOCK_AI_OUTPUT
+    description: >
+      Raw financial, risk, decision, free-text, location, and employment fields
+      must not appear in unrestricted AI-ready output.
+
+  - rule_id: RAP_EXPECTED_SCALE_ONE_RECORD_COUNT
+    type: RECORD_COUNT_EXPECTATION
+    parameters:
+      expected: 250
+      applies_when:
+        scale: 1
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      At SCALE=1, the rejected_applications extract is expected to contain 250 records.
+
+# -----------------------------------------------------------------------------
+# 8. File freshness and duplicate-delivery controls
+# -----------------------------------------------------------------------------
+file_quality_rules:
+
+  - rule_id: RAP_FILE_NON_EMPTY
+    type: FILE_SIZE_MIN
+    parameters:
+      min_bytes: 1
+    severity: ERROR
+    action: REJECT_FILE
+    description: "The delivered CSV file must not be empty."
+
+  - rule_id: RAP_EXACT_COLUMN_COUNT
+    type: EXACT_COLUMN_COUNT
+    parameters:
+      expected: 12
+    severity: ERROR
+    action: REJECT_FILE
+    description: >
+      The parsed CSV file must contain exactly twelve physical columns.
+
+  - rule_id: RAP_DUPLICATE_FILE_HASH
+    type: DUPLICATE_FILE_HASH
+    parameters:
+      hash_field: sha256
+      scope: rejected_applications
+    severity: WARNING
+    action: SKIP_DUPLICATE_DELIVERY
+    description: >
+      A file with an already processed SHA-256 hash should be treated as a
+      duplicate delivery rather than reprocessed as new data.
+
+  - rule_id: RAP_FILE_FRESHNESS
+    type: FILE_MODIFICATION_AGE
+    parameters:
+      modification_time_field: file_modification_time
+      max_age: TBD
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      The file freshness threshold must be agreed before the contract is
+      promoted to APPROVED.
+
+# -----------------------------------------------------------------------------
+# 9. Derived checks for Silver and AI-ready context
+# -----------------------------------------------------------------------------
+derived_quality_checks:
+
+  - rule_id: RAP_REQUESTED_AMOUNT_BUCKET
+    type: PRIVACY_TRANSFORMATION
+    source_field: requestedAmount
+    output_field: requested_amount_masked
+    description: >
+      Silver must convert requestedAmount into an approved monetary range bucket.
+
+  - rule_id: RAP_REJECTED_APPLICATION_PROJECTION
+    type: APPROVED_CONTEXT_PROJECTION
+    approved_fields:
+      - applicationTitle
+      - applicationDate
+    banker_only_fields:
+      - rejectionReason
+    masked_fields:
+      - requestedAmount
+    prohibited_fields:
+      - riskScore
+      - debtToIncomeRatio
+      - zipCode
+      - employmentLength
+    description: >
+      Silver may expose a restricted rejected-application summary after quality
+      validation, masking, access checks, and lineage enrichment.
+
+  - rule_id: RAP_CUSTOMER_SAFE_REJECTION_REASON
+    type: GOVERNED_REASON_TRANSLATION
+    source_field: rejectionReason
+    output_field: customer_safe_rejection_reason
+    translation_catalogue_status: TBD_GOVERNED_COPY
+    description: >
+      Customer-facing output may use only an approved customer-safe explanation
+      of a rejection reason. Raw decision logic and risk indicators remain
+      restricted.
+
+  - rule_id: RAP_FILE_LINEAGE_PROJECTION
+    type: LINEAGE_ENRICHMENT
+    output_fields:
+      - source_dataset
+      - source_file_path
+      - source_file_sha256
+      - source_record_id
+      - pipeline_run_id
+      - processed_at
+      - dq_status
+      - masking_status
+      - context_version
+    description: >
+      Curated records must retain enough file and record lineage for answer
+      verification and audit.
+
+# -----------------------------------------------------------------------------
+# 10. Notes for the team
+# -----------------------------------------------------------------------------
+notes:
+  - >
+    This contract follows the authoritative physical source schema and includes
+    all twelve fields defined for rejected_applications.
+  - >
+    rejected_applications is delivered as a FILE source. Bronze stores the CSV
+    bytes and file metadata, while parsing and schema enforcement occur later.
+  - >
+    riskScore and debtToIncomeRatio are source risk indicators. The source
+    documents their statistical distributions but does not define hard ranges,
+    so this contract validates numeric parsing and monitors distributions
+    without inventing record-level limits.
+  - >
+    The source lists five rejection reasons but does not document deterministic
+    underwriting logic. The contract must not infer why a particular risk score
+    or debt-to-income ratio produced a specific reason.
+  - >
+    rejectionReason is banker-only in the Silver design. Customer-facing use
+    requires an approved governed translation rather than raw internal decision
+    content.
+  - >
+    applicationTitle is generated free text and may reveal sensitive application
+    purpose or personal context. It must be redacted or restricted before AI use.
+  - >
+    The exact postcode pattern, CSV parser profile, file freshness SLA, filename
+    convention, and customer-safe reason catalogue remain TBD.
