@@ -1,0 +1,743 @@
+# =============================================================================
+# DATA CONTRACT: service_cases
+# =============================================================================
+# Purpose:
+# - Stores customer service and CRM case-management records.
+# - Tracks the case type, subject, lifecycle status, priority, ownership team,
+#   resolution details, organisation context, application context, and SLA.
+#
+# Important relationships:
+# - One customer may have multiple service cases.
+# - Approximately thirty-five percent of cases are linked to organisations.
+# - Approximately forty percent of cases are linked to loan applications.
+# - service_case_events uses caseId to record the activity history of each case.
+#
+# Quick guide:
+# - required: the source column must exist.
+# - nullable: the physical source value may be null.
+# - ERROR + QUARANTINE: do not send the record to the trusted output.
+# - WARNING + ALLOW_WITH_WARNING: keep the record but report the issue.
+# =============================================================================
+
+contract_version: "1.0.0"
+contract_id: "source.database.service_cases"
+
+# -----------------------------------------------------------------------------
+# 1. Basic dataset information
+# -----------------------------------------------------------------------------
+dataset:
+  name: service_cases
+  domain: CUSTOMER_SERVICE
+  description: >
+    Source dataset containing customer service cases with customer, optional
+    organisation, and optional loan-application context. Each record includes
+    case classification, subject, lifecycle status, priority, timestamps,
+    resolution details, assigned team, and a priority-derived SLA deadline.
+  expected_rows_scale_1: 800
+  physical_schema_ref: "dev-tools/datagen/output/master-schema.json#/service_cases"
+
+# -----------------------------------------------------------------------------
+# 2. Ownership and contract lifecycle
+# -----------------------------------------------------------------------------
+lifecycle:
+  # DRAFT -> IN_REVIEW -> APPROVED -> DEPRECATED / RETIRED
+  status: DRAFT
+  owner: TBD
+  approver: TBD
+  effective_from: null
+
+# -----------------------------------------------------------------------------
+# 3. Source and ingestion information
+# -----------------------------------------------------------------------------
+source:
+  category: DATABASE
+  system_type: POSTGRESQL
+  source_object: "public.service_cases"
+  authoritative: true
+
+ingestion:
+  mechanism: DEBEZIUM_CDC
+  transport: APACHE_KAFKA
+
+  landing:
+    format: JSONL
+    path_template: "s3://<bucket>/bronze/landing/cdc/service_cases/"
+    immutable: true
+
+  bronze_target: "bronze.cdc_changes"
+
+  cdc:
+    supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+
+    ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+
+# -----------------------------------------------------------------------------
+# 4. Keys and relationships
+# -----------------------------------------------------------------------------
+keys:
+  primary_key:
+    - caseId
+
+  alternate_keys: []
+
+  foreign_keys:
+    - columns:
+        - global_id
+      reference:
+        dataset: customers
+        columns:
+          - global_id
+      nullable: true
+
+    - columns:
+        - customerId
+      reference:
+        dataset: customers
+        columns:
+          - customerId
+      nullable: true
+
+    - columns:
+        - organisationId
+      reference:
+        dataset: organisations
+        columns:
+          - organisationId
+      nullable: true
+
+    - columns:
+        - applicationId
+      reference:
+        dataset: loan_applications
+        columns:
+          - applicationId
+      nullable: true
+
+# -----------------------------------------------------------------------------
+# 5. Field-level contract
+# -----------------------------------------------------------------------------
+schema:
+  fields:
+
+    - name: global_id
+      data_type: string
+      logical_type: person_identifier
+      required: true
+      nullable: true
+      accepted:
+        format: UUID
+      example: "65df84b8-4274-4dbd-9667-6c9967ae6538"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: SVC_GLOBAL_ID_UUID
+          type: FORMAT_IF_PRESENT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "global_id must be a valid UUID when supplied."
+
+        - rule_id: SVC_GLOBAL_ID_CUSTOMER_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: customers
+            reference_column: global_id
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            global_id must exist in customers.global_id when supplied.
+
+    - name: caseId
+      data_type: string
+      logical_type: service_case_identifier
+      required: true
+      nullable: false
+      accepted:
+        format: UUID
+      example: "aa1718d4-623d-4da0-a3d9-b1f2df832cd8"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: SVC_CASE_ID_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "caseId must always be present."
+
+        - rule_id: SVC_CASE_ID_UUID
+          type: FORMAT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "caseId must be a valid UUID."
+
+    - name: customerId
+      data_type: string
+      logical_type: customer_identifier
+      required: true
+      nullable: true
+      accepted:
+        regex: '^CUST-\d{5}$'
+      example: "CUST-00042"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: SVC_CUSTOMER_ID_PATTERN
+          type: REGEX_IF_PRESENT
+          parameters:
+            regex: '^CUST-\d{5}$'
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            customerId must follow the CUST-00000 pattern when supplied.
+
+        - rule_id: SVC_CUSTOMER_ID_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: customers
+            reference_column: customerId
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            customerId must exist in customers.customerId when supplied.
+
+    - name: caseType
+      data_type: string
+      logical_type: service_case_type
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - inquiry
+          - request
+          - complaint
+          - dispute
+      example: "complaint"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: SVC_CASE_TYPE_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - inquiry
+              - request
+              - complaint
+              - dispute
+          severity: ERROR
+          action: QUARANTINE
+          description: "caseType must be one of the supported source values."
+
+    - name: subject
+      data_type: string
+      logical_type: service_case_subject
+      required: true
+      nullable: true
+      accepted:
+        min_length: 1
+        max_length: 500
+      example: "Customer disputes an unfamiliar card transaction."
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: CUSTOMER_SERVICE_FREE_TEXT
+        handling: REDACT_OR_BANKER_ONLY
+      quality_rules:
+        - rule_id: SVC_SUBJECT_NON_BLANK
+          type: NON_BLANK_IF_PRESENT
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: "subject must not be blank when supplied."
+
+    - name: status
+      data_type: string
+      logical_type: service_case_status
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - resolved
+          - closed
+          - open
+          - in_progress
+      example: "open"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: SVC_STATUS_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - resolved
+              - closed
+              - open
+              - in_progress
+          severity: ERROR
+          action: QUARANTINE
+          description: "status must be one of the supported lifecycle values."
+
+    - name: priority
+      data_type: string
+      logical_type: service_case_priority
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - critical
+          - high
+          - medium
+          - low
+      example: "high"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: SVC_PRIORITY_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - critical
+              - high
+              - medium
+              - low
+          severity: ERROR
+          action: QUARANTINE
+          description: "priority must be one of the supported source values."
+
+    - name: createdAt
+      data_type: string
+      logical_type: timestamp
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_TIMESTAMP
+      example: "2026-05-12T10:15:00Z"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: CUSTOMER_SERVICE_ACTIVITY_METADATA
+        handling: RESTRICT_OR_GENERALISE
+      quality_rules:
+        - rule_id: SVC_CREATED_AT_PARSEABLE
+          type: PARSEABLE_TIMESTAMP_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "createdAt must be parseable as a timestamp."
+
+    - name: resolvedAt
+      data_type: string
+      logical_type: timestamp
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_TIMESTAMP
+      example: "2026-05-15T14:40:00Z"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: CUSTOMER_SERVICE_ACTIVITY_METADATA
+        handling: RESTRICT_OR_GENERALISE
+      quality_rules:
+        - rule_id: SVC_RESOLVED_AT_PARSEABLE
+          type: PARSEABLE_TIMESTAMP_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "resolvedAt must be parseable as a timestamp."
+
+    - name: resolutionSummary
+      data_type: string
+      logical_type: service_case_resolution_summary
+      required: true
+      nullable: true
+      accepted:
+        min_length: 1
+        max_length: 4000
+      example: "The disputed transaction was investigated and the customer was advised."
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: CUSTOMER_SERVICE_FREE_TEXT
+        handling: REDACT_OR_BANKER_ONLY
+      quality_rules:
+        - rule_id: SVC_RESOLUTION_SUMMARY_NON_BLANK
+          type: NON_BLANK_IF_PRESENT
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: >
+            resolutionSummary must not be blank when supplied.
+
+    - name: assignedTeam
+      data_type: string
+      logical_type: service_team
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - Support
+          - Complaints
+          - Escalations
+          - Fraud
+      example: "Complaints"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: SVC_ASSIGNED_TEAM_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - Support
+              - Complaints
+              - Escalations
+              - Fraud
+          severity: ERROR
+          action: QUARANTINE
+          description: "assignedTeam must be one of the supported source teams."
+
+    - name: organisationId
+      data_type: string
+      logical_type: organisation_identifier
+      required: true
+      nullable: true
+      accepted:
+        regex: '^ORG-\d{5}$'
+      example: "ORG-00042"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: SVC_ORGANISATION_ID_PATTERN
+          type: REGEX_IF_PRESENT
+          parameters:
+            regex: '^ORG-\d{5}$'
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            organisationId must follow the ORG-00000 pattern when supplied.
+
+        - rule_id: SVC_ORGANISATION_ID_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: organisations
+            reference_column: organisationId
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            organisationId must exist in organisations.organisationId when supplied.
+
+    - name: applicationId
+      data_type: string
+      logical_type: loan_application_identifier
+      required: true
+      nullable: true
+      accepted:
+        regex: '^Application_\d{9}$'
+      example: "Application_000000042"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: SVC_APPLICATION_ID_PATTERN
+          type: REGEX_IF_PRESENT
+          parameters:
+            regex: '^Application_\d{9}$'
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            applicationId must follow the Application_000000000 pattern when supplied.
+
+        - rule_id: SVC_APPLICATION_ID_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: loan_applications
+            reference_column: applicationId
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            applicationId must exist in loan_applications.applicationId when supplied.
+
+    - name: slaDeadline
+      data_type: string
+      logical_type: timestamp
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_TIMESTAMP
+      example: "2026-05-15T10:15:00Z"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: SVC_SLA_DEADLINE_PARSEABLE
+          type: PARSEABLE_TIMESTAMP_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "slaDeadline must be parseable as a timestamp."
+
+# -----------------------------------------------------------------------------
+# 6. Dataset-level quality rules
+# -----------------------------------------------------------------------------
+dataset_quality_rules:
+
+  - rule_id: SVC_CASE_ID_UNIQUE
+    type: UNIQUE
+    columns:
+      - caseId
+    severity: ERROR
+    action: QUARANTINE
+    description: "caseId must be unique across the dataset."
+
+  - rule_id: SVC_CUSTOMER_LINK_PRESENT
+    type: ALL_NOT_NULL
+    columns:
+      - global_id
+      - customerId
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A service case should identify its customer using both global_id and
+      customerId. The physical schema currently permits null values.
+
+  - rule_id: SVC_CUSTOMER_IDENTIFIERS_CONSISTENT
+    type: REFERENCE_PAIR_CONSISTENT
+    parameters:
+      reference_dataset: customers
+      source_columns:
+        - global_id
+        - customerId
+      reference_columns:
+        - global_id
+        - customerId
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      global_id and customerId must refer to the same customer record.
+
+  - rule_id: SVC_APPLICATION_CUSTOMER_CONSISTENT
+    type: REFERENCE_TRIPLE_CONSISTENT
+    parameters:
+      reference_dataset: loan_applications
+      source_columns:
+        - applicationId
+        - global_id
+        - customerId
+      reference_columns:
+        - applicationId
+        - global_id
+        - customerId
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      When applicationId is populated, the case and application must identify
+      the same customer.
+
+  - rule_id: SVC_ORGANISATION_CUSTOMER_CONTEXT
+    type: REFERENCE_RELATIONSHIP_EXISTS_IF_PRESENT
+    parameters:
+      when_column: organisationId
+      relationship_dataset: organisation_party_relationships
+      source_mapping:
+        global_id: global_id
+        organisationId: organisationId
+      required_relationship_status:
+        column: isActive
+        equals: true
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      When organisationId is populated, the customer should normally have an
+      active relationship with that organisation.
+
+  - rule_id: SVC_APPLICATION_ORGANISATION_CONSISTENT
+    type: REFERENCE_COLUMN_EQUAL_IF_BOTH_PRESENT
+    parameters:
+      reference_dataset: loan_applications
+      source_key:
+        applicationId: applicationId
+      source_column: organisationId
+      reference_column: organisationId
+      ignore_nulls: true
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      When both applicationId and organisationId are populated, the case
+      organisation should normally match the application organisation.
+
+  - rule_id: SVC_RESOLVED_NOT_BEFORE_CREATED
+    type: TIMESTAMP_COLUMN_COMPARISON
+    parameters:
+      left_column: resolvedAt
+      operator: GREATER_THAN_OR_EQUAL
+      right_column: createdAt
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: "resolvedAt cannot be earlier than createdAt."
+
+  - rule_id: SVC_OPEN_CASE_RESOLUTION_FIELDS_NULL
+    type: CONDITIONAL_ALL_NULL_FOR_VALUES
+    parameters:
+      source_column: status
+      source_values:
+        - open
+        - in_progress
+      target_columns:
+        - resolvedAt
+        - resolutionSummary
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      Open or in-progress cases must not contain resolution timestamps or
+      resolution summaries in the current source model.
+
+  - rule_id: SVC_COMPLETED_CASE_RESOLUTION_FIELDS_PRESENT
+    type: CONDITIONAL_ALL_NOT_NULL_FOR_VALUES
+    parameters:
+      source_column: status
+      source_values:
+        - resolved
+        - closed
+      target_columns:
+        - resolvedAt
+        - resolutionSummary
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      Resolved or closed cases must contain both resolvedAt and
+      resolutionSummary.
+
+  - rule_id: SVC_CREATED_AT_NOT_IN_FUTURE
+    type: TIMESTAMP_NOT_IN_FUTURE
+    columns:
+      - createdAt
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      createdAt cannot be later than the pipeline processing timestamp.
+
+  - rule_id: SVC_SLA_DEADLINE_AFTER_CREATION
+    type: TIMESTAMP_COLUMN_COMPARISON
+    parameters:
+      left_column: slaDeadline
+      operator: GREATER_THAN
+      right_column: createdAt
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: "slaDeadline must be later than createdAt."
+
+  - rule_id: SVC_SLA_DEADLINE_FORMULA
+    type: CONDITIONAL_TIMESTAMP_OFFSET_MATCH
+    parameters:
+      start_column: createdAt
+      target_column: slaDeadline
+      selector_column: priority
+      offset_days:
+        critical: 1
+        high: 3
+        medium: 5
+        low: 10
+      tolerance_seconds: 1
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      slaDeadline must equal createdAt plus the priority-specific SLA:
+      critical one day, high three days, medium five days, or low ten days.
+
+  - rule_id: SVC_SLA_DEADLINE_PRESENT
+    type: NOT_NULL
+    columns:
+      - slaDeadline
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Every service case should contain a priority-derived SLA deadline. The
+      physical schema currently permits slaDeadline to be null.
+
+  - rule_id: SVC_POSSIBLE_DUPLICATE_CASE
+    type: COMPOSITE_DUPLICATE_DETECTION
+    columns:
+      - global_id
+      - caseType
+      - subject
+      - createdAt
+    parameters:
+      ignore_nulls: true
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Cases with the same customer, type, subject, and creation timestamp may
+      represent duplicate ingestion.
+
+# -----------------------------------------------------------------------------
+# 7. Derived checks for Silver and monitoring
+# -----------------------------------------------------------------------------
+derived_quality_checks:
+
+  - rule_id: SVC_SLA_BREACH_DERIVATION
+    type: DERIVED_BOOLEAN
+    expression: >
+      CURRENT_TIMESTAMP > slaDeadline
+      AND status IN ('open', 'in_progress')
+    output_field: is_sla_breached
+    description: >
+      Silver may derive is_sla_breached for open and in-progress cases whose
+      SLA deadline has passed.
+
+  - rule_id: SVC_BUSINESS_CASE_DERIVATION
+    type: DERIVED_BOOLEAN
+    expression: "organisationId IS NOT NULL"
+    output_field: is_business_case
+    description: >
+      Silver may derive is_business_case from the presence of organisationId.
+
+# -----------------------------------------------------------------------------
+# 8. Notes for the team
+# -----------------------------------------------------------------------------
+notes:
+  - >
+    This contract follows the authoritative physical source schema and includes
+    all fourteen fields defined for service_cases.
+  - >
+    subject and resolutionSummary are unrestricted free-text fields and may
+    contain names, account details, application details, or other sensitive
+    information. They must be redacted or restricted before AI consumption.
+  - >
+    The source assigns SLA deadlines from priority: critical plus one day, high
+    plus three days, medium plus five days, and low plus ten days.
+  - >
+    The Silver design derives is_sla_breached using the SLA deadline and the
+    open or in-progress status values.
+  - >
+    Application and organisation consistency rules preserve customer-centric
+    context when a case is linked to a loan application or business entity.
+  - >
+    The maximum lengths for subject and resolutionSummary are proposed contract
+    limits because the source schema does not define exact maximum lengths.
