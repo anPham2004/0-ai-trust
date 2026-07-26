@@ -1,0 +1,492 @@
+# =============================================================================
+# DATA CONTRACT: organisations
+# =============================================================================
+# Quick guide:
+# - required: the source column must exist.
+# - nullable: the value may be null.
+# - ERROR + QUARANTINE: the record must not continue to trusted output.
+# - WARNING + ALLOW_WITH_WARNING: keep the record but report the issue.
+# =============================================================================
+
+contract_version: "1.0.0"
+contract_id: "source.database.organisations"
+
+# -----------------------------------------------------------------------------
+# 1. Dataset basic information
+# -----------------------------------------------------------------------------
+dataset:
+  name: organisations
+  domain: ORGANISATION
+  description: >
+    Master source dataset for Australian business entities. Each organisation
+    has an organisationId and may be linked through global_id to a person in
+    the customers dataset who acts as the organisation's agent.
+  expected_rows_scale_1: 500
+  physical_schema_ref: "dev-tools/datagen/output/master-schema.json#/organisations"
+
+# -----------------------------------------------------------------------------
+# 2. Ownership and contract status
+# -----------------------------------------------------------------------------
+lifecycle:
+  status: DRAFT
+  owner: TBD
+  approver: TBD
+  effective_from: null
+
+# -----------------------------------------------------------------------------
+# 3. Source and ingestion
+# -----------------------------------------------------------------------------
+source:
+  category: DATABASE
+  system_type: POSTGRESQL
+  source_object: "public.organisations"
+  authoritative: true
+
+ingestion:
+  mechanism: DEBEZIUM_CDC
+  transport: APACHE_KAFKA
+
+  landing:
+    format: JSONL
+    path_template: "s3://<bucket>/bronze/landing/cdc/organisations/"
+    immutable: true
+
+  bronze_target: "bronze.cdc_changes"
+
+  cdc:
+    supported_operations: [SNAPSHOT, INSERT, UPDATE, DELETE]
+    ordering_metadata: [source_lsn, kafka_partition, kafka_offset]
+
+# -----------------------------------------------------------------------------
+# 4. Keys
+# -----------------------------------------------------------------------------
+keys:
+  primary_key: [organisationId]
+
+  alternate_keys: [abn, acn]
+
+  foreign_keys:
+    - columns: [global_id]
+      reference:
+        dataset: customers
+        columns: [global_id]
+      nullable: true
+
+# -----------------------------------------------------------------------------
+# 5. Field-level contract
+# -----------------------------------------------------------------------------
+schema:
+  fields:
+    - name: global_id
+      data_type: string
+      logical_type: person_identifier
+      required: true
+      nullable: true
+      accepted:
+        format: UUID
+      example: "65df84b8-4274-4dbd-9667-6c9967ae6538"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: ORG_GLOBAL_ID_UUID
+          type: FORMAT_IF_PRESENT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "global_id must be a valid UUID when supplied."
+        - rule_id: ORG_GLOBAL_ID_CUSTOMER_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: customers
+            reference_column: global_id
+          severity: ERROR
+          action: QUARANTINE
+          description: "global_id must exist in customers.global_id when supplied."
+
+    - name: organisationId
+      data_type: string
+      logical_type: organisation_identifier
+      required: true
+      nullable: false
+      accepted:
+        regex: '^ORG-\d{5}$'
+      example: "ORG-00042"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: ORG_ID_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "organisationId must always be present."
+        - rule_id: ORG_ID_PATTERN
+          type: REGEX
+          parameters:
+            regex: '^ORG-\d{5}$'
+          severity: ERROR
+          action: QUARANTINE
+          description: "organisationId must follow the ORG-00000 pattern."
+
+    - name: abn
+      data_type: string
+      logical_type: australian_business_number
+      required: true
+      nullable: true
+      accepted:
+        regex: '^\d{2}\s\d{3}\s\d{3}\s\d{3}$'
+      example: "12 345 678 901"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: false
+        handling: MASK_LAST_3_VISIBLE
+      quality_rules:
+        - rule_id: ORG_ABN_PATTERN
+          type: REGEX_IF_PRESENT
+          parameters:
+            regex: '^\d{2}\s\d{3}\s\d{3}\s\d{3}$'
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: "abn should follow the expected Australian Business Number format."
+
+    - name: acn
+      data_type: string
+      logical_type: australian_company_number
+      required: true
+      nullable: true
+      accepted:
+        regex: '^\d{3}\s\d{3}\s\d{3}$'
+      example: "123 456 789"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: false
+        handling: MASK_LAST_3_VISIBLE
+      quality_rules:
+        - rule_id: ORG_ACN_PATTERN
+          type: REGEX_IF_PRESENT
+          parameters:
+            regex: '^\d{3}\s\d{3}\s\d{3}$'
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: "acn should follow the expected Australian Company Number format."
+
+    - name: businessName
+      data_type: string
+      logical_type: organisation_name
+      required: true
+      nullable: true
+      accepted:
+        min_length: 1
+        max_length: 200
+      example: "Harbour Trading"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: ORG_BUSINESS_NAME_NON_BLANK
+          type: NON_BLANK_IF_PRESENT
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: "businessName must not be blank when supplied."
+
+    - name: legalName
+      data_type: string
+      logical_type: legal_organisation_name
+      required: true
+      nullable: true
+      accepted:
+        min_length: 1
+        max_length: 250
+      example: "Harbour Trading Pty Ltd"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: ORG_LEGAL_NAME_NON_BLANK
+          type: NON_BLANK_IF_PRESENT
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: "legalName must not be blank when supplied."
+
+    - name: shortName
+      data_type: string
+      logical_type: organisation_short_name
+      required: true
+      nullable: true
+      accepted:
+        min_length: 1
+        max_length: 100
+      example: "Harbour Trading"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: ORG_SHORT_NAME_NON_BLANK
+          type: NON_BLANK_IF_PRESENT
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: "shortName must not be blank when supplied."
+
+    - name: organisationType
+      data_type: string
+      logical_type: organisation_category
+      required: true
+      nullable: false
+      accepted:
+        values: [COMPANY, TRUST, PARTNERSHIP, SOLE_TRADER, OTHER]
+      example: COMPANY
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: ORG_TYPE_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values: [COMPANY, TRUST, PARTNERSHIP, SOLE_TRADER, OTHER]
+          severity: ERROR
+          action: QUARANTINE
+          description: "organisationType must be one of the supported source values."
+
+    - name: industryCode
+      data_type: string
+      logical_type: anzsic_industry_code
+      required: true
+      nullable: true
+      accepted:
+        regex: '^\d{4}$'
+        reference_set: ANZSIC
+      example: "4511"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: ORG_INDUSTRY_CODE_PATTERN
+          type: REGEX_IF_PRESENT
+          parameters:
+            regex: '^\d{4}$'
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: "industryCode should contain four digits when supplied."
+
+    - name: industryCodeVersion
+      data_type: string
+      logical_type: industry_reference_version
+      required: true
+      nullable: false
+      accepted:
+        values: [ANZSIC_2006, ANZSIC_1993]
+      example: ANZSIC_2006
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: ORG_INDUSTRY_VERSION_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values: [ANZSIC_2006, ANZSIC_1993]
+          severity: ERROR
+          action: QUARANTINE
+          description: "industryCodeVersion must be a supported ANZSIC version."
+
+    - name: establishmentDate
+      data_type: string
+      logical_type: date
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_DATE
+      example: "2008-04-21"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: ORG_ESTABLISHMENT_DATE_PARSEABLE
+          type: PARSEABLE_DATE_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "establishmentDate must be parseable as a date."
+
+    - name: lastUpdateTime
+      data_type: string
+      logical_type: timestamp
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_TIMESTAMP
+      example: "2026-06-30T14:15:00Z"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: ORG_LAST_UPDATE_PARSEABLE
+          type: PARSEABLE_TIMESTAMP_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "lastUpdateTime must be parseable as a timestamp."
+
+    - name: registeredCountry
+      data_type: string
+      logical_type: country_code
+      required: true
+      nullable: false
+      accepted:
+        values: [AUS]
+      example: AUS
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: ORG_REGISTERED_COUNTRY
+          type: ACCEPTED_VALUES
+          parameters:
+            values: [AUS]
+          severity: ERROR
+          action: QUARANTINE
+          description: "registeredCountry must be AUS in the current mock-data scope."
+
+    - name: isACNCRegistered
+      data_type: bool
+      logical_type: boolean
+      required: true
+      nullable: false
+      accepted:
+        values: [true, false]
+      example: false
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: ORG_ACNC_BOOLEAN
+          type: BOOLEAN
+          severity: ERROR
+          action: QUARANTINE
+          description: "isACNCRegistered must be a boolean value."
+
+    - name: agentFirstName
+      data_type: string
+      logical_type: person_name
+      required: true
+      nullable: true
+      accepted:
+        min_length: 1
+        max_length: 100
+      example: "Mia"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: DIRECT_IDENTIFIER
+        handling: HASH_OR_REDACT
+      quality_rules:
+        - rule_id: ORG_AGENT_FIRST_NAME_NON_BLANK
+          type: NON_BLANK_IF_PRESENT
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: "agentFirstName must not be blank when supplied."
+
+    - name: agentLastName
+      data_type: string
+      logical_type: person_name
+      required: true
+      nullable: true
+      accepted:
+        min_length: 1
+        max_length: 100
+      example: "Wilson"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: DIRECT_IDENTIFIER
+        handling: HASH_OR_REDACT
+      quality_rules:
+        - rule_id: ORG_AGENT_LAST_NAME_NON_BLANK
+          type: NON_BLANK_IF_PRESENT
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: "agentLastName must not be blank when supplied."
+
+    - name: agentRole
+      data_type: string
+      logical_type: organisation_agent_role
+      required: true
+      nullable: false
+      accepted:
+        values: [PRINCIPAL, DIRECTOR, OWNER, PARTNER, OTHER]
+      example: DIRECTOR
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: ORG_AGENT_ROLE_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values: [PRINCIPAL, DIRECTOR, OWNER, PARTNER, OTHER]
+          severity: ERROR
+          action: QUARANTINE
+          description: "agentRole must be one of the supported source values."
+
+# -----------------------------------------------------------------------------
+# 6. Dataset-level rules
+# -----------------------------------------------------------------------------
+dataset_quality_rules:
+  - rule_id: ORG_ID_UNIQUE
+    type: UNIQUE
+    columns: [organisationId]
+    severity: ERROR
+    action: QUARANTINE
+    description: "organisationId must be unique across the organisations dataset."
+
+  - rule_id: ORG_ABN_UNIQUE_IF_PRESENT
+    type: UNIQUE_IF_PRESENT
+    columns: [abn]
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: "A populated ABN should not be shared by multiple organisations."
+
+  - rule_id: ORG_ACN_UNIQUE_IF_PRESENT
+    type: UNIQUE_IF_PRESENT
+    columns: [acn]
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: "A populated ACN should not be shared by multiple organisations."
+
+  - rule_id: ORG_ESTABLISHMENT_NOT_IN_FUTURE
+    type: DATE_NOT_IN_FUTURE
+    columns: [establishmentDate]
+    severity: ERROR
+    action: QUARANTINE
+    description: "establishmentDate cannot be later than the processing date."
+
+  - rule_id: ORG_AGENT_LINK_PRESENT
+    type: NOT_NULL
+    columns: [global_id]
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      The physical schema permits a null global_id, but the business
+      description expects each organisation to have an agent.
+
+# -----------------------------------------------------------------------------
+# 7. Team notes
+# -----------------------------------------------------------------------------
+notes:
+  - "This contract describes the raw organisations source."
+  - "ABN and ACN must be masked before approved AI use."
+  - "agentFirstName and agentLastName must be hashed or redacted in Silver."
+  - >
+    The proposed name-length limits should be confirmed by the team because
+    the source schema does not define exact maximum lengths.
