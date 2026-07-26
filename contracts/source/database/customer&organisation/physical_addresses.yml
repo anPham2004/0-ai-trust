@@ -1,0 +1,486 @@
+# =============================================================================
+# DATA CONTRACT: physical_addresses
+# =============================================================================
+# Purpose:
+# - Stores physical and mailing address information for customers.
+# - Supports both CDR SimpleAddress and Australia Post PAF address formats.
+# - Allows one customer to have multiple addresses for different purposes.
+#
+# Important distinction:
+# - addressUType = simple -> the simple JSON field should be populated.
+# - addressUType = paf    -> the paf JSON field should be populated.
+#
+# Quick guide:
+# - required: the source column must exist.
+# - nullable: the field value may be null.
+# - ERROR + QUARANTINE: do not send the record to the trusted output.
+# - WARNING + ALLOW_WITH_WARNING: keep the record but report the issue.
+# =============================================================================
+
+contract_version: "1.0.0"
+contract_id: "source.database.physical_addresses"
+
+# -----------------------------------------------------------------------------
+# 1. Basic dataset information
+# -----------------------------------------------------------------------------
+dataset:
+  name: physical_addresses
+  domain: CUSTOMER_AND_ORGANISATION
+  description: >
+    Source dataset containing customer addresses. Each customer may have
+    multiple addresses with different purposes and either a CDR SimpleAddress
+    representation or an Australia Post PAF representation.
+  expected_rows_scale_1: 2500
+  physical_schema_ref: "dev-tools/datagen/output/master-schema.json#/physical_addresses"
+
+# -----------------------------------------------------------------------------
+# 2. Ownership and contract lifecycle
+# -----------------------------------------------------------------------------
+lifecycle:
+  # DRAFT -> IN_REVIEW -> APPROVED -> DEPRECATED / RETIRED
+  status: DRAFT
+  owner: TBD
+  approver: TBD
+  effective_from: null
+
+# -----------------------------------------------------------------------------
+# 3. Source and ingestion information
+# -----------------------------------------------------------------------------
+source:
+  category: DATABASE
+  system_type: POSTGRESQL
+  source_object: "public.physical_addresses"
+  authoritative: true
+
+ingestion:
+  mechanism: DEBEZIUM_CDC
+  transport: APACHE_KAFKA
+
+  landing:
+    format: JSONL
+    path_template: "s3://<bucket>/bronze/landing/cdc/physical_addresses/"
+    immutable: true
+
+  bronze_target: "bronze.cdc_changes"
+
+  cdc:
+    supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+
+    ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+
+# -----------------------------------------------------------------------------
+# 4. Keys and relationships
+# -----------------------------------------------------------------------------
+keys:
+  primary_key:
+    - addressId
+
+  alternate_keys: []
+
+  foreign_keys:
+    - columns:
+        - global_id
+      reference:
+        dataset: customers
+        columns:
+          - global_id
+      nullable: true
+
+# -----------------------------------------------------------------------------
+# 5. Field-level contract
+# -----------------------------------------------------------------------------
+schema:
+  fields:
+
+    - name: global_id
+      data_type: string
+      logical_type: person_identifier
+      required: true
+      nullable: true
+      accepted:
+        format: UUID
+      example: "65df84b8-4274-4dbd-9667-6c9967ae6538"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: ADR_GLOBAL_ID_UUID
+          type: FORMAT_IF_PRESENT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "global_id must be a valid UUID when supplied."
+
+        - rule_id: ADR_GLOBAL_ID_CUSTOMER_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: customers
+            reference_column: global_id
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            global_id must exist in customers.global_id when supplied.
+
+    - name: addressId
+      data_type: string
+      logical_type: address_identifier
+      required: true
+      nullable: false
+      accepted:
+        format: UUID
+      example: "c4e2d18a-e719-446f-9e37-2f26a8bb7cf5"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: ADR_ADDRESS_ID_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "addressId must always be present."
+
+        - rule_id: ADR_ADDRESS_ID_UUID
+          type: FORMAT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "addressId must be a valid UUID."
+
+    - name: purpose
+      data_type: string
+      logical_type: address_purpose
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - REGISTERED
+          - MAIL
+          - WORK
+          - OTHER
+      example: "REGISTERED"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: ADR_PURPOSE_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - REGISTERED
+              - MAIL
+              - WORK
+              - OTHER
+          severity: ERROR
+          action: QUARANTINE
+          description: "purpose must be one of the supported address purposes."
+
+    - name: addressUType
+      data_type: string
+      logical_type: address_representation_type
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - simple
+          - paf
+      example: "simple"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: ADR_ADDRESS_TYPE_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - simple
+              - paf
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            addressUType must identify either the simple or paf address format.
+
+    - name: addressLine1
+      data_type: string
+      logical_type: street_address
+      required: true
+      nullable: true
+      accepted:
+        min_length: 1
+        max_length: 250
+      example: "42 Harbour Street"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: PRECISE_ADDRESS_INFORMATION
+        handling: MASK_OR_REDACT
+      quality_rules:
+        - rule_id: ADR_ADDRESS_LINE_NON_BLANK
+          type: NON_BLANK_IF_PRESENT
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: "addressLine1 must not be blank when supplied."
+
+    - name: suburb
+      data_type: string
+      logical_type: suburb_name
+      required: true
+      nullable: true
+      accepted:
+        min_length: 1
+        max_length: 120
+      example: "Melbourne"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: LOCATION_INFORMATION
+        handling: GENERALISE_OR_RESTRICT
+      quality_rules:
+        - rule_id: ADR_SUBURB_NON_BLANK
+          type: NON_BLANK_IF_PRESENT
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: "suburb must not be blank when supplied."
+
+    - name: state
+      data_type: string
+      logical_type: australian_state_code
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - NSW
+          - VIC
+          - QLD
+          - WA
+          - SA
+          - TAS
+          - ACT
+          - NT
+      example: "VIC"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: ADR_STATE_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - NSW
+              - VIC
+              - QLD
+              - WA
+              - SA
+              - TAS
+              - ACT
+              - NT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            state must be a supported Australian state or territory code.
+
+    - name: postcode
+      data_type: string
+      logical_type: postal_code
+      required: true
+      nullable: true
+      accepted:
+        regex: '^\d{4}$'
+      example: "3000"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: LOCATION_INFORMATION
+        handling: GENERALISE_OR_RESTRICT
+      quality_rules:
+        - rule_id: ADR_POSTCODE_PATTERN
+          type: REGEX_IF_PRESENT
+          parameters:
+            regex: '^\d{4}$'
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: >
+            postcode should contain four digits when supplied.
+
+    - name: country
+      data_type: string
+      logical_type: country_code
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - AU
+          - NZ
+      example: "AU"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: ADR_COUNTRY_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - AU
+              - NZ
+          severity: ERROR
+          action: QUARANTINE
+          description: "country must be AU or NZ in the current mock-data scope."
+
+    - name: simple
+      data_type: string
+      logical_type: cdr_simple_address_json
+      required: true
+      nullable: true
+      accepted:
+        format: JSON_OBJECT
+      example: '{"addressLine1":"42 Harbour Street","city":"Melbourne","state":"VIC","postcode":"3000"}'
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: PRECISE_ADDRESS_INFORMATION
+        handling: REDACT_OR_RESTRICT
+      quality_rules:
+        - rule_id: ADR_SIMPLE_JSON
+          type: VALID_JSON_OBJECT_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "simple must be a valid JSON object when supplied."
+
+    - name: paf
+      data_type: string
+      logical_type: paf_address_json
+      required: true
+      nullable: true
+      accepted:
+        format: JSON_OBJECT
+      example: '{"dpid":"12345678","streetName":"Harbour","streetType":"ST","localityName":"MELBOURNE","state":"VIC","postcode":"3000"}'
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: PRECISE_ADDRESS_INFORMATION
+        handling: REDACT_OR_RESTRICT
+      quality_rules:
+        - rule_id: ADR_PAF_JSON
+          type: VALID_JSON_OBJECT_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "paf must be a valid JSON object when supplied."
+
+# -----------------------------------------------------------------------------
+# 6. Dataset-level quality rules
+# -----------------------------------------------------------------------------
+dataset_quality_rules:
+
+  - rule_id: ADR_ADDRESS_ID_UNIQUE
+    type: UNIQUE
+    columns:
+      - addressId
+    severity: ERROR
+    action: QUARANTINE
+    description: "addressId must be unique across the dataset."
+
+  - rule_id: ADR_CUSTOMER_LINK_PRESENT
+    type: NOT_NULL
+    columns:
+      - global_id
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      An address should identify its customer. The physical schema currently
+      permits global_id to be null.
+
+  - rule_id: ADR_SIMPLE_PRESENT_FOR_SIMPLE_TYPE
+    type: CONDITIONAL_NOT_NULL
+    parameters:
+      when:
+        column: addressUType
+        equals: simple
+      target_column: simple
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      The simple JSON field must be present when addressUType is simple.
+
+  - rule_id: ADR_PAF_NULL_FOR_SIMPLE_TYPE
+    type: CONDITIONAL_NULL
+    parameters:
+      when:
+        column: addressUType
+        equals: simple
+      target_column: paf
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      The paf field should normally be null when addressUType is simple.
+
+  - rule_id: ADR_PAF_PRESENT_FOR_PAF_TYPE
+    type: CONDITIONAL_NOT_NULL
+    parameters:
+      when:
+        column: addressUType
+        equals: paf
+      target_column: paf
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      The paf JSON field must be present when addressUType is paf.
+
+  - rule_id: ADR_SIMPLE_NULL_FOR_PAF_TYPE
+    type: CONDITIONAL_NULL
+    parameters:
+      when:
+        column: addressUType
+        equals: paf
+      target_column: simple
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      The simple field should normally be null when addressUType is paf.
+
+  - rule_id: ADR_CORE_ADDRESS_COMPONENT_PRESENT
+    type: ANY_PRESENT
+    columns:
+      - addressLine1
+      - suburb
+      - postcode
+      - simple
+      - paf
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      At least one core address component or structured address object should
+      be present.
+
+# -----------------------------------------------------------------------------
+# 7. Notes for the team
+# -----------------------------------------------------------------------------
+notes:
+  - >
+    This contract describes the raw source address dataset. Exact street-level
+    address information must not be exposed directly to Customer.AI.
+  - >
+    addressLine1, simple, and paf contain precise address information and must
+    be masked, redacted, or access-restricted in approved downstream outputs.
+  - >
+    The maximum lengths for addressLine1 and suburb are proposed contract
+    limits because the source schema does not define exact maximum lengths.
+  - >
+    The postcode rule uses a four-digit pattern because the source generator
+    uses Australian-style postcodes and the current country scope is AU or NZ.
+  - >
+    The simple and paf conditional rules ensure that the populated structured
+    address field matches addressUType.
