@@ -1,0 +1,582 @@
+# =============================================================================
+# DATA CONTRACT: banking_scheduled_payments
+# =============================================================================
+# Purpose:
+# - Stores recurring and scheduled payment arrangements for banking accounts.
+# - Records payment status, references, amount, frequency, next payment date,
+#   and CDR JSON structures for the payment source, payment set, and recurrence.
+#
+# Important relationship:
+# - One banking account may have multiple scheduled payment arrangements.
+# - accountId links each scheduled payment to banking_accounts.
+#
+# Quick guide:
+# - required: the source column must exist.
+# - nullable: the physical source value may be null.
+# - ERROR + QUARANTINE: do not send the record to the trusted output.
+# - WARNING + ALLOW_WITH_WARNING: keep the record but report the issue.
+# =============================================================================
+
+contract_version: "1.0.0"
+contract_id: "source.database.banking_scheduled_payments"
+
+# -----------------------------------------------------------------------------
+# 1. Basic dataset information
+# -----------------------------------------------------------------------------
+dataset:
+  name: banking_scheduled_payments
+  domain: BANKING
+  description: >
+    Source dataset containing recurring and scheduled payment arrangements
+    associated with banking accounts. Each record includes payment status,
+    customer references, amount, recurrence frequency, next payment date, and
+    CDR structured JSON fields.
+  expected_rows_scale_1: 1200
+  physical_schema_ref: "dev-tools/datagen/output/master-schema.json#/banking_scheduled_payments"
+
+# -----------------------------------------------------------------------------
+# 2. Ownership and contract lifecycle
+# -----------------------------------------------------------------------------
+lifecycle:
+  # DRAFT -> IN_REVIEW -> APPROVED -> DEPRECATED / RETIRED
+  status: DRAFT
+  owner: TBD
+  approver: TBD
+  effective_from: null
+
+# -----------------------------------------------------------------------------
+# 3. Source and ingestion information
+# -----------------------------------------------------------------------------
+source:
+  category: DATABASE
+  system_type: POSTGRESQL
+  source_object: "public.banking_scheduled_payments"
+  authoritative: true
+
+ingestion:
+  mechanism: DEBEZIUM_CDC
+  transport: APACHE_KAFKA
+
+  landing:
+    format: JSONL
+    path_template: "s3://<bucket>/bronze/landing/cdc/banking_scheduled_payments/"
+    immutable: true
+
+  bronze_target: "bronze.cdc_changes"
+
+  cdc:
+    supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+
+    ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+
+# -----------------------------------------------------------------------------
+# 4. Keys and relationships
+# -----------------------------------------------------------------------------
+keys:
+  primary_key:
+    - scheduledPaymentId
+
+  alternate_keys: []
+
+  foreign_keys:
+    - columns:
+        - global_id
+      reference:
+        dataset: customers
+        columns:
+          - global_id
+      nullable: true
+
+    - columns:
+        - accountId
+      reference:
+        dataset: banking_accounts
+        columns:
+          - accountId
+      nullable: true
+
+# -----------------------------------------------------------------------------
+# 5. Field-level contract
+# -----------------------------------------------------------------------------
+schema:
+  fields:
+
+    - name: global_id
+      data_type: string
+      logical_type: person_identifier
+      required: true
+      nullable: true
+      accepted:
+        format: UUID
+      example: "65df84b8-4274-4dbd-9667-6c9967ae6538"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: SCH_GLOBAL_ID_UUID
+          type: FORMAT_IF_PRESENT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "global_id must be a valid UUID when supplied."
+
+        - rule_id: SCH_GLOBAL_ID_CUSTOMER_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: customers
+            reference_column: global_id
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            global_id must exist in customers.global_id when supplied.
+
+    - name: accountId
+      data_type: string
+      logical_type: account_identifier
+      required: true
+      nullable: true
+      accepted:
+        format: UUID
+      example: "a5ef7c5b-04b6-49fa-8a0a-6b6a86be900f"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: SCH_ACCOUNT_ID_UUID
+          type: FORMAT_IF_PRESENT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "accountId must be a valid UUID when supplied."
+
+        - rule_id: SCH_ACCOUNT_ID_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: banking_accounts
+            reference_column: accountId
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            accountId must exist in banking_accounts.accountId when supplied.
+
+    - name: scheduledPaymentId
+      data_type: string
+      logical_type: scheduled_payment_identifier
+      required: true
+      nullable: false
+      accepted:
+        format: UUID
+      example: "d8e90fce-bbd7-4935-8ea5-32c51ff0a807"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: SCH_PAYMENT_ID_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "scheduledPaymentId must always be present."
+
+        - rule_id: SCH_PAYMENT_ID_UUID
+          type: FORMAT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "scheduledPaymentId must be a valid UUID."
+
+    - name: nickname
+      data_type: string
+      logical_type: scheduled_payment_nickname
+      required: true
+      nullable: true
+      accepted:
+        min_length: 1
+        max_length: 200
+      example: "Monthly rent payment"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: CUSTOMER_FINANCIAL_RELATIONSHIP_INFORMATION
+        handling: REDACT_OR_RESTRICT
+      quality_rules:
+        - rule_id: SCH_NICKNAME_NON_BLANK
+          type: NON_BLANK_IF_PRESENT
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: "nickname must not be blank when supplied."
+
+    - name: status
+      data_type: string
+      logical_type: scheduled_payment_status
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - ACTIVE
+          - SKIP
+          - INACTIVE
+      example: "ACTIVE"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: SCH_STATUS_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - ACTIVE
+              - SKIP
+              - INACTIVE
+          severity: ERROR
+          action: QUARANTINE
+          description: "status must be one of the supported source values."
+
+    - name: payerReference
+      data_type: string
+      logical_type: payer_reference
+      required: true
+      nullable: true
+      accepted:
+        source_pattern: "REF-????-####"
+      example: "REF-ABCD-1234"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_REFERENCE_INFORMATION
+        handling: TOKENISE_OR_REDACT
+      quality_rules:
+        - rule_id: SCH_PAYER_REFERENCE_PATTERN
+          type: SOURCE_PATTERN_IF_PRESENT
+          parameters:
+            pattern: "REF-????-####"
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: >
+            payerReference should follow the source generator pattern
+            REF-????-#### when supplied.
+
+    - name: payeeReference
+      data_type: string
+      logical_type: payee_reference
+      required: true
+      nullable: true
+      accepted:
+        source_pattern: "PAY-????-####"
+      example: "PAY-WXYZ-5678"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_REFERENCE_INFORMATION
+        handling: TOKENISE_OR_REDACT
+      quality_rules:
+        - rule_id: SCH_PAYEE_REFERENCE_PATTERN
+          type: SOURCE_PATTERN_IF_PRESENT
+          parameters:
+            pattern: "PAY-????-####"
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: >
+            payeeReference should follow the source generator pattern
+            PAY-????-#### when supplied.
+
+    - name: amount
+      data_type: string
+      logical_type: decimal_amount
+      required: true
+      nullable: true
+      accepted:
+        currency: AUD
+        min_exclusive: 0
+      example: "490.00"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: SCH_AMOUNT_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "amount must be parseable as a decimal when supplied."
+
+        - rule_id: SCH_AMOUNT_POSITIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min_exclusive: 0
+          severity: ERROR
+          action: QUARANTINE
+          description: "amount must be greater than zero when supplied."
+
+    - name: frequency
+      data_type: string
+      logical_type: payment_frequency
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - WEEKLY
+          - FORTNIGHTLY
+          - MONTHLY
+          - QUARTERLY
+          - ANNUALLY
+      example: "MONTHLY"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: SCH_FREQUENCY_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - WEEKLY
+              - FORTNIGHTLY
+              - MONTHLY
+              - QUARTERLY
+              - ANNUALLY
+          severity: ERROR
+          action: QUARANTINE
+          description: "frequency must be one of the supported source values."
+
+    - name: nextPaymentDate
+      data_type: string
+      logical_type: date
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_DATE
+      example: "2026-08-15"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_ACTIVITY_METADATA
+        handling: RESTRICT_OR_GENERALISE
+      quality_rules:
+        - rule_id: SCH_NEXT_PAYMENT_DATE_PARSEABLE
+          type: PARSEABLE_DATE_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            nextPaymentDate must be parseable as a date when supplied.
+
+    - name: from
+      data_type: string
+      logical_type: cdr_scheduled_payment_from_json
+      required: true
+      nullable: true
+      accepted:
+        format: JSON_OBJECT
+        schema_reference: CDR_BankingScheduledPaymentFrom
+        exact_schema_status: TBD_FROM_GENERATOR_CONFIG
+      example: "{}"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_ACCOUNT_INFORMATION
+        handling: REDACT_OR_RESTRICT
+      quality_rules:
+        - rule_id: SCH_FROM_JSON
+          type: VALID_JSON_OBJECT_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            from must contain a valid JSON object when supplied.
+
+    - name: paymentSet
+      data_type: string
+      logical_type: cdr_scheduled_payment_set_json
+      required: true
+      nullable: true
+      accepted:
+        format: JSON_ARRAY
+        schema_reference: CDR_BankingScheduledPaymentSet
+        exact_schema_status: TBD_FROM_GENERATOR_CONFIG
+      example: "[]"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_PAYMENT_DESTINATION_INFORMATION
+        handling: REDACT_OR_RESTRICT
+      quality_rules:
+        - rule_id: SCH_PAYMENT_SET_JSON
+          type: VALID_JSON_ARRAY_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            paymentSet must contain a valid JSON array when supplied.
+
+    - name: recurrence
+      data_type: string
+      logical_type: cdr_scheduled_payment_recurrence_json
+      required: true
+      nullable: true
+      accepted:
+        format: JSON_OBJECT
+        schema_reference: CDR_BankingScheduledPaymentRecurrence
+        exact_schema_status: TBD_FROM_GENERATOR_CONFIG
+      example: "{}"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: SCH_RECURRENCE_JSON
+          type: VALID_JSON_OBJECT_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            recurrence must contain a valid JSON object when supplied.
+
+# -----------------------------------------------------------------------------
+# 6. Dataset-level quality rules
+# -----------------------------------------------------------------------------
+dataset_quality_rules:
+
+  - rule_id: SCH_PAYMENT_ID_UNIQUE
+    type: UNIQUE
+    columns:
+      - scheduledPaymentId
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      scheduledPaymentId must be unique across the dataset.
+
+  - rule_id: SCH_ACCOUNT_LINK_PRESENT
+    type: NOT_NULL
+    columns:
+      - accountId
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A scheduled payment should identify its banking account. The physical
+      schema currently permits accountId to be null.
+
+  - rule_id: SCH_CUSTOMER_LINK_PRESENT
+    type: NOT_NULL
+    columns:
+      - global_id
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A scheduled payment should identify its customer. The physical schema
+      currently permits global_id to be null.
+
+  - rule_id: SCH_ACCOUNT_CUSTOMER_CONSISTENT
+    type: REFERENCE_PAIR_CONSISTENT
+    parameters:
+      reference_dataset: banking_accounts
+      source_columns:
+        - accountId
+        - global_id
+      reference_columns:
+        - accountId
+        - global_id
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      accountId and global_id must refer to the same banking account record.
+
+  - rule_id: SCH_ACTIVE_NEXT_DATE_PRESENT
+    type: CONDITIONAL_NOT_NULL
+    parameters:
+      when:
+        column: status
+        equals: ACTIVE
+      target_column: nextPaymentDate
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      An ACTIVE scheduled payment should include its next payment date.
+
+  - rule_id: SCH_ACTIVE_RECURRENCE_PRESENT
+    type: CONDITIONAL_NOT_NULL
+    parameters:
+      when:
+        column: status
+        equals: ACTIVE
+      target_column: recurrence
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      An ACTIVE scheduled payment should include recurrence information.
+
+  - rule_id: SCH_PAYMENT_DETAIL_PRESENT
+    type: ANY_NOT_NULL
+    columns:
+      - amount
+      - paymentSet
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      At least one of amount or paymentSet must be present to describe the
+      scheduled payment value.
+
+  - rule_id: SCH_NEXT_DATE_WITHIN_GENERATOR_WINDOW
+    type: DATE_OFFSET_RANGE
+    parameters:
+      column: nextPaymentDate
+      reference: PROCESSING_DATE
+      min_days: 0
+      max_days: 90
+      ignore_nulls: true
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      The source generator creates nextPaymentDate from the current date up to
+      ninety days ahead; values outside that window should be investigated.
+
+  - rule_id: SCH_ACTIVE_ACCOUNT_EXPECTED
+    type: REFERENCE_CONDITION
+    parameters:
+      reference_dataset: banking_accounts
+      source_key:
+        accountId: accountId
+      expected_condition:
+        column: isActive
+        equals: true
+      ignore_missing_reference: false
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      ACTIVE scheduled payments are normally expected to belong to active
+      banking accounts.
+
+# -----------------------------------------------------------------------------
+# 7. Notes for the team
+# -----------------------------------------------------------------------------
+notes:
+  - >
+    This contract follows the latest master schema, which contains thirteen
+    physical fields including payerReference, payeeReference, from, paymentSet,
+    and recurrence.
+  - >
+    amount, payerReference, payeeReference, from, and paymentSet contain
+    sensitive financial information and must not be exposed directly to
+    AI-ready outputs.
+  - >
+    The exact nested schemas of from, paymentSet, and recurrence must be copied
+    from the data generator or the approved CDR schema before this contract is
+    promoted to APPROVED.
+  - >
+    The reference patterns are preserved exactly as documented by the source.
+    This contract does not assume whether each question-mark placeholder accepts
+    only letters or a broader character set.
+  - >
+    Account-link and customer-link completeness remain warnings because the
+    physical schema marks accountId and global_id as nullable.

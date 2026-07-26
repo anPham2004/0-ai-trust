@@ -1,0 +1,725 @@
+# =============================================================================
+# DATA CONTRACT: banking_accounts
+# =============================================================================
+# Purpose:
+# - Stores customer banking accounts and their business ownership context.
+# - Acts as the parent dataset for balances, transactions, direct debits,
+#   scheduled payments, mortgage accounts, and loan accounts.
+#
+# Important distinction:
+# - organisationId is null  -> the account is treated as a personal account.
+# - organisationId is set   -> the account is treated as a business account.
+#
+# Quick guide:
+# - required: the source column must exist.
+# - nullable: the field value may be null.
+# - ERROR + QUARANTINE: do not send the record to the trusted output.
+# - WARNING + ALLOW_WITH_WARNING: keep the record but report the issue.
+# =============================================================================
+
+contract_version: "1.0.0"
+contract_id: "source.database.banking_accounts"
+
+# -----------------------------------------------------------------------------
+# 1. Basic dataset information
+# -----------------------------------------------------------------------------
+dataset:
+  name: banking_accounts
+  domain: BANKING
+  description: >
+    Core source dataset containing customer banking accounts. Each account is
+    linked to a person through global_id and may also be linked to an
+    organisation when the account represents a business arrangement.
+  expected_rows_scale_1: 1500
+  physical_schema_ref: "dev-tools/datagen/output/master-schema.json#/banking_accounts"
+
+# -----------------------------------------------------------------------------
+# 2. Ownership and contract lifecycle
+# -----------------------------------------------------------------------------
+lifecycle:
+  # DRAFT -> IN_REVIEW -> APPROVED -> DEPRECATED / RETIRED
+  status: DRAFT
+  owner: TBD
+  approver: TBD
+  effective_from: null
+
+# -----------------------------------------------------------------------------
+# 3. Source and ingestion information
+# -----------------------------------------------------------------------------
+source:
+  category: DATABASE
+  system_type: POSTGRESQL
+  source_object: "public.banking_accounts"
+  authoritative: true
+
+ingestion:
+  mechanism: DEBEZIUM_CDC
+  transport: APACHE_KAFKA
+
+  landing:
+    format: JSONL
+    path_template: "s3://<bucket>/bronze/landing/cdc/banking_accounts/"
+    immutable: true
+
+  bronze_target: "bronze.cdc_changes"
+
+  cdc:
+    supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+
+    ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+
+# -----------------------------------------------------------------------------
+# 4. Keys and relationships
+# -----------------------------------------------------------------------------
+keys:
+  primary_key:
+    - accountId
+
+  alternate_keys:
+    - accountNumber
+
+  foreign_keys:
+    - columns:
+        - global_id
+      reference:
+        dataset: customers
+        columns:
+          - global_id
+      nullable: true
+
+    - columns:
+        - customerId
+      reference:
+        dataset: customers
+        columns:
+          - customerId
+      nullable: true
+
+    - columns:
+        - organisationId
+      reference:
+        dataset: organisations
+        columns:
+          - organisationId
+      nullable: true
+
+# -----------------------------------------------------------------------------
+# 5. Field-level contract
+# -----------------------------------------------------------------------------
+schema:
+  fields:
+
+    - name: global_id
+      data_type: string
+      logical_type: person_identifier
+      required: true
+      nullable: true
+      accepted:
+        format: UUID
+      example: "65df84b8-4274-4dbd-9667-6c9967ae6538"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: BAC_GLOBAL_ID_UUID
+          type: FORMAT_IF_PRESENT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "global_id must be a valid UUID when supplied."
+
+        - rule_id: BAC_GLOBAL_ID_CUSTOMER_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: customers
+            reference_column: global_id
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            global_id must exist in customers.global_id when supplied.
+
+    - name: accountId
+      data_type: string
+      logical_type: account_identifier
+      required: true
+      nullable: false
+      accepted:
+        format: UUID
+      example: "a5ef7c5b-04b6-49fa-8a0a-6b6a86be900f"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: BAC_ACCOUNT_ID_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "accountId must always be present."
+
+        - rule_id: BAC_ACCOUNT_ID_UUID
+          type: FORMAT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "accountId must be a valid UUID."
+
+    - name: customerId
+      data_type: string
+      logical_type: customer_identifier
+      required: true
+      nullable: true
+      accepted:
+        regex: '^CUST-\d{5}$'
+      example: "CUST-00042"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: BAC_CUSTOMER_ID_PATTERN
+          type: REGEX_IF_PRESENT
+          parameters:
+            regex: '^CUST-\d{5}$'
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            customerId must follow the CUST-00000 pattern when supplied.
+
+        - rule_id: BAC_CUSTOMER_ID_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: customers
+            reference_column: customerId
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            customerId must exist in customers.customerId when supplied.
+
+    - name: organisationId
+      data_type: string
+      logical_type: organisation_identifier
+      required: true
+      nullable: true
+      accepted:
+        regex: '^ORG-\d{5}$'
+      example: "ORG-00042"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: BAC_ORGANISATION_ID_PATTERN
+          type: REGEX_IF_PRESENT
+          parameters:
+            regex: '^ORG-\d{5}$'
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            organisationId must follow the ORG-00000 pattern when supplied.
+
+        - rule_id: BAC_ORGANISATION_ID_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: organisations
+            reference_column: organisationId
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            organisationId must exist in organisations.organisationId when supplied.
+
+    - name: accountType
+      data_type: string
+      logical_type: account_type
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - savings
+          - transaction
+          - loan
+      example: "savings"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: BAC_ACCOUNT_TYPE_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - savings
+              - transaction
+              - loan
+          severity: ERROR
+          action: QUARANTINE
+          description: "accountType must be a supported source value."
+
+    - name: balance
+      data_type: string
+      logical_type: decimal_amount
+      required: true
+      nullable: true
+      accepted:
+        currency: AUD
+        min: 0
+      example: "18450.75"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: BAC_BALANCE_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "balance must be parseable as a decimal amount."
+
+        - rule_id: BAC_BALANCE_NON_NEGATIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min: 0
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: >
+            balance should not be negative in the current mock-data model.
+
+    - name: isOwner
+      data_type: bool
+      logical_type: ownership_flag
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - true
+          - false
+      example: true
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: BAC_IS_OWNER_BOOLEAN
+          type: BOOLEAN
+          severity: ERROR
+          action: QUARANTINE
+          description: "isOwner must be a boolean value."
+
+    - name: openDate
+      data_type: string
+      logical_type: timestamp
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_TIMESTAMP
+      example: "2022-08-14T10:30:00Z"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: BAC_OPEN_DATE_PARSEABLE
+          type: PARSEABLE_TIMESTAMP_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "openDate must be parseable as a timestamp."
+
+    - name: isActive
+      data_type: bool
+      logical_type: active_account_flag
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - true
+          - false
+      example: true
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: BAC_IS_ACTIVE_BOOLEAN
+          type: BOOLEAN
+          severity: ERROR
+          action: QUARANTINE
+          description: "isActive must be a boolean value."
+
+    - name: displayName
+      data_type: string
+      logical_type: account_display_name
+      required: true
+      nullable: true
+      accepted:
+        description: "Generated in the Account-{TYPE}-{HASH} style."
+      example: "Account-SAVINGS-A7F2"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: BAC_DISPLAY_NAME_NON_BLANK
+          type: NON_BLANK_IF_PRESENT
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: "displayName must not be blank when supplied."
+
+    - name: nickname
+      data_type: string
+      logical_type: customer_account_nickname
+      required: true
+      nullable: true
+      accepted:
+        max_length: 120
+      example: "My Savings"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: CUSTOMER_PROVIDED_LABEL
+        handling: RESTRICT_OR_REDACT
+      quality_rules:
+        - rule_id: BAC_NICKNAME_NON_BLANK
+          type: NON_BLANK_IF_PRESENT
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: "nickname must not be blank when supplied."
+
+    - name: maskedNumber
+      data_type: string
+      logical_type: masked_account_number
+      required: true
+      nullable: true
+      accepted:
+        regex: '^x{5}\d{4}$'
+      example: "xxxxx4821"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_IDENTIFIER
+        handling: PRESERVE_MASKED_VALUE_ONLY
+      quality_rules:
+        - rule_id: BAC_MASKED_NUMBER_PATTERN
+          type: REGEX_IF_PRESENT
+          parameters:
+            regex: '^x{5}\d{4}$'
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            maskedNumber must contain five masking characters followed by four digits.
+
+    - name: accountNumber
+      data_type: string
+      logical_type: account_number
+      required: true
+      nullable: true
+      accepted:
+        regex: '^\d{8}$'
+      example: "00123456"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_IDENTIFIER
+        handling: TOKENISE_OR_REMOVE
+      quality_rules:
+        - rule_id: BAC_ACCOUNT_NUMBER_PATTERN
+          type: REGEX_IF_PRESENT
+          parameters:
+            regex: '^\d{8}$'
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            accountNumber must contain exactly eight digits when supplied.
+
+    - name: productCategory
+      data_type: string
+      logical_type: banking_product_category
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - TRANS_AND_SAVINGS_ACCOUNTS
+          - RESIDENTIAL_MORTGAGES
+          - PERS_LOANS
+          - CRED_AND_CHRG_CARDS
+      example: "TRANS_AND_SAVINGS_ACCOUNTS"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: BAC_PRODUCT_CATEGORY_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - TRANS_AND_SAVINGS_ACCOUNTS
+              - RESIDENTIAL_MORTGAGES
+              - PERS_LOANS
+              - CRED_AND_CHRG_CARDS
+          severity: ERROR
+          action: QUARANTINE
+          description: "productCategory must be a supported source value."
+
+    - name: productName
+      data_type: string
+      logical_type: product_name
+      required: true
+      nullable: true
+      accepted:
+        min_length: 1
+        max_length: 200
+      example: "Online Saver"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: BAC_PRODUCT_NAME_NON_BLANK
+          type: NON_BLANK_IF_PRESENT
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: "productName must not be blank when supplied."
+
+    - name: accountOwnership
+      data_type: string
+      logical_type: account_ownership_type
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - ONE_PARTY
+          - TWO_PARTY
+          - MANY_PARTY
+      example: "ONE_PARTY"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: BAC_ACCOUNT_OWNERSHIP_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - ONE_PARTY
+              - TWO_PARTY
+              - MANY_PARTY
+          severity: ERROR
+          action: QUARANTINE
+          description: "accountOwnership must be a supported source value."
+
+    - name: openStatus
+      data_type: string
+      logical_type: account_open_status
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - OPEN
+          - CLOSED
+      example: "OPEN"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: BAC_OPEN_STATUS_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - OPEN
+              - CLOSED
+          severity: ERROR
+          action: QUARANTINE
+          description: "openStatus must be OPEN or CLOSED."
+
+    - name: isOwned
+      data_type: bool
+      logical_type: owned_account_flag
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - true
+          - false
+      example: true
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: BAC_IS_OWNED_BOOLEAN
+          type: BOOLEAN
+          severity: ERROR
+          action: QUARANTINE
+          description: "isOwned must be a boolean value."
+
+    - name: creationDate
+      data_type: string
+      logical_type: timestamp
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_TIMESTAMP
+      example: "2022-08-14T10:30:00Z"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: BAC_CREATION_DATE_PARSEABLE
+          type: PARSEABLE_TIMESTAMP_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "creationDate must be parseable as a timestamp."
+
+# -----------------------------------------------------------------------------
+# 6. Dataset-level quality rules
+# -----------------------------------------------------------------------------
+dataset_quality_rules:
+
+  - rule_id: BAC_ACCOUNT_ID_UNIQUE
+    type: UNIQUE
+    columns:
+      - accountId
+    severity: ERROR
+    action: QUARANTINE
+    description: "accountId must be unique across the dataset."
+
+  - rule_id: BAC_ACCOUNT_NUMBER_UNIQUE_IF_PRESENT
+    type: UNIQUE_IF_PRESENT
+    columns:
+      - accountNumber
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      A populated accountNumber must not be shared by multiple accounts.
+
+  - rule_id: BAC_CUSTOMER_LINK_PRESENT
+    type: ALL_NOT_NULL
+    columns:
+      - global_id
+      - customerId
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      An account should identify its customer using both global_id and customerId.
+      The physical schema currently permits null values.
+
+  - rule_id: BAC_CUSTOMER_IDENTIFIERS_CONSISTENT
+    type: REFERENCE_PAIR_CONSISTENT
+    parameters:
+      reference_dataset: customers
+      source_columns:
+        - global_id
+        - customerId
+      reference_columns:
+        - global_id
+        - customerId
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      global_id and customerId must refer to the same row in customers.
+
+  - rule_id: BAC_OPEN_STATUS_MATCHES_ACTIVE_FLAG
+    type: CONDITIONAL_VALUE_MAP
+    parameters:
+      source_column: isActive
+      mappings:
+        true: OPEN
+        false: CLOSED
+      target_column: openStatus
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      openStatus must be OPEN when isActive is true and CLOSED when isActive is false.
+
+  - rule_id: BAC_OWNERSHIP_FLAGS_MATCH
+    type: COLUMN_EQUALITY
+    columns:
+      - isOwner
+      - isOwned
+    severity: ERROR
+    action: QUARANTINE
+    description: "isOwned must equal isOwner in the current source model."
+
+  - rule_id: BAC_CREATION_DATE_MATCHES_OPEN_DATE
+    type: COLUMN_EQUALITY
+    columns:
+      - creationDate
+      - openDate
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      creationDate should equal openDate because the source generator derives
+      creationDate from openDate.
+
+  - rule_id: BAC_OPEN_DATE_NOT_IN_FUTURE
+    type: TIMESTAMP_NOT_IN_FUTURE
+    columns:
+      - openDate
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      openDate should not be later than the pipeline processing timestamp.
+
+  - rule_id: BAC_MASKED_NUMBER_MATCHES_ACCOUNT_NUMBER
+    type: MASKED_SUFFIX_MATCH
+    parameters:
+      clear_column: accountNumber
+      masked_column: maskedNumber
+      visible_suffix_length: 4
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      The visible four-digit suffix in maskedNumber must match accountNumber.
+
+  - rule_id: BAC_PRODUCT_CATEGORY_MATCHES_ACCOUNT_TYPE
+    type: CONDITIONAL_ACCEPTED_VALUES
+    parameters:
+      source_column: accountType
+      mappings:
+        savings:
+          - TRANS_AND_SAVINGS_ACCOUNTS
+        transaction:
+          - TRANS_AND_SAVINGS_ACCOUNTS
+        loan:
+          - RESIDENTIAL_MORTGAGES
+          - PERS_LOANS
+          - CRED_AND_CHRG_CARDS
+      target_column: productCategory
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      productCategory must be consistent with accountType.
+
+# -----------------------------------------------------------------------------
+# 7. Notes for the team
+# -----------------------------------------------------------------------------
+notes:
+  - >
+    This contract describes the raw banking account source. Exact balance and
+    accountNumber values must not be exposed directly to AI-ready outputs.
+  - >
+    The Silver layer should use banking_balances as the approved balance source
+    and convert exact values into masked range buckets.
+  - >
+    organisationId identifies business arrangements. A null organisationId
+    represents a personal account in the current source model.
+  - >
+    balance is physically stored as a string and must be parsed before numeric
+    quality checks are applied.
+  - >
+    displayName and nickname validation rules are intentionally lightweight
+    because the source schema does not define strict patterns or lengths.

@@ -1,0 +1,460 @@
+# =============================================================================
+# DATA CONTRACT: banking_balances
+# =============================================================================
+# Purpose:
+# - Stores the current balance position for each banking account.
+# - Provides current balance, available balance, optional credit limits,
+#   optional amortised limits, currency, and optional multi-currency purses.
+#
+# Important relationship:
+# - The source is generated one-to-one with banking_accounts.
+# - accountId is the business key used to join each balance record to one account.
+#
+# Quick guide:
+# - required: the source column must exist.
+# - nullable: the physical source value may be null.
+# - ERROR + QUARANTINE: do not send the record to the trusted output.
+# - WARNING + ALLOW_WITH_WARNING: keep the record but report the issue.
+# =============================================================================
+
+contract_version: "1.0.0"
+contract_id: "source.database.banking_balances"
+
+# -----------------------------------------------------------------------------
+# 1. Basic dataset information
+# -----------------------------------------------------------------------------
+dataset:
+  name: banking_balances
+  domain: BANKING
+  description: >
+    One-to-one source dataset containing the current monetary position of each
+    banking account, including current balance, available balance, optional
+    credit limits, optional amortised limits, currency, and multi-currency
+    purse information.
+  expected_rows_scale_1: 1500
+  physical_schema_ref: "dev-tools/datagen/output/master-schema.json#/banking_balances"
+
+# -----------------------------------------------------------------------------
+# 2. Ownership and contract lifecycle
+# -----------------------------------------------------------------------------
+lifecycle:
+  # DRAFT -> IN_REVIEW -> APPROVED -> DEPRECATED / RETIRED
+  status: DRAFT
+  owner: TBD
+  approver: TBD
+  effective_from: null
+
+# -----------------------------------------------------------------------------
+# 3. Source and ingestion information
+# -----------------------------------------------------------------------------
+source:
+  category: DATABASE
+  system_type: POSTGRESQL
+  source_object: "public.banking_balances"
+  authoritative: true
+
+ingestion:
+  mechanism: DEBEZIUM_CDC
+  transport: APACHE_KAFKA
+
+  landing:
+    format: JSONL
+    path_template: "s3://<bucket>/bronze/landing/cdc/banking_balances/"
+    immutable: true
+
+  bronze_target: "bronze.cdc_changes"
+
+  cdc:
+    supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+
+    ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+
+# -----------------------------------------------------------------------------
+# 4. Keys and relationships
+# -----------------------------------------------------------------------------
+keys:
+  # accountId is the business primary key because the source is one-to-one with
+  # banking_accounts, even though the physical schema marks it as nullable.
+  primary_key:
+    - accountId
+
+  alternate_keys: []
+
+  foreign_keys:
+    - columns:
+        - global_id
+      reference:
+        dataset: customers
+        columns:
+          - global_id
+      nullable: true
+
+    - columns:
+        - accountId
+      reference:
+        dataset: banking_accounts
+        columns:
+          - accountId
+      nullable: true
+
+# -----------------------------------------------------------------------------
+# 5. Field-level contract
+# -----------------------------------------------------------------------------
+schema:
+  fields:
+
+    - name: global_id
+      data_type: string
+      logical_type: person_identifier
+      required: true
+      nullable: true
+      accepted:
+        format: UUID
+      example: "65df84b8-4274-4dbd-9667-6c9967ae6538"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: BAL_GLOBAL_ID_UUID
+          type: FORMAT_IF_PRESENT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "global_id must be a valid UUID when supplied."
+
+        - rule_id: BAL_GLOBAL_ID_CUSTOMER_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: customers
+            reference_column: global_id
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            global_id must exist in customers.global_id when supplied.
+
+    - name: accountId
+      data_type: string
+      logical_type: account_identifier
+      required: true
+      nullable: true
+      accepted:
+        format: UUID
+      example: "a5ef7c5b-04b6-49fa-8a0a-6b6a86be900f"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: BAL_ACCOUNT_ID_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            accountId is required by the business contract because every balance
+            record must belong to one banking account.
+
+        - rule_id: BAL_ACCOUNT_ID_UUID
+          type: FORMAT_IF_PRESENT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "accountId must be a valid UUID when supplied."
+
+        - rule_id: BAL_ACCOUNT_ID_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: banking_accounts
+            reference_column: accountId
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            accountId must exist in banking_accounts.accountId when supplied.
+
+    - name: currentBalance
+      data_type: string
+      logical_type: decimal_amount
+      required: true
+      nullable: true
+      accepted:
+        currency: AUD
+        min: 0
+      example: "18450.75"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: BAL_CURRENT_BALANCE_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            currentBalance must be parseable as a decimal amount when supplied.
+
+        - rule_id: BAL_CURRENT_BALANCE_NON_NEGATIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min: 0
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            currentBalance must not be negative in the current mock-data model.
+
+    - name: availableBalance
+      data_type: string
+      logical_type: decimal_amount
+      required: true
+      nullable: true
+      accepted:
+        currency: AUD
+        min: 0
+      example: "17220.40"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: BAL_AVAILABLE_BALANCE_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            availableBalance must be parseable as a decimal amount when supplied.
+
+        - rule_id: BAL_AVAILABLE_BALANCE_NON_NEGATIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min: 0
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            availableBalance must not be negative in the current mock-data model.
+
+    - name: creditLimit
+      data_type: string
+      logical_type: decimal_amount
+      required: true
+      nullable: true
+      accepted:
+        currency: AUD
+        min: 0
+      example: "12000.00"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: BAL_CREDIT_LIMIT_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            creditLimit must be parseable as a decimal amount when supplied.
+
+        - rule_id: BAL_CREDIT_LIMIT_NON_NEGATIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min: 0
+          severity: ERROR
+          action: QUARANTINE
+          description: "creditLimit must not be negative when supplied."
+
+    - name: amortisedLimit
+      data_type: string
+      logical_type: decimal_amount
+      required: true
+      nullable: true
+      accepted:
+        currency: AUD
+        min: 0
+      example: "8500.00"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: BAL_AMORTISED_LIMIT_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            amortisedLimit must be parseable as a decimal amount when supplied.
+
+        - rule_id: BAL_AMORTISED_LIMIT_NON_NEGATIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min: 0
+          severity: ERROR
+          action: QUARANTINE
+          description: "amortisedLimit must not be negative when supplied."
+
+    - name: currency
+      data_type: string
+      logical_type: currency_code
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - AUD
+      example: "AUD"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: BAL_CURRENCY_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - AUD
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            currency must be AUD in the current source dataset.
+
+    - name: purses
+      data_type: string
+      logical_type: multi_currency_purses_json
+      required: true
+      nullable: true
+      accepted:
+        format: JSON
+        schema_status: TBD_FROM_GENERATOR_CONFIG
+      example: '{"USD":{"balance":"250.00"},"NZD":{"balance":"180.00"}}'
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: BAL_PURSES_JSON
+          type: VALID_JSON_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "purses must contain valid JSON when supplied."
+
+# -----------------------------------------------------------------------------
+# 6. Dataset-level quality rules
+# -----------------------------------------------------------------------------
+dataset_quality_rules:
+
+  - rule_id: BAL_ACCOUNT_ID_UNIQUE
+    type: UNIQUE
+    columns:
+      - accountId
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      accountId must be unique because banking_balances is one-to-one with
+      banking_accounts.
+
+  - rule_id: BAL_CUSTOMER_LINK_PRESENT
+    type: NOT_NULL
+    columns:
+      - global_id
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A balance record should identify its customer. The physical schema
+      currently permits global_id to be null.
+
+  - rule_id: BAL_ACCOUNT_CUSTOMER_CONSISTENT
+    type: REFERENCE_PAIR_CONSISTENT
+    parameters:
+      reference_dataset: banking_accounts
+      source_columns:
+        - accountId
+        - global_id
+      reference_columns:
+        - accountId
+        - global_id
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      accountId and global_id must refer to the same banking account record.
+
+  - rule_id: BAL_AVAILABLE_NOT_ABOVE_CURRENT
+    type: NUMERIC_COLUMN_COMPARISON
+    parameters:
+      left_column: availableBalance
+      operator: LESS_THAN_OR_EQUAL
+      right_column: currentBalance
+      parse_as: DECIMAL
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      availableBalance cannot exceed currentBalance in the current source model.
+
+  - rule_id: BAL_AT_LEAST_ONE_BALANCE_PRESENT
+    type: ANY_NOT_NULL
+    columns:
+      - currentBalance
+      - availableBalance
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      At least one of currentBalance or availableBalance must be present.
+
+  - rule_id: BAL_CREDIT_AND_AMORTISED_LIMIT_NOT_BOTH_ZERO
+    type: CONDITIONAL_NOT_BOTH_EQUAL
+    parameters:
+      columns:
+        - creditLimit
+        - amortisedLimit
+      disallowed_value: 0
+      parse_as: DECIMAL
+      ignore_nulls: true
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      When both optional limit fields are populated, they should not both be zero.
+
+  - rule_id: BAL_PURSES_EXPECTED_TO_BE_RARE
+    type: POPULATION_RATIO_MAX
+    parameters:
+      column: purses
+      condition: IS_NOT_NULL
+      max_ratio: 0.10
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Multi-currency purses are generated for approximately five percent of
+      accounts; a ratio above ten percent should be investigated.
+
+# -----------------------------------------------------------------------------
+# 7. Notes for the team
+# -----------------------------------------------------------------------------
+notes:
+  - >
+    This contract follows the current master schema, which contains eight
+    physical fields including amortisedLimit and purses.
+  - >
+    currentBalance, availableBalance, creditLimit, amortisedLimit, and purses
+    contain highly confidential financial information and must never be exposed
+    as exact values in AI-ready outputs.
+  - >
+    The Silver layer should convert currentBalance and availableBalance into
+    approved range buckets and retain currency as non-sensitive context.
+  - >
+    The physical schema marks accountId as nullable, but this contract treats a
+    missing accountId as an error because a balance record without an account
+    cannot satisfy the documented one-to-one relationship.
+  - >
+    The exact internal JSON structure of purses must be confirmed from the data
+    generator before this contract is promoted to APPROVED.

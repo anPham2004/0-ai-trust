@@ -1,0 +1,324 @@
+# =============================================================================
+# DATA CONTRACT: banking_payees
+# =============================================================================
+# Purpose:
+# - Stores payees saved by each customer.
+# - Identifies whether a payee is domestic, a biller, or international.
+# - Stores a customer-facing nickname, a short description, and the date on
+#   which the payee was created.
+#
+# Important relationship:
+# - One customer may have multiple saved payees.
+# - This dataset links directly to customers through global_id.
+# - It does not contain accountId, so it is not tied to one banking account.
+#
+# Quick guide:
+# - required: the source column must exist.
+# - nullable: the physical source value may be null.
+# - ERROR + QUARANTINE: do not send the record to the trusted output.
+# - WARNING + ALLOW_WITH_WARNING: keep the record but report the issue.
+# =============================================================================
+
+contract_version: "1.0.0"
+contract_id: "source.database.banking_payees"
+
+# -----------------------------------------------------------------------------
+# 1. Basic dataset information
+# -----------------------------------------------------------------------------
+dataset:
+  name: banking_payees
+  domain: BANKING
+  description: >
+    Source dataset containing payees saved by customers. Each record stores
+    the payee type, a customer-facing nickname, a short description, and the
+    payee creation date.
+  expected_rows_scale_1: 3000
+  physical_schema_ref: "dev-tools/datagen/output/master-schema.json#/banking_payees"
+
+# -----------------------------------------------------------------------------
+# 2. Ownership and contract lifecycle
+# -----------------------------------------------------------------------------
+lifecycle:
+  # DRAFT -> IN_REVIEW -> APPROVED -> DEPRECATED / RETIRED
+  status: DRAFT
+  owner: TBD
+  approver: TBD
+  effective_from: null
+
+# -----------------------------------------------------------------------------
+# 3. Source and ingestion information
+# -----------------------------------------------------------------------------
+source:
+  category: DATABASE
+  system_type: POSTGRESQL
+  source_object: "public.banking_payees"
+  authoritative: true
+
+ingestion:
+  mechanism: DEBEZIUM_CDC
+  transport: APACHE_KAFKA
+
+  landing:
+    format: JSONL
+    path_template: "s3://<bucket>/bronze/landing/cdc/banking_payees/"
+    immutable: true
+
+  bronze_target: "bronze.cdc_changes"
+
+  cdc:
+    supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+
+    ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+
+# -----------------------------------------------------------------------------
+# 4. Keys and relationships
+# -----------------------------------------------------------------------------
+keys:
+  primary_key:
+    - payeeId
+
+  alternate_keys: []
+
+  foreign_keys:
+    - columns:
+        - global_id
+      reference:
+        dataset: customers
+        columns:
+          - global_id
+      nullable: true
+
+# -----------------------------------------------------------------------------
+# 5. Field-level contract
+# -----------------------------------------------------------------------------
+schema:
+  fields:
+
+    - name: global_id
+      data_type: string
+      logical_type: person_identifier
+      required: true
+      nullable: true
+      accepted:
+        format: UUID
+      example: "65df84b8-4274-4dbd-9667-6c9967ae6538"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: PAY_GLOBAL_ID_UUID
+          type: FORMAT_IF_PRESENT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "global_id must be a valid UUID when supplied."
+
+        - rule_id: PAY_GLOBAL_ID_CUSTOMER_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: customers
+            reference_column: global_id
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            global_id must exist in customers.global_id when supplied.
+
+    - name: payeeId
+      data_type: string
+      logical_type: payee_identifier
+      required: true
+      nullable: false
+      accepted:
+        format: UUID
+      example: "f2699522-a4fd-4ebd-bca0-726b2db83bc2"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: PAY_PAYEE_ID_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "payeeId must always be present."
+
+        - rule_id: PAY_PAYEE_ID_UUID
+          type: FORMAT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "payeeId must be a valid UUID."
+
+    - name: nickname
+      data_type: string
+      logical_type: payee_display_name
+      required: true
+      nullable: true
+      accepted:
+        min_length: 1
+        max_length: 200
+      example: "Southern Utilities"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: PAYEE_IDENTITY_INFORMATION
+        handling: REDACT_OR_RESTRICT
+      quality_rules:
+        - rule_id: PAY_NICKNAME_NON_BLANK
+          type: NON_BLANK_IF_PRESENT
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: "nickname must not be blank when supplied."
+
+    - name: type
+      data_type: string
+      logical_type: payee_type
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - DOMESTIC
+          - BILLER
+          - INTERNATIONAL
+      example: "DOMESTIC"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: PAY_TYPE_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - DOMESTIC
+              - BILLER
+              - INTERNATIONAL
+          severity: ERROR
+          action: QUARANTINE
+          description: "type must be one of the supported payee types."
+
+    - name: description
+      data_type: string
+      logical_type: payee_description
+      required: true
+      nullable: true
+      accepted:
+        min_length: 1
+        max_length: 500
+      example: "Monthly electricity bill payment"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: CUSTOMER_FINANCIAL_RELATIONSHIP_INFORMATION
+        handling: REDACT_OR_RESTRICT
+      quality_rules:
+        - rule_id: PAY_DESCRIPTION_NON_BLANK
+          type: NON_BLANK_IF_PRESENT
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: "description must not be blank when supplied."
+
+    - name: creationDate
+      data_type: string
+      logical_type: date
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_DATE
+      example: "2025-11-14"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: PAY_CREATION_DATE_PARSEABLE
+          type: PARSEABLE_DATE_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "creationDate must be parseable as a date when supplied."
+
+# -----------------------------------------------------------------------------
+# 6. Dataset-level quality rules
+# -----------------------------------------------------------------------------
+dataset_quality_rules:
+
+  - rule_id: PAY_PAYEE_ID_UNIQUE
+    type: UNIQUE
+    columns:
+      - payeeId
+    severity: ERROR
+    action: QUARANTINE
+    description: "payeeId must be unique across the dataset."
+
+  - rule_id: PAY_CUSTOMER_LINK_PRESENT
+    type: NOT_NULL
+    columns:
+      - global_id
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A saved payee should identify its customer. The physical schema currently
+      permits global_id to be null.
+
+  - rule_id: PAY_CREATION_DATE_NOT_IN_FUTURE
+    type: DATE_NOT_IN_FUTURE
+    columns:
+      - creationDate
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      creationDate should not be later than the pipeline processing date.
+
+  - rule_id: PAY_PAYEE_LABEL_PRESENT
+    type: ANY_NOT_NULL
+    columns:
+      - nickname
+      - description
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      At least one of nickname or description should be present so that the
+      saved payee can be understood.
+
+  - rule_id: PAY_POSSIBLE_DUPLICATE
+    type: COMPOSITE_UNIQUE_IF_PRESENT
+    columns:
+      - global_id
+      - nickname
+      - type
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      The same customer should not normally have duplicate saved payees with
+      the same nickname and type.
+
+# -----------------------------------------------------------------------------
+# 7. Notes for the team
+# -----------------------------------------------------------------------------
+notes:
+  - >
+    The source schema contains six physical fields and links payees directly
+    to customers rather than to banking accounts.
+  - >
+    nickname is generated as either a person name or a company name. It can
+    therefore reveal the identity of a customer's payment recipient and is
+    treated as highly confidential.
+  - >
+    description may reveal the purpose of a customer's financial relationship
+    and must be restricted or redacted before AI consumption.
+  - >
+    The maximum lengths for nickname and description are proposed contract
+    limits because the source schema does not define exact maximum lengths.
+  - >
+    The duplicate-payee rule is a warning rather than an error because a
+    customer may intentionally save similar payees.
