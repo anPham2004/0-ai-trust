@@ -1,0 +1,746 @@
+# =============================================================================
+# DATA CONTRACT: insurance_policies
+# =============================================================================
+# Purpose:
+# - Stores customer insurance policy arrangements across six policy types.
+# - Records the provider, premium, payment frequency, cover, excess, policy
+#   dates, lifecycle status, and automatic-renewal preference.
+#
+# Important relationships:
+# - One customer may hold multiple insurance policies.
+# - global_id and customerId must identify the same customer.
+# - The physical source does not contain organisationId or claim details.
+#
+# Quick guide:
+# - required: the physical source column must exist.
+# - nullable: the physical source value may be null.
+# - ERROR + QUARANTINE: exclude the record from trusted outputs.
+# - WARNING + ALLOW_WITH_WARNING: retain the record and report the issue.
+# =============================================================================
+
+contract_version: "1.0.0"
+contract_id: "source.database.insurance_policies"
+
+# -----------------------------------------------------------------------------
+# 1. Basic dataset information
+# -----------------------------------------------------------------------------
+dataset:
+  name: insurance_policies
+  domain: CUSTOMER_PROFILE
+  description: >
+    Source dataset containing customer insurance policy arrangements across
+    home building, home contents, landlord, car, life, and income protection
+    products. Each record includes policy pricing, cover, excess, dates,
+    lifecycle status, and automatic-renewal preference.
+  expected_rows_scale_1: 1500
+  physical_schema_ref: "dev-tools/datagen/output/master-schema.json#/insurance_policies"
+
+# -----------------------------------------------------------------------------
+# 2. Ownership and contract lifecycle
+# -----------------------------------------------------------------------------
+lifecycle:
+  # DRAFT -> IN_REVIEW -> APPROVED -> DEPRECATED / RETIRED
+  status: DRAFT
+  owner: TBD
+  approver: TBD
+  effective_from: null
+
+# -----------------------------------------------------------------------------
+# 3. Source and ingestion information
+# -----------------------------------------------------------------------------
+source:
+  category: DATABASE
+  system_type: POSTGRESQL
+  source_object: "public.insurance_policies"
+  authoritative: true
+
+ingestion:
+  mechanism: DEBEZIUM_CDC
+  transport: APACHE_KAFKA
+
+  landing:
+    format: JSONL
+    path_template: "s3://<bucket>/bronze/landing/cdc/insurance_policies/"
+    immutable: true
+
+  bronze_target: "bronze.cdc_changes"
+
+  cdc:
+    supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+
+    ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+
+# -----------------------------------------------------------------------------
+# 4. Keys and relationships
+# -----------------------------------------------------------------------------
+keys:
+  primary_key:
+    - policyId
+
+  alternate_keys: []
+
+  foreign_keys:
+    - columns:
+        - global_id
+      reference:
+        dataset: customers
+        columns:
+          - global_id
+      nullable: true
+
+    - columns:
+        - customerId
+      reference:
+        dataset: customers
+        columns:
+          - customerId
+      nullable: true
+
+# -----------------------------------------------------------------------------
+# 5. Field-level contract
+# -----------------------------------------------------------------------------
+schema:
+  fields:
+
+    - name: global_id
+      data_type: string
+      logical_type: person_identifier
+      required: true
+      nullable: true
+      accepted:
+        format: UUID
+      example: "65df84b8-4274-4dbd-9667-6c9967ae6538"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: INP_GLOBAL_ID_UUID
+          type: FORMAT_IF_PRESENT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "global_id must be a valid UUID when supplied."
+
+        - rule_id: INP_GLOBAL_ID_CUSTOMER_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: customers
+            reference_column: global_id
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            global_id must exist in customers.global_id when supplied.
+
+    - name: customerId
+      data_type: string
+      logical_type: customer_identifier
+      required: true
+      nullable: true
+      accepted:
+        regex: '^CUST-\d{5}$'
+      example: "CUST-00042"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: INP_CUSTOMER_ID_PATTERN
+          type: REGEX_IF_PRESENT
+          parameters:
+            regex: '^CUST-\d{5}$'
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            customerId must follow the CUST-00000 pattern when supplied.
+
+        - rule_id: INP_CUSTOMER_ID_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: customers
+            reference_column: customerId
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            customerId must exist in customers.customerId when supplied.
+
+    - name: policyId
+      data_type: string
+      logical_type: insurance_policy_identifier
+      required: true
+      nullable: false
+      accepted:
+        format: UUID
+      example: "e25d95f8-8ac5-4e80-8196-22fd0789dc86"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: INSURANCE_POLICY_IDENTIFIER
+        handling: TOKENISE_OR_MASK
+      quality_rules:
+        - rule_id: INP_POLICY_ID_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "policyId must always be present."
+
+        - rule_id: INP_POLICY_ID_UUID
+          type: FORMAT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "policyId must be a valid UUID."
+
+    - name: policyType
+      data_type: string
+      logical_type: insurance_policy_type
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - HOME_BUILDING
+          - HOME_CONTENTS
+          - LANDLORD
+          - CAR
+          - LIFE
+          - INCOME_PROTECTION
+      example: "CAR"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: INSURANCE_PRODUCT_INFORMATION
+        handling: RESTRICT_OR_GENERALISE
+      quality_rules:
+        - rule_id: INP_POLICY_TYPE_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - HOME_BUILDING
+              - HOME_CONTENTS
+              - LANDLORD
+              - CAR
+              - LIFE
+              - INCOME_PROTECTION
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            policyType must be one of the six supported insurance types.
+
+    - name: provider
+      data_type: string
+      logical_type: insurance_provider
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - Suncorp
+          - IAG/NRMA
+          - Allianz
+          - QBE
+          - AMP
+          - TAL
+          - MLC
+          - Zurich
+          - BankCorp Insurance
+      example: "Allianz"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: CUSTOMER_PROVIDER_RELATIONSHIP
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: INP_PROVIDER_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - Suncorp
+              - IAG/NRMA
+              - Allianz
+              - QBE
+              - AMP
+              - TAL
+              - MLC
+              - Zurich
+              - BankCorp Insurance
+          severity: ERROR
+          action: QUARANTINE
+          description: "provider must be one of the supported source providers."
+
+    - name: premiumAmount
+      data_type: string
+      logical_type: decimal_amount
+      required: true
+      nullable: true
+      accepted:
+        currency: AUD
+        min_exclusive: 0
+      example: "1100.00"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: INSURANCE_FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: INP_PREMIUM_AMOUNT_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            premiumAmount must be parseable as a decimal amount when supplied.
+
+        - rule_id: INP_PREMIUM_AMOUNT_POSITIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min_exclusive: 0
+          severity: ERROR
+          action: QUARANTINE
+          description: "premiumAmount must be greater than zero when supplied."
+
+    - name: premiumFrequency
+      data_type: string
+      logical_type: premium_payment_frequency
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - MONTHLY
+          - ANNUAL
+          - QUARTERLY
+      example: "MONTHLY"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: INP_PREMIUM_FREQUENCY_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - MONTHLY
+              - ANNUAL
+              - QUARTERLY
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            premiumFrequency must be one of the supported payment frequencies.
+
+    - name: coverAmount
+      data_type: string
+      logical_type: decimal_amount
+      required: true
+      nullable: true
+      accepted:
+        currency: AUD
+        min_exclusive: 0
+      example: "500000.00"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: INSURANCE_COVER_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: INP_COVER_AMOUNT_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            coverAmount must be parseable as a decimal amount when supplied.
+
+        - rule_id: INP_COVER_AMOUNT_POSITIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min_exclusive: 0
+          severity: ERROR
+          action: QUARANTINE
+          description: "coverAmount must be greater than zero when supplied."
+
+    - name: excessAmount
+      data_type: string
+      logical_type: decimal_amount
+      required: true
+      nullable: false
+      accepted:
+        currency: AUD
+        numeric_values:
+          - 250
+          - 500
+          - 750
+          - 1000
+      example: "500"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: INSURANCE_FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: INP_EXCESS_AMOUNT_DECIMAL
+          type: PARSEABLE_DECIMAL
+          severity: ERROR
+          action: QUARANTINE
+          description: "excessAmount must be parseable as a decimal amount."
+
+        - rule_id: INP_EXCESS_AMOUNT_ENUM
+          type: ACCEPTED_NUMERIC_VALUES
+          parameters:
+            values:
+              - 250
+              - 500
+              - 750
+              - 1000
+            parse_as: DECIMAL
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            excessAmount must equal AUD 250, 500, 750, or 1000.
+
+    - name: startDate
+      data_type: string
+      logical_type: date
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_DATE
+      example: "2026-03-01"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: INSURANCE_ACTIVITY_METADATA
+        handling: RESTRICT_OR_GENERALISE
+      quality_rules:
+        - rule_id: INP_START_DATE_PARSEABLE
+          type: PARSEABLE_DATE_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "startDate must be parseable as a date when supplied."
+
+    - name: endDate
+      data_type: string
+      logical_type: date
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_DATE
+      example: "2027-03-01"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: INSURANCE_ACTIVITY_METADATA
+        handling: RESTRICT_OR_GENERALISE
+      quality_rules:
+        - rule_id: INP_END_DATE_PARSEABLE
+          type: PARSEABLE_DATE_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "endDate must be parseable as a date when supplied."
+
+    - name: status
+      data_type: string
+      logical_type: insurance_policy_status
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - ACTIVE
+          - LAPSED
+          - CANCELLED
+          - CLAIMED
+      example: "ACTIVE"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: INSURANCE_POLICY_STATUS
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: INP_STATUS_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - ACTIVE
+              - LAPSED
+              - CANCELLED
+              - CLAIMED
+          severity: ERROR
+          action: QUARANTINE
+          description: "status must be one of the supported lifecycle values."
+
+    - name: autoRenewal
+      data_type: bool
+      logical_type: automatic_renewal_flag
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - true
+          - false
+      example: true
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: INP_AUTO_RENEWAL_BOOLEAN
+          type: BOOLEAN
+          severity: ERROR
+          action: QUARANTINE
+          description: "autoRenewal must be a boolean value."
+
+# -----------------------------------------------------------------------------
+# 6. Dataset-level quality rules
+# -----------------------------------------------------------------------------
+dataset_quality_rules:
+
+  - rule_id: INP_POLICY_ID_UNIQUE
+    type: UNIQUE
+    columns:
+      - policyId
+    severity: ERROR
+    action: QUARANTINE
+    description: "policyId must be unique across the dataset."
+
+  - rule_id: INP_CUSTOMER_LINK_PRESENT
+    type: ALL_NOT_NULL
+    columns:
+      - global_id
+      - customerId
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      An insurance policy should identify its customer using both global_id and
+      customerId. The physical schema currently permits null values.
+
+  - rule_id: INP_CUSTOMER_IDENTIFIERS_CONSISTENT
+    type: REFERENCE_PAIR_CONSISTENT
+    parameters:
+      reference_dataset: customers
+      source_columns:
+        - global_id
+        - customerId
+      reference_columns:
+        - global_id
+        - customerId
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      global_id and customerId must refer to the same customer record.
+
+  - rule_id: INP_CORE_MONETARY_VALUES_PRESENT
+    type: ALL_NOT_NULL
+    columns:
+      - premiumAmount
+      - coverAmount
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      A policy should contain premiumAmount and coverAmount. The physical schema
+      currently permits these values to be null.
+
+  - rule_id: INP_END_DATE_FORMULA
+    type: DATE_ADD_DAYS_MATCH
+    parameters:
+      start_date_column: startDate
+      days: 365
+      target_date_column: endDate
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: "endDate must equal startDate plus 365 days."
+
+  - rule_id: INP_END_DATE_AFTER_START
+    type: DATE_COLUMN_COMPARISON
+    parameters:
+      left_column: endDate
+      operator: GREATER_THAN
+      right_column: startDate
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: "endDate must be later than startDate."
+
+  - rule_id: INP_START_DATE_NOT_IN_FUTURE
+    type: DATE_NOT_IN_FUTURE
+    columns:
+      - startDate
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      startDate should not be later than the pipeline processing date.
+
+  - rule_id: INP_ACTIVE_DATE_CONSISTENCY
+    type: STATUS_DATE_CONSISTENCY
+    parameters:
+      status_column: status
+      active_status: ACTIVE
+      start_date_column: startDate
+      end_date_column: endDate
+      reference_date: PROCESSING_DATE
+      require_reference_within_period_for_active: true
+      ignore_nulls: true
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      An ACTIVE policy should normally include the processing date within its
+      start and end dates.
+
+  - rule_id: INP_AUTO_RENEWAL_ACTIVE_EXPECTATION
+    type: CONDITIONAL_ACCEPTED_VALUES
+    parameters:
+      source_column: status
+      mappings:
+        LAPSED:
+          - false
+        CANCELLED:
+          - false
+      target_column: autoRenewal
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      LAPSED or CANCELLED policies should normally not remain configured for
+      automatic renewal.
+
+  - rule_id: INP_COVER_ABOVE_EXCESS
+    type: NUMERIC_COLUMN_COMPARISON
+    parameters:
+      left_column: coverAmount
+      operator: GREATER_THAN
+      right_column: excessAmount
+      parse_as: DECIMAL
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: "coverAmount must be greater than excessAmount."
+
+  - rule_id: INP_POLICY_TYPE_DISTRIBUTION_MONITORING
+    type: CATEGORICAL_DISTRIBUTION_TOLERANCE
+    parameters:
+      column: policyType
+      expected_ratios:
+        HOME_BUILDING: 0.25
+        HOME_CONTENTS: 0.20
+        LANDLORD: 0.10
+        CAR: 0.25
+        LIFE: 0.10
+        INCOME_PROTECTION: 0.10
+      absolute_tolerance: 0.08
+      comparison_scope: COMPLETE_SNAPSHOT
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Policy-type proportions should remain reasonably close to the configured
+      mock-data distribution in a complete snapshot.
+
+  - rule_id: INP_PROVIDER_DISTRIBUTION_MONITORING
+    type: CATEGORICAL_DISTRIBUTION_TOLERANCE
+    parameters:
+      column: provider
+      expected_ratios:
+        Suncorp: 0.20
+        IAG/NRMA: 0.18
+        Allianz: 0.15
+        QBE: 0.12
+        AMP: 0.10
+        TAL: 0.08
+        MLC: 0.07
+        Zurich: 0.05
+        BankCorp Insurance: 0.05
+      absolute_tolerance: 0.08
+      comparison_scope: COMPLETE_SNAPSHOT
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Provider proportions should remain reasonably close to the configured
+      mock-data distribution in a complete snapshot.
+
+  - rule_id: INP_STATUS_DISTRIBUTION_MONITORING
+    type: CATEGORICAL_DISTRIBUTION_TOLERANCE
+    parameters:
+      column: status
+      expected_ratios:
+        ACTIVE: 0.80
+        LAPSED: 0.10
+        CANCELLED: 0.05
+        CLAIMED: 0.05
+      absolute_tolerance: 0.08
+      comparison_scope: COMPLETE_SNAPSHOT
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Policy-status proportions should remain reasonably close to the
+      configured mock-data distribution in a complete snapshot.
+
+# -----------------------------------------------------------------------------
+# 7. Derived checks for Silver and AI-ready context
+# -----------------------------------------------------------------------------
+derived_quality_checks:
+
+  - rule_id: INP_ACTIVE_FLAG_DERIVATION
+    type: DERIVED_BOOLEAN
+    expression: "status = 'ACTIVE'"
+    output_field: is_active
+    description: "Silver may derive is_active from status."
+
+  - rule_id: INP_MONETARY_BUCKET_DERIVATION
+    type: PRIVACY_TRANSFORMATION
+    source_fields:
+      - premiumAmount
+      - coverAmount
+      - excessAmount
+    output_fields:
+      - premium_amount_masked
+      - cover_amount_masked
+      - excess_amount_masked
+    description: >
+      AI-ready outputs must use approved monetary range buckets rather than
+      exact insurance amounts.
+
+  - rule_id: INP_POLICY_SUMMARY_DERIVATION
+    type: APPROVED_CONTEXT_PROJECTION
+    approved_fields:
+      - policyType
+      - provider
+      - premiumFrequency
+      - status
+      - autoRenewal
+    prohibited_fields:
+      - policyId
+      - premiumAmount
+      - coverAmount
+      - excessAmount
+    description: >
+      A restricted policy summary may be projected after quality validation,
+      while identifiers and exact monetary values remain excluded or masked.
+
+# -----------------------------------------------------------------------------
+# 8. Notes for the team
+# -----------------------------------------------------------------------------
+notes:
+  - >
+    This contract follows the authoritative physical source schema and includes
+    all thirteen fields defined for insurance_policies.
+  - >
+    The physical source contains no organisationId. Business-policy context
+    must not be inferred without another approved governed source.
+  - >
+    The physical source contains no claim identifier, claim amount, claim date,
+    claim reason, beneficiary details, insured asset details, or cancellation
+    date. The status value CLAIMED does not provide claim-level information.
+  - >
+    premiumAmount and coverAmount use policy-type-specific log-normal
+    distributions. Those statistical descriptions are not converted into hard
+    record-level amount ranges because the source does not define exact limits.
+  - >
+    policyId, policyType, provider, exact monetary amounts, policy dates, and
+    status expose sensitive insurance context and must be tokenised, masked,
+    generalised, redacted, or access-restricted before AI consumption.
+  - >
+    Distribution-monitoring rules are suitable only for complete snapshots and
+    should not run against small or partially landed CDC micro-batches.

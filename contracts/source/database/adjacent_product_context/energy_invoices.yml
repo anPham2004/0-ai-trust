@@ -1,0 +1,803 @@
+# =============================================================================
+# DATA CONTRACT: energy_invoices
+# =============================================================================
+# Purpose:
+# - Stores customer energy billing records.
+# - Links each invoice to an energy account and customer.
+# - Preserves CDR EnergyInvoice nested structures for service points, billing
+#   period, electricity charges, gas charges, account charges, and discounts.
+#
+# Important relationships:
+# - One energy account may have multiple invoices.
+# - energyAccountId links each invoice to energy_accounts.
+# - global_id must identify the same customer as the parent energy account.
+#
+# Quick guide:
+# - required: the source column must exist.
+# - nullable: the physical source value may be null.
+# - ERROR + QUARANTINE: do not send the record to the trusted output.
+# - WARNING + ALLOW_WITH_WARNING: keep the record but report the issue.
+# =============================================================================
+
+contract_version: "1.0.0"
+contract_id: "source.database.energy_invoices"
+
+# -----------------------------------------------------------------------------
+# 1. Basic dataset information
+# -----------------------------------------------------------------------------
+dataset:
+  name: energy_invoices
+  domain: ENERGY
+  description: >
+    Source dataset containing CDR EnergyInvoice billing records. Each invoice
+    is linked to an energy account and includes issue and due dates, monetary
+    totals, payment status, balance at issue, referenced service points,
+    billing period, electricity and gas charge details, account-charge totals,
+    and an optional pay-on-time discount.
+  expected_rows_scale_1: 8000
+  physical_schema_ref: "dev-tools/datagen/output/master-schema.json#/energy_invoices"
+
+# -----------------------------------------------------------------------------
+# 2. Ownership and contract lifecycle
+# -----------------------------------------------------------------------------
+lifecycle:
+  # DRAFT -> IN_REVIEW -> APPROVED -> DEPRECATED / RETIRED
+  status: DRAFT
+  owner: TBD
+  approver: TBD
+  effective_from: null
+
+# -----------------------------------------------------------------------------
+# 3. Source and ingestion information
+# -----------------------------------------------------------------------------
+source:
+  category: DATABASE
+  system_type: POSTGRESQL
+  source_object: "public.energy_invoices"
+  authoritative: true
+
+ingestion:
+  mechanism: DEBEZIUM_CDC
+  transport: APACHE_KAFKA
+
+  landing:
+    format: JSONL
+    path_template: "s3://<bucket>/bronze/landing/cdc/energy_invoices/"
+    immutable: true
+
+  bronze_target: "bronze.cdc_changes"
+
+  cdc:
+    supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+
+    ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+
+# -----------------------------------------------------------------------------
+# 4. Keys and relationships
+# -----------------------------------------------------------------------------
+keys:
+  primary_key:
+    - invoiceNumber
+
+  alternate_keys: []
+
+  foreign_keys:
+    - columns:
+        - global_id
+      reference:
+        dataset: customers
+        columns:
+          - global_id
+      nullable: true
+
+    - columns:
+        - energyAccountId
+      reference:
+        dataset: energy_accounts
+        columns:
+          - energyAccountId
+      nullable: true
+
+# -----------------------------------------------------------------------------
+# 5. Field-level contract
+# -----------------------------------------------------------------------------
+schema:
+  fields:
+
+    - name: global_id
+      data_type: string
+      logical_type: person_identifier
+      required: true
+      nullable: true
+      accepted:
+        format: UUID
+      example: "65df84b8-4274-4dbd-9667-6c9967ae6538"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: EIV_GLOBAL_ID_UUID
+          type: FORMAT_IF_PRESENT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "global_id must be a valid UUID when supplied."
+
+        - rule_id: EIV_GLOBAL_ID_CUSTOMER_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: customers
+            reference_column: global_id
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            global_id must exist in customers.global_id when supplied.
+
+    - name: energyAccountId
+      data_type: string
+      logical_type: energy_account_identifier
+      required: true
+      nullable: true
+      accepted:
+        format: UUID
+      example: "55bf44d5-f544-468c-a822-eb5e26bd2924"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: EIV_ENERGY_ACCOUNT_ID_UUID
+          type: FORMAT_IF_PRESENT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            energyAccountId must be a valid UUID when supplied.
+
+        - rule_id: EIV_ENERGY_ACCOUNT_ID_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: energy_accounts
+            reference_column: energyAccountId
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            energyAccountId must exist in energy_accounts.energyAccountId when supplied.
+
+    - name: invoiceNumber
+      data_type: string
+      logical_type: energy_invoice_identifier
+      required: true
+      nullable: false
+      accepted:
+        regex: '^INV-\d{7}$'
+      example: "INV-0000042"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: UTILITY_BILLING_IDENTIFIER
+        handling: TOKENISE_OR_MASK
+      quality_rules:
+        - rule_id: EIV_INVOICE_NUMBER_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "invoiceNumber must always be present."
+
+        - rule_id: EIV_INVOICE_NUMBER_PATTERN
+          type: REGEX
+          parameters:
+            regex: '^INV-\d{7}$'
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            invoiceNumber must follow the INV-0000000 pattern.
+
+    - name: issueDate
+      data_type: string
+      logical_type: date
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_DATE
+      example: "2026-06-01"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: BILLING_ACTIVITY_METADATA
+        handling: RESTRICT_OR_GENERALISE
+      quality_rules:
+        - rule_id: EIV_ISSUE_DATE_PARSEABLE
+          type: PARSEABLE_DATE_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "issueDate must be parseable as a date when supplied."
+
+    - name: dueDate
+      data_type: string
+      logical_type: date
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_DATE
+      example: "2026-06-22"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: BILLING_ACTIVITY_METADATA
+        handling: RESTRICT_OR_GENERALISE
+      quality_rules:
+        - rule_id: EIV_DUE_DATE_PARSEABLE
+          type: PARSEABLE_DATE_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "dueDate must be parseable as a date when supplied."
+
+    - name: invoiceAmount
+      data_type: string
+      logical_type: decimal_amount
+      required: true
+      nullable: true
+      accepted:
+        currency: AUD
+        min_exclusive: 0
+      example: "245.80"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: EIV_INVOICE_AMOUNT_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            invoiceAmount must be parseable as a decimal amount when supplied.
+
+        - rule_id: EIV_INVOICE_AMOUNT_POSITIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min_exclusive: 0
+          severity: ERROR
+          action: QUARANTINE
+          description: "invoiceAmount must be greater than zero when supplied."
+
+    - name: gstAmount
+      data_type: string
+      logical_type: decimal_amount
+      required: true
+      nullable: true
+      accepted:
+        currency: AUD
+        min: 0
+      example: "24.58"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: EIV_GST_AMOUNT_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            gstAmount must be parseable as a decimal amount when supplied.
+
+        - rule_id: EIV_GST_AMOUNT_NON_NEGATIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min: 0
+          severity: ERROR
+          action: QUARANTINE
+          description: "gstAmount must not be negative when supplied."
+
+    - name: paymentStatus
+      data_type: string
+      logical_type: energy_invoice_payment_status
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - PAID
+          - PARTIALLY_PAID
+          - NOT_PAID
+      example: "PAID"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: PAYMENT_STATUS_INFORMATION
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: EIV_PAYMENT_STATUS_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - PAID
+              - PARTIALLY_PAID
+              - NOT_PAID
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            paymentStatus must be one of the supported source values.
+
+    - name: balanceAtIssue
+      data_type: string
+      logical_type: decimal_amount
+      required: true
+      nullable: true
+      accepted:
+        currency: AUD
+        min: 0
+      example: "98.40"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: EIV_BALANCE_AT_ISSUE_DECIMAL
+          type: PARSEABLE_DECIMAL_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            balanceAtIssue must be parseable as a decimal amount when supplied.
+
+        - rule_id: EIV_BALANCE_AT_ISSUE_NON_NEGATIVE
+          type: RANGE_IF_PRESENT
+          parameters:
+            min: 0
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            balanceAtIssue must not be negative when supplied.
+
+    - name: servicePoints
+      data_type: string
+      logical_type: cdr_energy_invoice_service_points_json
+      required: true
+      nullable: true
+      accepted:
+        format: JSON_ARRAY
+        reference_dataset: energy_service_points
+        exact_item_schema_status: TBD_FROM_GENERATOR_CONFIG
+      example: '["1234567890"]'
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: NATIONAL_METERING_IDENTIFIER
+        handling: TOKENISE_OR_REDACT
+      quality_rules:
+        - rule_id: EIV_SERVICE_POINTS_JSON
+          type: VALID_JSON_ARRAY_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            servicePoints must contain a valid JSON array when supplied.
+
+        - rule_id: EIV_SERVICE_POINTS_NON_EMPTY
+          type: JSON_ARRAY_MIN_SIZE_IF_PRESENT
+          parameters:
+            min_items: 1
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: >
+            servicePoints should contain at least one referenced service point.
+
+    - name: period
+      data_type: string
+      logical_type: cdr_energy_billing_period_json
+      required: true
+      nullable: true
+      accepted:
+        format: JSON_OBJECT
+        required_keys:
+          - startDate
+          - endDate
+        duration_days:
+          min: 28
+          max: 91
+      example: '{"startDate":"2026-04-01","endDate":"2026-05-31"}'
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: ENERGY_USAGE_PERIOD_INFORMATION
+        handling: RESTRICT_OR_GENERALISE
+      quality_rules:
+        - rule_id: EIV_PERIOD_JSON
+          type: VALID_JSON_OBJECT_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "period must contain a valid JSON object when supplied."
+
+        - rule_id: EIV_PERIOD_REQUIRED_KEYS
+          type: JSON_REQUIRED_KEYS_IF_PRESENT
+          parameters:
+            keys:
+              - startDate
+              - endDate
+          severity: ERROR
+          action: QUARANTINE
+          description: "period must contain startDate and endDate."
+
+        - rule_id: EIV_PERIOD_DATES_PARSEABLE
+          type: JSON_DATE_PATHS_IF_PRESENT
+          parameters:
+            paths:
+              - "$.startDate"
+              - "$.endDate"
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            period.startDate and period.endDate must be parseable as dates.
+
+    - name: electricity
+      data_type: string
+      logical_type: cdr_electricity_charges_json
+      required: true
+      nullable: true
+      accepted:
+        format: JSON_OBJECT
+        description: "Usage, supply, and network charge breakdown."
+        exact_schema_status: TBD_FROM_GENERATOR_CONFIG
+      example: "{}"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: ENERGY_USAGE_AND_CHARGE_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: EIV_ELECTRICITY_JSON
+          type: VALID_JSON_OBJECT_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            electricity must contain a valid JSON object when supplied.
+
+    - name: gas
+      data_type: string
+      logical_type: cdr_gas_charges_json
+      required: true
+      nullable: true
+      accepted:
+        format: JSON_OBJECT
+        population_ratio_approximate: 0.30
+        exact_schema_status: TBD_FROM_GENERATOR_CONFIG
+      example: "{}"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: ENERGY_USAGE_AND_CHARGE_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: EIV_GAS_JSON
+          type: VALID_JSON_OBJECT_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: "gas must contain a valid JSON object when supplied."
+
+    - name: accountCharges
+      data_type: string
+      logical_type: cdr_energy_account_charges_json
+      required: true
+      nullable: true
+      accepted:
+        format: JSON_OBJECT
+        description: >
+          Total charges before and after tax, discounts, and GST.
+        exact_schema_status: TBD_FROM_GENERATOR_CONFIG
+      example: "{}"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: ENERGY_CHARGE_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+      quality_rules:
+        - rule_id: EIV_ACCOUNT_CHARGES_JSON
+          type: VALID_JSON_OBJECT_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            accountCharges must contain a valid JSON object when supplied.
+
+    - name: payOnTimeDiscount
+      data_type: string
+      logical_type: cdr_pay_on_time_discount_json
+      required: true
+      nullable: true
+      accepted:
+        format: JSON_OBJECT
+        discount_rate_approximate: 0.02
+        population_ratio_approximate: 0.20
+        exact_schema_status: TBD_FROM_GENERATOR_CONFIG
+      example: "{}"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: true
+        pii_type: BILLING_DISCOUNT_INFORMATION
+        handling: RESTRICT_OR_GENERALISE
+      quality_rules:
+        - rule_id: EIV_PAY_ON_TIME_DISCOUNT_JSON
+          type: VALID_JSON_OBJECT_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            payOnTimeDiscount must contain a valid JSON object when supplied.
+
+# -----------------------------------------------------------------------------
+# 6. Dataset-level quality rules
+# -----------------------------------------------------------------------------
+dataset_quality_rules:
+
+  - rule_id: EIV_INVOICE_NUMBER_UNIQUE
+    type: UNIQUE
+    columns:
+      - invoiceNumber
+    severity: ERROR
+    action: QUARANTINE
+    description: "invoiceNumber must be unique across the dataset."
+
+  - rule_id: EIV_ACCOUNT_LINK_PRESENT
+    type: NOT_NULL
+    columns:
+      - energyAccountId
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      An invoice should identify its energy account. The physical schema
+      currently permits energyAccountId to be null.
+
+  - rule_id: EIV_CUSTOMER_LINK_PRESENT
+    type: NOT_NULL
+    columns:
+      - global_id
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      An invoice should identify its customer. The physical schema currently
+      permits global_id to be null.
+
+  - rule_id: EIV_ACCOUNT_CUSTOMER_CONSISTENT
+    type: REFERENCE_PAIR_CONSISTENT
+    parameters:
+      reference_dataset: energy_accounts
+      source_columns:
+        - energyAccountId
+        - global_id
+      reference_columns:
+        - energyAccountId
+        - global_id
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      energyAccountId and global_id must refer to the same energy account record.
+
+  - rule_id: EIV_DUE_DATE_FORMULA
+    type: DATE_ADD_DAYS_MATCH
+    parameters:
+      start_date_column: issueDate
+      days: 21
+      target_date_column: dueDate
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: "dueDate must equal issueDate plus twenty-one days."
+
+  - rule_id: EIV_DUE_DATE_AFTER_ISSUE
+    type: DATE_COLUMN_COMPARISON
+    parameters:
+      left_column: dueDate
+      operator: GREATER_THAN
+      right_column: issueDate
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: "dueDate must be later than issueDate."
+
+  - rule_id: EIV_ISSUE_DATE_NOT_IN_FUTURE
+    type: DATE_NOT_IN_FUTURE
+    columns:
+      - issueDate
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      issueDate should not be later than the pipeline processing date.
+
+  - rule_id: EIV_GST_FORMULA
+    type: NUMERIC_FORMULA_MATCH
+    parameters:
+      target_column: gstAmount
+      formula: "invoiceAmount * 0.10"
+      parse_as: DECIMAL
+      tolerance: 0.01
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      gstAmount must equal ten percent of invoiceAmount within rounding tolerance.
+
+  - rule_id: EIV_CORE_MONETARY_VALUES_PRESENT
+    type: ALL_NOT_NULL
+    columns:
+      - invoiceAmount
+      - gstAmount
+      - balanceAtIssue
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      An invoice should contain its core monetary values. The physical schema
+      currently permits these fields to be null.
+
+  - rule_id: EIV_PERIOD_DURATION
+    type: JSON_DATE_RANGE_DAYS
+    parameters:
+      json_column: period
+      start_path: "$.startDate"
+      end_path: "$.endDate"
+      min_days: 28
+      max_days: 91
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      The billing period must contain between twenty-eight and ninety-one days.
+
+  - rule_id: EIV_PERIOD_END_NOT_AFTER_ISSUE
+    type: JSON_DATE_TO_COLUMN_COMPARISON
+    parameters:
+      json_column: period
+      json_date_path: "$.endDate"
+      operator: LESS_THAN_OR_EQUAL
+      date_column: issueDate
+      ignore_nulls: true
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      The billing-period end date should not normally be later than issueDate.
+
+  - rule_id: EIV_SERVICE_POINTS_REFERENCE_VALID
+    type: JSON_ARRAY_FOREIGN_KEY
+    parameters:
+      source_column: servicePoints
+      reference_dataset: energy_service_points
+      accepted_reference_columns:
+        - nationalMeteringId
+        - servicePointId
+      comparison_scope: COMPLETE_SNAPSHOT
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      Every referenced service point must exist in energy_service_points.
+
+  - rule_id: EIV_SERVICE_POINTS_BELONG_TO_ACCOUNT
+    type: JSON_ARRAY_REFERENCE_PARENT_CONSISTENCY
+    parameters:
+      source_column: servicePoints
+      parent_column: energyAccountId
+      reference_dataset: energy_service_points
+      reference_identifier_columns:
+        - nationalMeteringId
+        - servicePointId
+      reference_parent_column: energyAccountId
+      comparison_scope: COMPLETE_SNAPSHOT
+      ignore_nulls: true
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      Every referenced service point must belong to the invoice's energy account.
+
+  - rule_id: EIV_GAS_POPULATION_MONITORING
+    type: POPULATION_RATIO_RANGE
+    parameters:
+      column: gas
+      condition: IS_NOT_NULL
+      min_ratio: 0.20
+      max_ratio: 0.40
+      comparison_scope: COMPLETE_SNAPSHOT
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Gas charge details are generated for approximately thirty percent of
+      invoices; a complete-snapshot ratio outside twenty to forty percent should
+      be investigated.
+
+  - rule_id: EIV_DISCOUNT_POPULATION_MONITORING
+    type: POPULATION_RATIO_RANGE
+    parameters:
+      column: payOnTimeDiscount
+      condition: IS_NOT_NULL
+      min_ratio: 0.10
+      max_ratio: 0.30
+      comparison_scope: COMPLETE_SNAPSHOT
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      Pay-on-time discounts are generated for approximately twenty percent of
+      invoices; a complete-snapshot ratio outside ten to thirty percent should
+      be investigated.
+
+# -----------------------------------------------------------------------------
+# 7. Derived checks for Silver and AI-ready context
+# -----------------------------------------------------------------------------
+derived_quality_checks:
+
+  - rule_id: EIV_OVERDUE_FLAG_DERIVATION
+    type: DERIVED_BOOLEAN
+    expression: >
+      CURRENT_DATE > dueDate
+      AND paymentStatus IN ('PARTIALLY_PAID', 'NOT_PAID')
+    output_field: is_overdue
+    description: >
+      Silver may derive an overdue flag from dueDate and paymentStatus.
+
+  - rule_id: EIV_AMOUNT_BUCKET_DERIVATION
+    type: PRIVACY_TRANSFORMATION
+    source_fields:
+      - invoiceAmount
+      - gstAmount
+      - balanceAtIssue
+    output_fields:
+      - invoice_amount_masked
+      - gst_amount_masked
+      - balance_at_issue_masked
+    description: >
+      AI-ready outputs must use approved monetary range buckets rather than exact
+      invoice values.
+
+  - rule_id: EIV_USAGE_SUMMARY_DERIVATION
+    type: DERIVED_SUMMARY
+    source_fields:
+      - electricity
+      - gas
+      - accountCharges
+      - payOnTimeDiscount
+    output_fields:
+      - fuel_types_present
+      - has_pay_on_time_discount
+      - charge_summary_masked
+    description: >
+      Silver may derive a restricted non-identifying billing summary after all
+      nested charge objects have passed validation.
+
+# -----------------------------------------------------------------------------
+# 8. Notes for the team
+# -----------------------------------------------------------------------------
+notes:
+  - >
+    This contract follows the authoritative physical source schema and includes
+    all fifteen fields defined for energy_invoices.
+  - >
+    The source explicitly defines dueDate as issueDate plus twenty-one days,
+    gstAmount as ten percent of invoiceAmount, billing periods of twenty-eight
+    to ninety-one days, gas details on approximately thirty percent of invoices,
+    and pay-on-time discounts on approximately twenty percent of invoices.
+  - >
+    The exact nested schemas for servicePoints, electricity, gas,
+    accountCharges, and payOnTimeDiscount must be copied from the generator or
+    approved CDR schema before this contract is promoted to APPROVED.
+  - >
+    invoiceNumber, servicePoints, exact monetary amounts, usage details, payment
+    status, and billing dates expose sensitive utility and financial context and
+    must be masked, generalised, redacted, or access-restricted before AI
+    consumption.
+  - >
+    Service-point referential rules should run only after a complete
+    energy_service_points snapshot is available. They are not suitable for a
+    partially landed CDC micro-batch.
+  - >
+    The source schema does not contain a payment date or amount-paid field, so
+    this contract cannot calculate an exact outstanding balance or verify that
+    PAID invoices have zero balance.

@@ -1,0 +1,441 @@
+# =============================================================================
+# DATA CONTRACT: energy_accounts
+# =============================================================================
+# Purpose:
+# - Stores customer energy accounts.
+# - Links each energy account to a customer and an energy retail plan.
+# - Provides the parent account context for energy service points and invoices.
+#
+# Important relationships:
+# - One customer may have multiple energy accounts.
+# - energy_service_points and energy_invoices reference energyAccountId.
+# - planId references the energy_plans catalogue.
+#
+# Quick guide:
+# - required: the source column must exist.
+# - nullable: the physical source value may be null.
+# - ERROR + QUARANTINE: do not send the record to the trusted output.
+# =============================================================================
+
+contract_version: "1.0.0"
+contract_id: "source.database.energy_accounts"
+
+# -----------------------------------------------------------------------------
+# 1. Basic dataset information
+# -----------------------------------------------------------------------------
+dataset:
+  name: energy_accounts
+  domain: ENERGY
+  description: >
+    Source dataset containing customer energy accounts. Each account is linked
+    to a customer and may reference an energy retail plan. The account acts as
+    the parent entity for energy service points and energy invoices.
+  expected_rows_scale_1: 2000
+  physical_schema_ref: "dev-tools/datagen/output/master-schema.json#/energy_accounts"
+
+# -----------------------------------------------------------------------------
+# 2. Ownership and contract lifecycle
+# -----------------------------------------------------------------------------
+lifecycle:
+  # DRAFT -> IN_REVIEW -> APPROVED -> DEPRECATED / RETIRED
+  status: DRAFT
+  owner: TBD
+  approver: TBD
+  effective_from: null
+
+# -----------------------------------------------------------------------------
+# 3. Source and ingestion information
+# -----------------------------------------------------------------------------
+source:
+  category: DATABASE
+  system_type: POSTGRESQL
+  source_object: "public.energy_accounts"
+  authoritative: true
+
+ingestion:
+  mechanism: DEBEZIUM_CDC
+  transport: APACHE_KAFKA
+
+  landing:
+    format: JSONL
+    path_template: "s3://<bucket>/bronze/landing/cdc/energy_accounts/"
+    immutable: true
+
+  bronze_target: "bronze.cdc_changes"
+
+  cdc:
+    supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+
+    ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+
+# -----------------------------------------------------------------------------
+# 4. Keys and relationships
+# -----------------------------------------------------------------------------
+keys:
+  primary_key:
+    - energyAccountId
+
+  alternate_keys:
+    - accountNumber
+
+  foreign_keys:
+    - columns:
+        - global_id
+      reference:
+        dataset: customers
+        columns:
+          - global_id
+      nullable: true
+
+    - columns:
+        - planId
+      reference:
+        dataset: energy_plans
+        columns:
+          - planId
+      nullable: true
+
+# -----------------------------------------------------------------------------
+# 5. Field-level contract
+# -----------------------------------------------------------------------------
+schema:
+  fields:
+
+    - name: global_id
+      data_type: string
+      logical_type: person_identifier
+      required: true
+      nullable: true
+      accepted:
+        format: UUID
+      example: "65df84b8-4274-4dbd-9667-6c9967ae6538"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: ENA_GLOBAL_ID_UUID
+          type: FORMAT_IF_PRESENT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "global_id must be a valid UUID when supplied."
+
+        - rule_id: ENA_GLOBAL_ID_CUSTOMER_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: customers
+            reference_column: global_id
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            global_id must exist in customers.global_id when supplied.
+
+    - name: energyAccountId
+      data_type: string
+      logical_type: energy_account_identifier
+      required: true
+      nullable: false
+      accepted:
+        format: UUID
+      example: "55bf44d5-f544-468c-a822-eb5e26bd2924"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: ENA_ACCOUNT_ID_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "energyAccountId must always be present."
+
+        - rule_id: ENA_ACCOUNT_ID_UUID
+          type: FORMAT
+          parameters:
+            format: UUID
+          severity: ERROR
+          action: QUARANTINE
+          description: "energyAccountId must be a valid UUID."
+
+    - name: accountNumber
+      data_type: string
+      logical_type: energy_account_number
+      required: true
+      nullable: false
+      accepted:
+        regex: '^EA-\d{6}$'
+      example: "EA-000042"
+      sensitivity:
+        classification: HIGHLY_CONFIDENTIAL
+        is_pii: true
+        pii_type: UTILITY_ACCOUNT_IDENTIFIER
+        handling: TOKENISE_OR_MASK
+      quality_rules:
+        - rule_id: ENA_ACCOUNT_NUMBER_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "accountNumber must always be present."
+
+        - rule_id: ENA_ACCOUNT_NUMBER_PATTERN
+          type: REGEX
+          parameters:
+            regex: '^EA-\d{6}$'
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            accountNumber must follow the EA-000000 pattern.
+
+    - name: displayName
+      data_type: string
+      logical_type: energy_account_display_name
+      required: true
+      nullable: false
+      accepted:
+        regex: '^Energy Account .+$'
+        max_length: 200
+      example: "Energy Account 42"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: ENA_DISPLAY_NAME_NOT_NULL
+          type: NOT_NULL
+          severity: ERROR
+          action: QUARANTINE
+          description: "displayName must always be present."
+
+        - rule_id: ENA_DISPLAY_NAME_PATTERN
+          type: REGEX
+          parameters:
+            regex: '^Energy Account .+$'
+          severity: WARNING
+          action: ALLOW_WITH_WARNING
+          description: >
+            displayName should follow the source generator style
+            Energy Account {id}.
+
+    - name: openStatus
+      data_type: string
+      logical_type: energy_account_open_status
+      required: true
+      nullable: false
+      accepted:
+        values:
+          - OPEN
+          - CLOSED
+      example: "OPEN"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: RESTRICT_ACCESS
+      quality_rules:
+        - rule_id: ENA_OPEN_STATUS_ENUM
+          type: ACCEPTED_VALUES
+          parameters:
+            values:
+              - OPEN
+              - CLOSED
+          severity: ERROR
+          action: QUARANTINE
+          description: "openStatus must be OPEN or CLOSED."
+
+    - name: creationDate
+      data_type: string
+      logical_type: date
+      required: true
+      nullable: true
+      accepted:
+        format: ISO_8601_DATE
+      example: "2024-08-19"
+      sensitivity:
+        classification: CONFIDENTIAL
+        is_pii: false
+        handling: RESTRICT_OR_GENERALISE
+      quality_rules:
+        - rule_id: ENA_CREATION_DATE_PARSEABLE
+          type: PARSEABLE_DATE_IF_PRESENT
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            creationDate must be parseable as a date when supplied.
+
+    - name: planId
+      data_type: string
+      logical_type: energy_plan_identifier
+      required: true
+      nullable: true
+      accepted:
+        regex: '^EPLAN-\d{3}$'
+      example: "EPLAN-007"
+      sensitivity:
+        classification: INTERNAL
+        is_pii: false
+        handling: NONE
+      quality_rules:
+        - rule_id: ENA_PLAN_ID_PATTERN
+          type: REGEX_IF_PRESENT
+          parameters:
+            regex: '^EPLAN-\d{3}$'
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            planId must follow the EPLAN-000 pattern when supplied.
+
+        - rule_id: ENA_PLAN_ID_FK
+          type: FOREIGN_KEY_IF_PRESENT
+          parameters:
+            reference_dataset: energy_plans
+            reference_column: planId
+          severity: ERROR
+          action: QUARANTINE
+          description: >
+            planId must exist in energy_plans.planId when supplied.
+
+# -----------------------------------------------------------------------------
+# 6. Dataset-level quality rules
+# -----------------------------------------------------------------------------
+dataset_quality_rules:
+
+  - rule_id: ENA_ACCOUNT_ID_UNIQUE
+    type: UNIQUE
+    columns:
+      - energyAccountId
+    severity: ERROR
+    action: QUARANTINE
+    description: "energyAccountId must be unique across the dataset."
+
+  - rule_id: ENA_ACCOUNT_NUMBER_UNIQUE
+    type: UNIQUE
+    columns:
+      - accountNumber
+    severity: ERROR
+    action: QUARANTINE
+    description: "accountNumber must be unique across the dataset."
+
+  - rule_id: ENA_CUSTOMER_LINK_PRESENT
+    type: NOT_NULL
+    columns:
+      - global_id
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      An energy account should identify its customer. The physical schema
+      currently permits global_id to be null.
+
+  - rule_id: ENA_PLAN_LINK_PRESENT
+    type: NOT_NULL
+    columns:
+      - planId
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      An energy account should identify its retail plan. The physical schema
+      currently permits planId to be null.
+
+  - rule_id: ENA_CREATION_DATE_NOT_IN_FUTURE
+    type: DATE_NOT_IN_FUTURE
+    columns:
+      - creationDate
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      creationDate cannot be later than the pipeline processing date.
+
+  - rule_id: ENA_ACCOUNT_NUMBER_SEQUENCE_RANGE
+    type: REGEX_AND_NUMERIC_COMPONENT_RANGE
+    parameters:
+      column: accountNumber
+      regex: '^EA-(\d{6})$'
+      capture_group: 1
+      min: 0
+      max: 1999
+    severity: WARNING
+    action: ALLOW_WITH_WARNING
+    description: >
+      At SCALE=1, the source generator creates account numbers from EA-000000
+      through EA-001999. Values outside this range should be investigated.
+
+  - rule_id: ENA_CHILD_CUSTOMER_CONSISTENCY
+    type: CHILD_REFERENCE_CUSTOMER_CONSISTENCY
+    parameters:
+      parent_key: energyAccountId
+      parent_customer_column: global_id
+      child_datasets:
+        - dataset: energy_service_points
+          child_key: energyAccountId
+          child_customer_column: global_id
+        - dataset: energy_invoices
+          child_key: energyAccountId
+          child_customer_column: global_id
+      ignore_nulls: true
+      comparison_scope: COMPLETE_SNAPSHOT
+    severity: ERROR
+    action: QUARANTINE
+    description: >
+      Child service-point and invoice records must identify the same customer as
+      their parent energy account.
+
+# -----------------------------------------------------------------------------
+# 7. Derived checks for Silver and AI-ready context
+# -----------------------------------------------------------------------------
+derived_quality_checks:
+
+  - rule_id: ENA_IS_OPEN_DERIVATION
+    type: DERIVED_BOOLEAN
+    expression: "openStatus = 'OPEN'"
+    output_field: is_open
+    description: >
+      Silver may derive a boolean is_open field from openStatus.
+
+  - rule_id: ENA_PLAN_CONTEXT_JOIN
+    type: APPROVED_REFERENCE_ENRICHMENT
+    reference_dataset: energy_plans
+    join:
+      source_column: planId
+      reference_column: planId
+    approved_reference_fields:
+      - brand
+      - brandName
+      - displayName
+      - fuelType
+      - type
+      - customerType
+    description: >
+      Silver may enrich the account with approved retail-plan context after the
+      plan foreign key has passed validation.
+
+# -----------------------------------------------------------------------------
+# 8. Notes for the team
+# -----------------------------------------------------------------------------
+notes:
+  - >
+    This contract follows the authoritative physical source schema and includes
+    all seven fields defined for energy_accounts.
+  - >
+    accountNumber is a sensitive utility account identifier. It must be masked,
+    tokenised, or removed before customer-facing or general AI consumption.
+  - >
+    energy_plans is a catalogue dataset without global_id. Its plan attributes
+    may be joined only after planId passes referential-integrity validation.
+  - >
+    The account-number sequence range is specific to SCALE=1 and must be
+    parameterised or disabled when a different generation scale is used.
+  - >
+    The physical dataset does not contain organisationId. Any residential or
+    business classification should be derived from the approved energy plan or
+    another governed source rather than invented in this contract.
+  - >
+    The source does not include a last-updated timestamp, so this contract
+    cannot define a reliable record-level freshness rule beyond CDC ingestion
+    metadata.
