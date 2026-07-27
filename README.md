@@ -29,11 +29,11 @@ Databricks also exposes the read-only `information_schema` system namespace auto
 `0-ai-trust`
 ├── bronze
 │   ├── landing                         external volume
-│   ├── cdc_changes                     external Delta table
+│   ├── cdc_changes                     S3-backed streaming table
 │   ├── cdc_scd2                        logical SCD2 view
-│   ├── kafka_events                    external Delta table
+│   ├── kafka_events                    S3-backed streaming table
 │   ├── kafka_events_deduplicated       view
-│   └── file_arrivals                   external Delta table
+│   └── file_arrivals                   S3-backed streaming table
 ├── silver                              pending implementation
 └── gold
     ├── 10 external Delta star tables
@@ -48,13 +48,12 @@ s3://g3-assignment/g3/0-ai-trust/
 │   │   ├── event/<dataset>/            business-event envelopes
 │   │   ├── file/<dataset>/             source files, byte-for-byte
 │   │   └── manifests/                  heartbeat and reconciliation receipts
-│   └── tables/
-│       ├── cdc_changes/                Delta
-│       ├── kafka_events/               Delta
-│       └── file_arrivals/              Delta
-├── silver/                             reserved for the Silver workstream
-├── gold/tables/<table>/                external Delta star tables
-└── __managed/                          guard root; expected to contain no tables
+│   └── __managed/                      UC-managed Bronze streaming tables
+├── silver/__managed/                   reserved Silver managed root
+├── gold/
+│   ├── __managed/                      reserved Gold managed root
+│   └── tables/<table>/                 future external Delta star tables
+└── __managed/                          catalog-level managed metadata
 ```
 
 The former top-level `landing/` layout is legacy and must not receive new objects.
@@ -73,9 +72,9 @@ Bronze adds only transport and ingestion metadata:
 
 This gives mutable database entities SCD Type 2 behaviour without rewriting the protected raw landing. Kafka event history and immutable file facts remain append-only. Initial onboarding follows the HVR pattern: complete the initial snapshot, retain its source position, then continue from the same LSN without a gap.
 
-Never run a full refresh casually. External sinks are append-only and a full refresh resets pipeline checkpoints without clearing sink data. Recovery must either preserve the checkpoint or deliberately rebuild the affected external path from the immutable landing.
+Never run a full refresh casually. It resets streaming state and replays the immutable landing. Use it only for an intentional, audited Bronze rebuild.
 
-Do not rename or change the URL/file-event configuration of an external location after Auto Loader has checkpointed it. Managed file events bind the checkpoint continuation token to the queue. If that configuration must change, first stop the pipeline, make the location change once, temporarily disable `delta.appendOnly`, truncate the three external sinks, restore `delta.appendOnly`, recreate the pipeline checkpoint, and replay from landing. This recovery was tested during setup; changing the queue without resetting the checkpoint raises `CF_MANAGED_FILE_EVENTS_INVALID_CONTINUATION_TOKEN`.
+Do not rename or change `zero_ai_trust_landing` after Auto Loader has checkpointed it. Managed file events bind continuation state to its queue. A deliberate queue replacement requires a stopped pipeline and a clean replay from immutable landing.
 
 ## Source allocation
 
@@ -161,7 +160,7 @@ There are no PowerShell deployment scripts. Commands below use standard Terrafor
 - OpenSSH
 - GNU Make
 - Python 3.12+
-- The existing S3 storage credential and external location must have read/write access to `s3://g3-assignment/g3/0-ai-trust/`.
+- Storage credential `zero_ai_trust_storage_credential`; narrowly scoped external locations for catalog/schema managed roots, Bronze landing, and future Gold tables.
 
 Confirm identity before changing infrastructure:
 
@@ -326,11 +325,11 @@ databricks pipelines list-pipelines --profile g3-databricks
 databricks jobs list --profile g3-databricks
 
 # Validate all continuous pipeline definitions without writing data.
-databricks pipelines start-update ba6a2d09-4d80-4b13-ac56-22e644411fe2 \
+databricks pipelines start-update <pipeline-id-from-list> \
   --validate-only --profile g3-databricks
 
 # Start continuous processing. Use --full-refresh only for an intentional rebuild.
-databricks pipelines start-update ba6a2d09-4d80-4b13-ac56-22e644411fe2 \
+databricks pipelines start-update <pipeline-id-from-list> \
   --profile g3-databricks
 
 ```
