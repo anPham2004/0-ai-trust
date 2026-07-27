@@ -1,19 +1,23 @@
-"""Append source-native business-event envelopes to the external Bronze ledger."""
+"""Load source-native business-event envelopes into a Bronze streaming table."""
 
 from pyspark import pipelines as dp
 from pyspark.sql import functions as F
 
-from framework.landing_stream_reader import external_bronze_table, read_transport_stream
+from framework.landing_stream_reader import bronze_table_path, read_transport_stream
 
 
-dp.create_sink(
-    "kafka_events_sink",
-    "delta",
-    {"tableName": external_bronze_table("kafka_events")},
+@dp.table(
+    name="kafka_events",
+    path=bronze_table_path("kafka_events"),
+    comment="Immutable Kafka business-event history with source payload",
+    spark_conf={"pipelines.trigger.interval": "1 minute"},
+    table_properties={
+        "quality": "bronze",
+        "data_classification": "Highly Confidential",
+        "delta.appendOnly": "true",
+        "delta.enableChangeDataFeed": "true",
+    },
 )
-
-
-@dp.append_flow(name="ingest_kafka_events", target="kafka_events_sink")
 def ingest_kafka_events():
     return read_transport_stream("event").select(
         "topic",

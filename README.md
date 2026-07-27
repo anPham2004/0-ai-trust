@@ -1,6 +1,6 @@
 # 0 AI Trust
 
-This repository simulates a NAB-style data ingestion boundary for the Banker Assist assignment. The current deliverable stops at Bronze. Silver and Gold contain code templates only and must not create datasets until modelling, data-quality rules, PII policies, and AI consumption contracts are approved.
+This repository simulates a NAB-style data platform for the Banker Assist assignment. Bronze ingestion is implemented. Silver remains owned by the Silver modelling workstream. Gold SQL is prepared against the agreed Silver and Gold schemas, but is intentionally not deployed until Silver exists.
 
 ## Outcome
 
@@ -34,8 +34,10 @@ Databricks also exposes the read-only `information_schema` system namespace auto
 │   ├── kafka_events                    external Delta table
 │   ├── kafka_events_deduplicated       view
 │   └── file_arrivals                   external Delta table
-├── silver                              empty template
-└── gold                                empty template
+├── silver                              pending implementation
+└── gold
+    ├── 10 external Delta star tables
+    └── 10 AI-ready logical views
 ```
 
 ```text
@@ -50,8 +52,8 @@ s3://g3-assignment/g3/0-ai-trust/
 │       ├── cdc_changes/                Delta
 │       ├── kafka_events/               Delta
 │       └── file_arrivals/              Delta
-├── silver/                             reserved
-├── gold/                               reserved
+├── silver/                             reserved for the Silver workstream
+├── gold/tables/<table>/                external Delta star tables
 └── __managed/                          guard root; expected to contain no tables
 ```
 
@@ -93,7 +95,9 @@ The simulator uses Debezium because HVR/Precisely is proprietary. It reproduces 
 
 The pipeline uses the successor Spark Declarative Pipelines interface, `from pyspark import pipelines as dp`, Spark Structured Streaming, and Auto Loader. It does not use the legacy `dlt` Python module, Lakeflow Connect managed database connectors, or direct outbound database/Kafka connections from Free Edition.
 
-Databricks renamed Delta Live Tables to Lakeflow Spark Declarative Pipelines. The single pipeline runs continuously and owns the Auto Loader checkpoints. Bronze streaming flows use their low-latency default trigger, while every future Silver and Gold dataset must set `spark_conf=downstream_microbatch_spark_conf()` to run at a 15-minute trigger interval. This preserves both SLAs inside the one concurrently active workspace pipeline allowed by Free Edition.
+Databricks renamed Delta Live Tables to Lakeflow Spark Declarative Pipelines. The ingestion pipeline runs continuously and owns the Auto Loader checkpoints. Bronze streaming flows use their low-latency default trigger. Silver may use the shared 15-minute trigger policy when its implementation is added.
+
+Gold is deliberately outside the Spark Declarative Pipeline source glob. The star layer uses explicit SQL `MERGE` statements into external Delta tables, and the AI-ready layer uses logical views. A 15-minute Lakeflow Job or equivalent SQL orchestration can be configured only after Silver is complete; no Gold scheduler is deployed by this change.
 
 ## Repository structure
 
@@ -127,14 +131,19 @@ Databricks renamed Delta Live Tables to Lakeflow Spark Declarative Pipelines. Th
 ├── pipelines/
 │   ├── bootstrap/              versioned Unity Catalog DDL migrations
 │   ├── bronze/                 implemented ingestion pipeline
-│   ├── silver/                 modelling template only
-│   └── gold/                   modelling template only
+│   ├── silver/                 owned by the Silver workstream
+│   ├── gold-sql/
+│   │   ├── star-schema/        idempotent Silver-to-Gold MERGE statements
+│   │   └── ai-ready/           role-aware denormalized logical views
+│   └── gold/                   intentionally contains no SDP definitions
 ├── infrastructure/aws/         Terraform for EC2, IAM, S3, and monitoring
 └── tests/
     ├── architecture/           repository and ingestion invariants
     ├── unit/                   isolated policy tests
     ├── contracts/              reserved for contract validation
-    └── integration/            reserved for pipeline smoke tests
+    └── integration/
+        ├── silver/             Silver hand-off and quarantine acceptance tests
+        └── gold/               Gold integrity and AI-ready edge-case tests
 ```
 
 Naming is deterministic: deployable component directories use `kebab-case`; Python, test, contract, and Terraform identifiers use `snake_case`; SQL migrations use `vNNN_description.sql` and run in lexical order. Do not introduce version suffixes such as `nab-v2` into resource names.
@@ -270,15 +279,15 @@ PostgreSQL and Kafka Connect ports bind only to EC2 loopback and are not exposed
 
 ## Initialize Unity Catalog
 
-Run `pipelines/bootstrap/v001_create_external_objects.sql` once through Databricks SQL Editor as the storage owner. Future idempotent migrations use the next `vNNN_description.sql` name. The initial migration creates only:
+Run `v001_create_external_objects.sql` once through Databricks SQL Editor as the storage owner. The pipeline then owns the three Bronze streaming tables. After their first successful update, run `v002_create_bronze_views.sql`. Do not run `v003_create_gold_external_tables.sql` until the approved Silver model exists.
 
 - catalog `0-ai-trust`
 - schemas `bronze`, `silver`, and `gold`
 - external landing volume
-- three external Bronze Delta tables
-- two metadata-only views
+- three S3-backed Bronze streaming tables created by the declarative pipeline
+- two logical Bronze views created after those tables exist
 
-Confirm that every physical Bronze table is external:
+Confirm that every physical object resolves to the team-owned S3 hierarchy. A streaming table is reported as `STREAMING_TABLE`; its storage path, not the table-type label, proves storage ownership:
 
 ```sql
 SELECT table_schema, table_name, table_type, data_source_format, storage_path
@@ -289,15 +298,15 @@ ORDER BY table_schema, table_name;
 
 ## Configure and run the pipelines
 
-After repository changes are merged into `develop`, the GitHub workflow tests and syncs them into `/Shared/0-ai-trust`. The existing `0-ai-trust-medallion` pipeline directly registers `pipelines/bronze`, `pipelines/silver`, and `pipelines/gold` and runs continuously. Retaining this pipeline preserves its Auto Loader checkpoints and prevents a duplicate replay into the external sinks. It has no generic entrypoint file. Its root directory is:
+After repository changes are merged into `develop`, the GitHub workflow tests and syncs them into `/Shared/0-ai-trust`. The single `0-ai-trust-medallion` pipeline runs continuously and currently registers only Bronze. Silver files are intentionally empty modelling boundaries; Gold SQL is outside the pipeline source glob and cannot execute accidentally. Its root directory is:
 
 ```text
 Root folder: /Workspace/Shared/0-ai-trust/pipelines
 ```
 
-The Bronze flows use Spark Structured Streaming and Auto Loader to materialise newly landed data without waiting for a scheduled Job. Free Edition permits only one concurrently active workspace pipeline, so a second triggered Silver/Gold pipeline cannot run while Bronze remains continuous. Future Silver and Gold tables therefore stay in the same pipeline and use a per-dataset 15-minute `pipelines.trigger.interval`. No Lakeflow Job is required for this execution model.
+The Bronze flows use Spark Structured Streaming and Auto Loader with a one-minute trigger to materialise newly landed data without a scheduled Job. Future Silver declarations may use a per-dataset 15-minute `pipelines.trigger.interval`. No Databricks Job is required until Silver and Gold are implemented and end-to-end assurance is ready.
 
-Future downstream declarations must use the shared policy explicitly:
+Future Silver declarations may use the shared policy explicitly:
 
 ```python
 from pyspark import pipelines as dp
@@ -357,9 +366,31 @@ feature branch -> pull request -> develop -> GitHub Action -> Databricks Git Fol
 - No PII or raw payload values may be written to application logs.
 - Every source is ingested; business relevance is decided only after Silver contracts are approved.
 - Silver will implement config-driven DQ, tolerances, quarantine references, and CDE lineage.
-- Gold will implement purpose-bound access, PII masking, quality evidence, known limitations, and AI-ready semantic context.
+- Gold SQL implements purpose-bound views, no raw PII projection, quality evidence, known limitations, and AI-ready context. Unity Catalog grants and the `banker-assist-users` group must still be provisioned before deployment.
 - AI must never make credit approval or fraud decisions and must not receive raw Highly Confidential fields.
 
-## Current modelling boundary
+## Gold execution order after Silver is ready
 
-The descriptive files under `pipelines/silver` and `pipelines/gold` intentionally contain no dataset definitions. Adding curated or context tables before modelling approval is a scope violation for the current phase.
+1. Run `pipelines/bootstrap/v003_create_gold_external_tables.sql`.
+2. Run the SQL files in `pipelines/gold-sql/star-schema` in this dependency order: party/KYC/organisation dimensions, arrangement/application/document dimensions, application/service facts, then arrangement snapshots.
+3. Run every file in `pipelines/gold-sql/ai-ready`; these statements are idempotent logical-view replacements.
+4. Execute `tests/integration/gold/test_required_silver_schema.sql` before refresh, then the remaining Gold SQL tests after refresh.
+5. Only after a clean manual end-to-end run, configure a non-overlapping 15-minute Gold refresh Job.
+
+The Gold `MERGE` statements are rerunnable. Additive Silver columns are tolerated because projections are explicit. Removing, renaming, or changing the type of a required Silver field is a breaking change detected by the schema test.
+
+## Assignment readiness and remaining gaps
+
+Prepared in this repository: three ingestion mechanisms, immutable Bronze evidence, more than eight contract-defined DQ rules, external Gold star modelling, hybrid AI-ready views, role-aware restricted fields, lineage/quality/version metadata, reconciliation tests, and tests for duplicates, foreign keys, late data, date ordering, idempotency, schema evolution, freshness limitations, and PII leakage.
+
+Still blocked on the Silver workstream or deployment evidence:
+
+- executable Silver DQ, tolerance handling, quarantine, masking, and CDE lineage;
+- final field-level Silver contracts and confirmed physical data types;
+- Unity Catalog grants and membership of `banker-assist-users`;
+- identity-to-party entitlements or row filters for customer-specific access, which are absent from the supplied Silver schema;
+- sample AI answers, missing/unsafe/refusal cases, and screenshot evidence;
+- clean-state end-to-end rerun, measured freshness/reconciliation results, and the final 15-minute Gold Job;
+- final runbook values and submitted output extracts.
+
+No Gold SQL, test, migration, grant, Job, or pipeline update is executed by this change.

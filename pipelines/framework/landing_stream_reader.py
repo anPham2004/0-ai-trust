@@ -30,6 +30,14 @@ def external_bronze_table(table_name: str) -> str:
     return f"`{catalog}`.bronze.{table_name}"
 
 
+def bronze_table_path(table_name: str) -> str:
+    storage_root = _spark().conf.get(
+        "zero_ai_trust.storage_root",
+        "s3://g3-assignment/g3/0-ai-trust",
+    ).rstrip("/")
+    return f"{storage_root}/bronze/tables/{table_name}"
+
+
 def read_transport_stream(source_type: str):
     landing = _spark().conf.get(
         "zero_ai_trust.landing_path",

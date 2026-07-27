@@ -43,7 +43,7 @@ class ArchitectureTests(unittest.TestCase):
                 "organisations.yml",
                 "service_cases.yml",
             },
-            "gold": {"cde_registry.yml", "scope_registry.yml"},
+            "gold": {"ai_ready_context.yml", "cde_registry.yml", "scope_registry.yml"},
         }
         for layer, filenames in expected.items():
             actual = {path.name for path in (ROOT / "contracts" / layer).iterdir() if path.is_file()}
@@ -142,44 +142,84 @@ class ArchitectureTests(unittest.TestCase):
         self.assertNotIn("nab_gold", setup)
         self.assertEqual(setup.count("CREATE SCHEMA IF NOT EXISTS"), 3)
 
-    def test_all_bronze_tables_are_external_delta(self):
+    def test_bronze_storage_is_owned_by_streaming_tables(self):
         setup = (ROOT / "pipelines/bootstrap/v001_create_external_objects.sql").read_text(encoding="utf-8")
-        for table in ("cdc_changes", "kafka_events", "file_arrivals"):
-            marker = f"CREATE TABLE IF NOT EXISTS `0-ai-trust`.bronze.{table}"
-            section = setup.split(marker, 1)[1].split(";", 1)[0]
-            self.assertIn("USING DELTA", section)
-            self.assertIn("LOCATION 's3://g3-assignment/g3/0-ai-trust/bronze/tables/", section)
-        self.assertIn("CREATE OR REPLACE VIEW `0-ai-trust`.bronze.cdc_scd2", setup)
+        views = (ROOT / "pipelines/bootstrap/v002_create_bronze_views.sql").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("CREATE TABLE", setup)
+        self.assertIn("CREATE EXTERNAL VOLUME", setup)
+        self.assertIn("CREATE OR REPLACE VIEW `0-ai-trust`.bronze.cdc_scd2", views)
+        self.assertIn("CREATE OR REPLACE VIEW `0-ai-trust`.bronze.kafka_events_deduplicated", views)
 
-    def test_declarative_pipeline_writes_only_external_sinks(self):
+    def test_declarative_pipeline_writes_streaming_tables_to_s3(self):
         definitions = "\n".join(
             path.read_text(encoding="utf-8")
             for path in sorted((ROOT / "pipelines/bronze").glob("*_ingestion.py"))
         )
         support = (ROOT / "pipelines/framework/landing_stream_reader.py").read_text(encoding="utf-8")
-        self.assertEqual(definitions.count("dp.create_sink("), 3)
-        self.assertEqual(definitions.count("@dp.append_flow"), 3)
+        self.assertEqual(definitions.count("@dp.table("), 3)
+        self.assertEqual(definitions.count("bronze_table_path("), 3)
+        self.assertEqual(definitions.count('"pipelines.trigger.interval": "1 minute"'), 3)
+        self.assertNotIn("dp.create_sink(", definitions)
+        self.assertNotIn("@dp.append_flow", definitions)
         self.assertNotIn("import dlt", definitions)
         self.assertNotIn("dlt.", definitions)
         self.assertIn("from pyspark import pipelines as dp", definitions)
         self.assertIn('option("cloudFiles.useManagedFileEvents", "true")', support + definitions)
         self.assertIn('option("cloudFiles.format", "binaryFile")', definitions)
 
-    def test_silver_and_gold_are_templates_only(self):
+    def test_silver_remains_owned_by_the_silver_workstream(self):
         expected = {
-            "silver": {
-                "application_curated.py", "customer_curated.py", "organisation_curated.py",
-                "record_quarantine.py", "service_curated.py",
-            },
-            "gold": {"banker_assist_context.py", "data_quality_context.py", "semantic_context.py"},
+            "application_curated.py", "customer_curated.py", "organisation_curated.py",
+            "record_quarantine.py", "service_curated.py",
         }
-        for layer, filenames in expected.items():
-            actual = {path.name for path in (ROOT / "pipelines" / layer).glob("*.py")}
-            self.assertEqual(actual, filenames)
-            for filename in filenames:
-                content = (ROOT / "pipelines" / layer / filename).read_text(encoding="utf-8")
-                self.assertNotIn("@dp.", content)
-                self.assertNotIn("CREATE TABLE", content.upper())
+        actual = {path.name for path in (ROOT / "pipelines/silver").glob("*.py")}
+        self.assertEqual(actual, expected)
+        for filename in expected:
+            content = (ROOT / "pipelines/silver" / filename).read_text(encoding="utf-8")
+            self.assertNotIn("@dp.", content)
+
+    def test_gold_has_external_star_tables_and_ai_ready_views(self):
+        star = sorted((ROOT / "pipelines/gold-sql/star-schema").glob("*.sql"))
+        ai_ready = sorted((ROOT / "pipelines/gold-sql/ai-ready").glob("*.sql"))
+        self.assertEqual(len(star), 10)
+        self.assertEqual(len(ai_ready), 10)
+
+        for path in star:
+            sql = path.read_text(encoding="utf-8").upper()
+            self.assertIn("MERGE INTO `0-AI-TRUST`.GOLD.", sql)
+            self.assertNotIn("CREATE MATERIALIZED VIEW", sql)
+            self.assertNotIn("CREATE STREAMING TABLE", sql)
+
+        for path in ai_ready:
+            sql = path.read_text(encoding="utf-8").upper()
+            self.assertIn("CREATE OR REPLACE VIEW `0-AI-TRUST`.GOLD.AIV_", sql)
+            self.assertNotIn("CREATE MATERIALIZED VIEW", sql)
+
+    def test_all_gold_physical_tables_are_external_delta(self):
+        setup = (ROOT / "pipelines/bootstrap/v003_create_gold_external_tables.sql").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(setup.count("CREATE TABLE IF NOT EXISTS `0-ai-trust`.gold."), 10)
+        self.assertEqual(setup.count("USING DELTA"), 10)
+        self.assertEqual(
+            setup.count("LOCATION 's3://g3-assignment/g3/0-ai-trust/gold/tables/"),
+            10,
+        )
+
+    def test_ai_ready_views_carry_zero_trust_context(self):
+        definitions = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted((ROOT / "pipelines/gold-sql/ai-ready").glob("*.sql"))
+        )
+        for field in (
+            "dq_status", "pipeline_run_id", "last_refreshed_at",
+            "context_version", "usage_restriction",
+        ):
+            self.assertIn(field, definitions)
+        self.assertIn("is_account_group_member('banker-assist-users')", definitions)
+        self.assertNotRegex(definitions.lower(), r"\b(email|phone_number|tfn|card_number)\b")
 
     def test_periodic_database_kafka_and_file_activity_exists(self):
         activity = (ROOT / "source-simulator/activity-generator/activity.py").read_text(encoding="utf-8")

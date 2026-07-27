@@ -1,19 +1,23 @@
-"""Append source-native database CDC envelopes to the external Bronze ledger."""
+"""Load source-native database CDC envelopes into a Bronze streaming table."""
 
 from pyspark import pipelines as dp
 from pyspark.sql import functions as F
 
-from framework.landing_stream_reader import external_bronze_table, read_transport_stream
+from framework.landing_stream_reader import bronze_table_path, read_transport_stream
 
 
-dp.create_sink(
-    "cdc_changes_sink",
-    "delta",
-    {"tableName": external_bronze_table("cdc_changes")},
+@dp.table(
+    name="cdc_changes",
+    path=bronze_table_path("cdc_changes"),
+    comment="Append-only source-native CDC history with Debezium transport metadata",
+    spark_conf={"pipelines.trigger.interval": "1 minute"},
+    table_properties={
+        "quality": "bronze",
+        "data_classification": "Highly Confidential",
+        "delta.appendOnly": "true",
+        "delta.enableChangeDataFeed": "true",
+    },
 )
-
-
-@dp.append_flow(name="ingest_cdc_changes", target="cdc_changes_sink")
 def ingest_cdc_changes():
     source_schema = F.get_json_object("value", "$.source.schema")
     source_table = F.get_json_object("value", "$.source.table")

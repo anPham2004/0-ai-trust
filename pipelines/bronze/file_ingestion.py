@@ -1,19 +1,23 @@
-"""Append byte-for-byte source file arrivals to the external Bronze ledger."""
+"""Load byte-for-byte source file arrivals into a Bronze streaming table."""
 
 from pyspark import pipelines as dp
 from pyspark.sql import SparkSession, functions as F
 
-from framework.landing_stream_reader import external_bronze_table
+from framework.landing_stream_reader import bronze_table_path
 
 
-dp.create_sink(
-    "file_arrivals_sink",
-    "delta",
-    {"tableName": external_bronze_table("file_arrivals")},
+@dp.table(
+    name="file_arrivals",
+    path=bronze_table_path("file_arrivals"),
+    comment="Immutable byte-for-byte source file arrivals; parsing is deferred to Silver",
+    spark_conf={"pipelines.trigger.interval": "1 minute"},
+    table_properties={
+        "quality": "bronze",
+        "data_classification": "Highly Confidential",
+        "delta.appendOnly": "true",
+        "delta.enableChangeDataFeed": "true",
+    },
 )
-
-
-@dp.append_flow(name="ingest_file_arrivals", target="file_arrivals_sink")
 def ingest_file_arrivals():
     spark = SparkSession.getActiveSession()
     if spark is None:
