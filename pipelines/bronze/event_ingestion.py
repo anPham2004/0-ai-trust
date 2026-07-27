@@ -3,12 +3,11 @@
 from pyspark import pipelines as dp
 from pyspark.sql import functions as F
 
-from framework.landing_stream_reader import bronze_table_path, read_transport_stream
+from framework.landing_stream_reader import read_transport_stream
 
 
 @dp.table(
     name="kafka_events",
-    path=bronze_table_path("kafka_events"),
     comment="Immutable Kafka business-event history with source payload",
     spark_conf={"pipelines.trigger.interval": "1 minute"},
     table_properties={

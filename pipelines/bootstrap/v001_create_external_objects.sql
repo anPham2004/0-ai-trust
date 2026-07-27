@@ -4,10 +4,13 @@ MANAGED LOCATION 's3://g3-assignment/g3/0-ai-trust/__managed'
 COMMENT 'Zero Trust AI data product; all business data is stored in customer-owned S3';
 
 CREATE SCHEMA IF NOT EXISTS `0-ai-trust`.bronze
+MANAGED LOCATION 's3://g3-assignment/g3/0-ai-trust/bronze/__managed'
 COMMENT 'Incremental native ingestion and source history';
 CREATE SCHEMA IF NOT EXISTS `0-ai-trust`.silver
+MANAGED LOCATION 's3://g3-assignment/g3/0-ai-trust/silver/__managed'
 COMMENT 'Reserved modelling template: validated and quarantined data';
 CREATE SCHEMA IF NOT EXISTS `0-ai-trust`.gold
+MANAGED LOCATION 's3://g3-assignment/g3/0-ai-trust/gold/__managed'
 COMMENT 'Reserved modelling template: masked AI-ready data products';
 
 -- Databricks creates this convenience schema with every new catalog. It is not

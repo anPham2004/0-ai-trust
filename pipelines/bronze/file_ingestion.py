@@ -3,12 +3,8 @@
 from pyspark import pipelines as dp
 from pyspark.sql import SparkSession, functions as F
 
-from framework.landing_stream_reader import bronze_table_path
-
-
 @dp.table(
     name="file_arrivals",
-    path=bronze_table_path("file_arrivals"),
     comment="Immutable byte-for-byte source file arrivals; parsing is deferred to Silver",
     spark_conf={"pipelines.trigger.interval": "1 minute"},
     table_properties={

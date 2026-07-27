@@ -284,10 +284,10 @@ Run `v001_create_external_objects.sql` once through Databricks SQL Editor as the
 - catalog `0-ai-trust`
 - schemas `bronze`, `silver`, and `gold`
 - external landing volume
-- three S3-backed Bronze streaming tables created by the declarative pipeline
+- three UC-managed Bronze streaming tables created by the declarative pipeline; the Bronze schema managed location is the team-owned S3 prefix `bronze/__managed`
 - two logical Bronze views created after those tables exist
 
-Confirm that every physical object resolves to the team-owned S3 hierarchy. A streaming table is reported as `STREAMING_TABLE`; its storage path, not the table-type label, proves storage ownership:
+Confirm that every physical object resolves to the team-owned S3 hierarchy. Unity Catalog does not allow an explicit `path` on a pipeline streaming table; it places the table under the schema's S3 managed location. A streaming table is reported as `STREAMING_TABLE`; its storage path proves storage ownership:
 
 ```sql
 SELECT table_schema, table_name, table_type, data_source_format, storage_path

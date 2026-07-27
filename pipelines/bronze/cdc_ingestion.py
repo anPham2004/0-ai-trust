@@ -3,12 +3,11 @@
 from pyspark import pipelines as dp
 from pyspark.sql import functions as F
 
-from framework.landing_stream_reader import bronze_table_path, read_transport_stream
+from framework.landing_stream_reader import read_transport_stream
 
 
 @dp.table(
     name="cdc_changes",
-    path=bronze_table_path("cdc_changes"),
     comment="Append-only source-native CDC history with Debezium transport metadata",
     spark_conf={"pipelines.trigger.interval": "1 minute"},
     table_properties={
