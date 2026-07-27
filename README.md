@@ -89,6 +89,58 @@ The authoritative routing mapping is `contracts/source/source_inventory.yml`. Se
 
 The simulator uses Debezium because HVR/Precisely is proprietary. It reproduces the relevant contract: initial snapshot, transaction-log CDC, source LSN, operation type, deletes, and continuous continuation. It must be described as an HVR analogue, not as HVR itself.
 
+## Bronze layer
+
+After ingestion from PostgreSQL/Debezium, Kafka, and S3 micro-batch, Auto Loader materialises exactly three external Delta tables. Each table adds only transport and provenance metadata to the native payload; no business schema is imposed until Silver.
+
+### `cdc_changes`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `topic` | string | The Kafka topic from which the change data was captured, indicating the source of the data stream. |
+| `kafka_partition` | bigint | The specific Kafka partition where the message related to the change was stored, which helps in understanding data distribution and scalability. |
+| `kafka_offset` | bigint | The position of the message within the Kafka partition, allowing for precise tracking of data retrieval. |
+| `record_key` | string | A unique identifier for the record in the change data, which helps to distinguish between different records in the dataset. |
+| `source_dataset` | string | The original dataset from which the change data was generated, providing context for the data lineage. |
+| `operation` | string | The type of operation that triggered the change, such as insert, update, or delete, giving insight into the nature of the data modification. |
+| `snapshot_state` | string | The state of the data snapshot at the time of capture, including whether it is a full snapshot or an incremental update. |
+| `source_lsn` | bigint | The log sequence number (LSN) that signifies the position in the database log corresponding to the change, useful for tracking changes over time. |
+| `source_timestamp_ms` | bigint | The timestamp indicating when the change occurred in the source system, measured in milliseconds since epoch. |
+| `raw_payload` | string | The raw data payload representing the change in its original format, which can be used for detailed analysis or reconstruction. |
+| `captured_at` | timestamp | The timestamp indicating when the change data was captured in the CDC process, important for understanding the latency of data ingestion. |
+| `_source_file` | string | The source file from which the change data was derived, useful for traceability and data auditing. |
+| `_source_file_modified_at` | timestamp | The timestamp of the last modification to the source file, providing context on when the source data was last changed. |
+| `_ingested_at` | timestamp | The timestamp when the change data was ingested into the current system, crucial for managing data freshness and pipeline performance. |
+
+### `kafka_events`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `topic` | string | The Kafka topic to which the event is related, helping to categorize the types of events being processed. |
+| `kafka_partition` | bigint | The specific partition within the Kafka topic, essential for understanding the distribution and ordering of events. |
+| `kafka_offset` | bigint | The offset of the event within the Kafka partition, providing a unique identifier for the event's position. |
+| `event_key` | string | A unique identifier for the event, useful for correlating events and ensuring consistency. |
+| `event_id` | string | A unique identifier assigned to the event, enabling tracking and referencing of specific events during processing. |
+| `event_type` | string | The type of event being recorded, assisting in filtering and processing logic based on different event categories. |
+| `source_dataset` | string | The original dataset from which the event originated, useful for tracing back to the source of the data. |
+| `occurred_at` | string | The timestamp when the event actually occurred, important for temporal analysis and event sequencing. |
+| `raw_payload` | string | The original payload data of the event in its raw format, allowing for further inspection and processing as needed. |
+| `captured_at` | timestamp | The timestamp when the event was captured in the system, providing insight into latency and processing times. |
+| `_source_file` | string | The source file from which the event data was derived, aiding in data lineage and traceability. |
+| `_source_file_modified_at` | timestamp | The timestamp when the source file was last modified, which can have implications for data integrity and freshness. |
+| `_ingested_at` | timestamp | The timestamp when the event was ingested into the system, relevant for understanding data flow and timeliness. |
+
+### `file_arrivals`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `source_dataset` | string | The name of the dataset from which the file originated, providing context on the data source. |
+| `source_file` | string | The original filename of the uploaded file, which can help in identifying and managing file versions. |
+| `raw_content` | binary | The actual byte-for-byte content of the file as it was received, which allows for future parsing and processing. |
+| `source_file_size` | bigint | The size of the file in bytes, giving insight into the volume of data being handled. |
+| `source_file_modified_at` | timestamp | The last modified timestamp of the source file, useful for tracking changes and updates. |
+| `_ingested_at` | timestamp | The timestamp when the file was ingested into the system, assisting in data lineage and processing timelines. |
+
 ## Declarative pipeline terminology
 
 The pipeline uses the successor Spark Declarative Pipelines interface, `from pyspark import pipelines as dp`, Spark Structured Streaming, and Auto Loader. It does not use the legacy `dlt` Python module, Lakeflow Connect managed database connectors, or direct outbound database/Kafka connections from Free Edition.

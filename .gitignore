@@ -26,4 +26,5 @@ _SUCCESS
 *.parquet.crc
 
 .claude/
+.databricks/
 plans/

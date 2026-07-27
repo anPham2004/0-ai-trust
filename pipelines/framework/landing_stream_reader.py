@@ -19,6 +19,7 @@ TRANSPORT_SCHEMA = StructType(
 
 
 def _spark() -> SparkSession:
+    # Fail fast with a clear message rather than a confusing AttributeError on None.
     session = SparkSession.getActiveSession()
     if session is None:
         raise RuntimeError("An active Spark session is required")
@@ -26,11 +27,13 @@ def _spark() -> SparkSession:
 
 
 def external_bronze_table(table_name: str) -> str:
+    # Conf-based catalog name lets tests/other environments override the "0-ai-trust" default.
     catalog = _spark().conf.get("zero_ai_trust.catalog", "0-ai-trust")
     return f"`{catalog}`.bronze.{table_name}"
 
 
 def read_transport_stream(source_type: str):
+    # Conf-based landing path mirrors external_bronze_table's override pattern.
     landing = _spark().conf.get(
         "zero_ai_trust.landing_path",
         "/Volumes/0-ai-trust/bronze/landing",
@@ -39,6 +42,7 @@ def read_transport_stream(source_type: str):
         _spark().readStream.format("cloudFiles")
         .option("cloudFiles.format", "text")
         .option("cloudFiles.includeExistingFiles", "true")
+        # Managed file events avoid a directory-listing scan on every trigger.
         .option("cloudFiles.useManagedFileEvents", "true")
         .load(f"{landing}/{source_type}")
         .select(
@@ -46,5 +50,6 @@ def read_transport_stream(source_type: str):
             F.col("_metadata.file_path").alias("_source_file"),
             F.col("_metadata.file_modification_time").alias("_source_file_modified_at"),
         )
+        # Flatten the transport envelope so callers get plain top-level columns.
         .select("transport.*", "_source_file", "_source_file_modified_at")
     )
