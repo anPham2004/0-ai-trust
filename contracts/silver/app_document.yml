@@ -10,7 +10,7 @@ schema: {document_id: STRING, application_id: STRING, global_id: STRING, documen
 rules:
   hard:
     - {id: document_keys_required, expression: "document_id IS NOT NULL AND application_id IS NOT NULL AND global_id IS NOT NULL"}
-    - {id: document_status_valid, expression: "status IN ('PENDING', 'RECEIVED', 'REJECTED')"}
+    - {id: document_status_valid, expression: "status IN ('REQUIRED', 'RECEIVED', 'VERIFIED', 'INVALID', 'EXPIRED')"}
     - {id: document_dates_valid, expression: "received_at IS NULL OR requested_at IS NULL OR received_at >= requested_at"}
   warn:
     - {id: document_requires_attention, expression: "is_invalid_or_expired = false"}

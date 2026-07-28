@@ -96,7 +96,9 @@ def build_app_document():
         F.col("global_id").cast("string").alias("global_id"),
         trimmed(F.col("documentType")).alias("document_type"),
         status.alias("status"),
-        ((status == "REJECTED") | (expiry.isNotNull() & (expiry < F.current_date()))).alias("is_invalid_or_expired"),
+        (status.isin("INVALID", "EXPIRED") | (expiry.isNotNull() & (expiry < F.current_date()))).alias(
+            "is_invalid_or_expired"
+        ),
         F.to_timestamp("requestedAt").alias("requested_at"),
         F.to_timestamp("receivedAt").alias("received_at"),
         expiry.alias("expiry_date"),
