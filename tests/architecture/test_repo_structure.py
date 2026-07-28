@@ -144,22 +144,33 @@ class ArchitectureTests(unittest.TestCase):
 
     def test_bronze_storage_is_owned_by_streaming_tables(self):
         setup = (ROOT / "pipelines/bootstrap/v001_create_external_objects.sql").read_text(encoding="utf-8")
-        views = (ROOT / "pipelines/bootstrap/v002_create_bronze_views.sql").read_text(
+        cleanup = (ROOT / "pipelines/bootstrap/v002_remove_legacy_bronze_objects.sql").read_text(
             encoding="utf-8"
         )
         self.assertNotIn("CREATE TABLE", setup)
         self.assertIn("CREATE EXTERNAL VOLUME", setup)
-        self.assertIn("CREATE OR REPLACE VIEW `0-ai-trust`.bronze.cdc_scd2", views)
-        self.assertIn("CREATE OR REPLACE VIEW `0-ai-trust`.bronze.kafka_events_deduplicated", views)
+        for legacy in ("cdc_changes", "cdc_scd2", "kafka_events", "file_arrivals"):
+            self.assertIn(legacy, cleanup)
+        self.assertNotIn("CREATE OR REPLACE VIEW", cleanup)
 
-    def test_declarative_pipeline_writes_streaming_tables_to_s3(self):
+    def test_declarative_pipeline_uses_source_aligned_streaming_tables(self):
         definitions = "\n".join(
             path.read_text(encoding="utf-8")
-            for path in sorted((ROOT / "pipelines/bronze").glob("*_ingestion.py"))
+            for path in sorted((ROOT / "pipelines/bronze").glob("*.py"))
         )
         support = (ROOT / "pipelines/framework/landing_stream_reader.py").read_text(encoding="utf-8")
-        self.assertEqual(definitions.count("@dp.table("), 3)
-        self.assertEqual(definitions.count('"pipelines.trigger.interval": "1 minute"'), 3)
+        registry = __import__(
+            "pipelines.framework.source_dataset_registry",
+            fromlist=["CDC_DATASETS", "EVENT_DATASETS", "FILE_DATASETS"],
+        )
+        self.assertEqual(len(registry.CDC_DATASETS), 23)
+        self.assertEqual(len(registry.EVENT_DATASETS), 5)
+        self.assertEqual(len(registry.FILE_DATASETS), 4)
+        self.assertIn('name=f"cdc_{dataset}"', definitions)
+        self.assertIn('name=f"event_{dataset}"', definitions)
+        self.assertIn('name=f"file_{dataset}"', definitions)
+        self.assertIn('name="ingestion_quarantine"', definitions)
+        self.assertIn('name="control_ingestion_manifests"', definitions)
         self.assertNotIn("path=", definitions)
         self.assertNotIn("dp.create_sink(", definitions)
         self.assertNotIn("@dp.append_flow", definitions)
@@ -167,7 +178,22 @@ class ArchitectureTests(unittest.TestCase):
         self.assertNotIn("dlt.", definitions)
         self.assertIn("from pyspark import pipelines as dp", definitions)
         self.assertIn('option("cloudFiles.useManagedFileEvents", "true")', support + definitions)
-        self.assertIn('option("cloudFiles.format", "binaryFile")', definitions)
+        self.assertIn('option("cloudFiles.format", "json")', support)
+        self.assertIn('option("cloudFiles.format", "csv")', support)
+        self.assertIn('option("cloudFiles.schemaEvolutionMode", "addNewColumns")', support)
+        self.assertIn('option("rescuedDataColumn", "_rescued_data")', support)
+        self.assertNotIn('option("cloudFiles.format", "binaryFile")', definitions + support)
+        self.assertNotIn("raw_payload", definitions)
+        self.assertNotIn("raw_content", definitions)
+
+    def test_landing_exposes_nested_records_for_native_schema_evolution(self):
+        exporter = (ROOT / "source-simulator/landing-exporter/exporter.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('record["record"] = envelope.get("after") or envelope.get("before")', exporter)
+        self.assertIn('record["record"] = envelope["payload"]', exporter)
+        self.assertIn('"payload": parsed', exporter)
+        self.assertNotIn('"value": message.value()', exporter)
 
     def test_silver_remains_owned_by_the_silver_workstream(self):
         expected = {
@@ -227,6 +253,10 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn("INSERT INTO lending_origination.loan_applications", activity)
         self.assertIn('"nab.application.events"', activity)
         self.assertIn("copy_object", activity)
+        self.assertIn('"ApplicationSubmitted"', activity)
+        self.assertIn('"ApplicationDetailsUpdated"', activity)
+        self.assertIn('"LoanApplicationProcessEvent"', activity)
+        self.assertNotIn('"periodic_update"', activity)
 
     def test_compose_uses_apache_kafka_and_credit_guard(self):
         compose = (ROOT / "source-simulator/compose.yaml").read_text(encoding="utf-8")
@@ -238,6 +268,8 @@ class ArchitectureTests(unittest.TestCase):
         self.assertNotIn("kafka-topics.sh", compose)
         self.assertIn("mem_limit:", compose)
         self.assertIn("MICROBATCH_INTERVAL_SECONDS:-60", compose)
+        self.assertIn("SOURCE_ACTIVITY_INTERVAL_SECONDS:-60", compose)
+        self.assertIn("SOURCE_FILE_INTERVAL_SECONDS:-3600", compose)
 
     def test_downstream_refresh_policy_is_fifteen_minutes(self):
         policy = (ROOT / "pipelines/framework/refresh_policy.py").read_text(encoding="utf-8")

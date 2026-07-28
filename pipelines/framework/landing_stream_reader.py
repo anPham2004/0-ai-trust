@@ -1,10 +1,10 @@
-"""Source-native Auto Loader readers shared by Bronze ingestion definitions."""
+"""Source-aligned Auto Loader readers shared by Bronze definitions."""
 
-from pyspark.sql import SparkSession, functions as F
+from pyspark.sql import SparkSession
 from pyspark.sql.types import LongType, StringType, StructField, StructType
 
 
-TRANSPORT_SCHEMA = StructType(
+INVALID_TRANSPORT_SCHEMA = StructType(
     [
         StructField("topic", StringType()),
         StructField("partition", LongType()),
@@ -12,8 +12,11 @@ TRANSPORT_SCHEMA = StructType(
         StructField("timestamp", LongType()),
         StructField("timestamp_type", LongType()),
         StructField("key", StringType()),
-        StructField("value", StringType()),
+        StructField("parse_error", StringType()),
+        StructField("raw_value", StringType()),
         StructField("captured_at", StringType()),
+        StructField("batch_id", StringType()),
+        StructField("_rescued_data", StringType()),
     ]
 )
 
@@ -25,26 +28,64 @@ def _spark() -> SparkSession:
     return session
 
 
-def external_bronze_table(table_name: str) -> str:
-    catalog = _spark().conf.get("zero_ai_trust.catalog", "0-ai-trust")
-    return f"`{catalog}`.bronze.{table_name}"
-
-
-def read_transport_stream(source_type: str):
-    landing = _spark().conf.get(
+def _landing() -> str:
+    return _spark().conf.get(
         "zero_ai_trust.landing_path",
         "/Volumes/0-ai-trust/bronze/landing",
     )
+
+
+def read_json_dataset_stream(source_type: str, source_directory: str):
     return (
         _spark().readStream.format("cloudFiles")
-        .option("cloudFiles.format", "text")
+        .option("cloudFiles.format", "json")
         .option("cloudFiles.includeExistingFiles", "true")
         .option("cloudFiles.useManagedFileEvents", "true")
-        .load(f"{landing}/{source_type}")
-        .select(
-            F.from_json("value", TRANSPORT_SCHEMA).alias("transport"),
-            F.col("_metadata.file_path").alias("_source_file"),
-            F.col("_metadata.file_modification_time").alias("_source_file_modified_at"),
-        )
-        .select("transport.*", "_source_file", "_source_file_modified_at")
+        .option("cloudFiles.schemaEvolutionMode", "addNewColumns")
+        .option("cloudFiles.inferColumnTypes", "false")
+        .option("rescuedDataColumn", "_rescued_data")
+        .load(f"{_landing()}/{source_type}/{source_directory}")
+    )
+
+
+def read_csv_dataset_stream(source_directory: str):
+    return (
+        _spark().readStream.format("cloudFiles")
+        .option("cloudFiles.format", "csv")
+        .option("cloudFiles.includeExistingFiles", "true")
+        .option("cloudFiles.useManagedFileEvents", "true")
+        .option("cloudFiles.schemaEvolutionMode", "addNewColumns")
+        .option("cloudFiles.inferColumnTypes", "false")
+        .option("rescuedDataColumn", "_rescued_data")
+        .option("header", "true")
+        .option("encoding", "UTF-8")
+        .option("quote", '"')
+        .option("escape", '"')
+        .load(f"{_landing()}/file/{source_directory}")
+    )
+
+
+def read_manifest_stream():
+    return (
+        _spark().readStream.format("cloudFiles")
+        .option("cloudFiles.format", "json")
+        .option("cloudFiles.includeExistingFiles", "true")
+        .option("cloudFiles.useManagedFileEvents", "true")
+        .option("cloudFiles.schemaEvolutionMode", "addNewColumns")
+        .option("cloudFiles.inferColumnTypes", "false")
+        .option("rescuedDataColumn", "_rescued_data")
+        .option("multiLine", "true")
+        .load(f"{_landing()}/manifests")
+    )
+
+
+def read_invalid_transport_stream(source_type: str):
+    return (
+        _spark().readStream.format("cloudFiles")
+        .option("cloudFiles.format", "json")
+        .option("cloudFiles.includeExistingFiles", "true")
+        .option("cloudFiles.useManagedFileEvents", "true")
+        .option("rescuedDataColumn", "_rescued_data")
+        .schema(INVALID_TRANSPORT_SCHEMA)
+        .load(f"{_landing()}/quarantine/{source_type}")
     )

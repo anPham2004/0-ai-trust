@@ -58,11 +58,8 @@ def dataset_slug(value: str) -> str:
 
 
 def payload(record: dict) -> dict:
-    try:
-        value = json.loads(record.get("value") or "{}")
-        return value if isinstance(value, dict) else {}
-    except json.JSONDecodeError:
-        return {}
+    value = record.get("payload")
+    return value if isinstance(value, dict) else {}
 
 
 def cdc_dataset(record: dict) -> str:
@@ -101,11 +98,15 @@ def write_jsonl(source: str, dataset: str, batch_id: str, records: list[dict]) -
     temporary = target.with_suffix(".tmp")
     with temporary.open("w", encoding="utf-8", newline="\n") as handle:
         for record in records:
-            handle.write(json.dumps(record, separators=(",", ":"), default=str) + "\n")
+            handle.write(
+                json.dumps({**record, "batch_id": batch_id}, separators=(",", ":"), default=str)
+                + "\n"
+            )
     temporary.replace(target)
     return artifact(
         target,
         len(records),
+        "JSONL",
         source_type=source.upper(),
         source_dataset=dataset,
         **transport_watermarks(records),
@@ -147,26 +148,56 @@ def consume(pattern: str, group_id: str, limit: int = 100000) -> tuple[list, Con
 
 
 def transport_record(message) -> dict:
-    """Retain Kafka transport metadata and payload without interpreting business fields."""
-    return {
+    """Retain transport metadata and expose the JSON value as a nested object."""
+    parse_error = None
+    try:
+        decoded = message.value().decode("utf-8", errors="strict") if message.value() else None
+        parsed = json.loads(decoded) if decoded else None
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        decoded = message.value().decode("utf-8", errors="replace") if message.value() else None
+        parsed = None
+        parse_error = "INVALID_JSON"
+    record = {
         "topic": message.topic(),
         "partition": message.partition(),
         "offset": message.offset(),
         "timestamp": message.timestamp()[1],
         "timestamp_type": message.timestamp()[0],
         "key": message.key().decode("utf-8", errors="replace") if message.key() else None,
-        "value": message.value().decode("utf-8", errors="replace") if message.value() else None,
+        "payload": parsed,
         "captured_at": now_iso(),
     }
+    if parse_error:
+        record.update({"parse_error": parse_error, "raw_value": decoded})
+    return record
 
 
 def export_cdc(batch_id: str) -> list[dict]:
     """Land HVR-compatible native CDC envelopes with LSN and Kafka offsets intact."""
     messages, consumer = consume("^nab-cdc\\..*", "zero-ai-trust-cdc-exporter", limit=200000)
     try:
-        records = [transport_record(message) for message in messages]
+        records, invalid = [], []
+        for message in messages:
+            record = transport_record(message)
+            envelope = payload(record)
+            # Debezium tombstones carry no business image. The preceding delete
+            # envelope is the replayable source record and is retained.
+            if record.get("parse_error"):
+                invalid.append(record)
+                continue
+            if not envelope:  # Debezium tombstone following a retained delete envelope.
+                continue
+            if not (envelope.get("source") or {}).get("table"):
+                record["parse_error"] = "UNCLASSIFIED_CDC_ENVELOPE"
+                invalid.append(record)
+                continue
+            record["record"] = envelope.get("after") or envelope.get("before")
+            record["load_type"] = "INITIAL" if envelope.get("op") == "r" else "INCREMENTAL"
+            records.append(record)
         results = write_grouped_jsonl("cdc", batch_id, records, cdc_dataset)
-        if records:
+        if invalid_result := write_jsonl("quarantine", "cdc", batch_id, invalid):
+            results.append(invalid_result)
+        if messages:
             consumer.commit(asynchronous=False)
         return results
     finally:
@@ -179,9 +210,24 @@ def export_events(batch_id: str) -> list[dict]:
     try:
         # Kafka Connect control topics may contain credentials and are never source data.
         source_messages = [m for m in messages if not m.topic().startswith("_nab_connect")]
-        records = [transport_record(message) for message in source_messages]
+        records, invalid = [], []
+        for message in source_messages:
+            record = transport_record(message)
+            envelope = payload(record)
+            if record.get("parse_error"):
+                invalid.append(record)
+                continue
+            if not envelope.get("source_dataset") or not isinstance(envelope.get("payload"), dict):
+                record["parse_error"] = "UNCLASSIFIED_EVENT_ENVELOPE"
+                invalid.append(record)
+                continue
+            record["record"] = envelope["payload"]
+            record["load_type"] = envelope.get("load_type") or "INCREMENTAL"
+            records.append(record)
         results = write_grouped_jsonl("event", batch_id, records, event_dataset)
-        if records:
+        if invalid_result := write_jsonl("quarantine", "event", batch_id, invalid):
+            results.append(invalid_result)
+        if source_messages:
             consumer.commit(asynchronous=False)
         return results
     finally:

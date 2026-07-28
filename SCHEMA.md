@@ -49,7 +49,8 @@ These are mutable authoritative entities or current-state records. Debezium simu
 
 ```text
 PostgreSQL WAL -> Debezium -> Kafka CDC topics -> landing-exporter
-               -> S3 bronze/landing/cdc/<dataset>/*.jsonl -> Auto Loader -> bronze.cdc_changes
+               -> S3 bronze/landing/cdc/<dataset>/*.jsonl
+               -> Auto Loader -> bronze.cdc_<dataset>
 ```
 
 | Information area | Datasets |
@@ -60,7 +61,7 @@ PostgreSQL WAL -> Debezium -> Kafka CDC topics -> landing-exporter
 | Customer service | `service_cases` |
 | Adjacent product context | `energy_accounts`, `energy_service_points`, `energy_invoices`, `insurance_policies` |
 
-Bronze preserves snapshots, inserts, updates, deletes, source LSN, Kafka partition, and offset. `bronze.cdc_scd2` derives version validity without altering the immutable landing.
+Landing preserves the nested Debezium envelope. Bronze flattens `after`, or `before` for deletes, and retains snapshots, inserts, updates, deletes, source LSN, Kafka partition, offset, commit time, and `_load_type`. Silver owns deduplication, merge, and SCD.
 
 ### Event source -- 5 datasets
 
@@ -68,7 +69,8 @@ These are historical facts emitted when a business process or customer interacti
 
 ```text
 Business activity -> Apache Kafka -> landing-exporter
-                  -> S3 bronze/landing/event/<dataset>/*.jsonl -> Auto Loader -> bronze.kafka_events
+                  -> S3 bronze/landing/event/<dataset>/*.jsonl
+                  -> Auto Loader -> bronze.event_<dataset>
 ```
 
 | Information area | Datasets |
@@ -76,7 +78,7 @@ Business activity -> Apache Kafka -> landing-exporter
 | Application lifecycle | `application_stage_history`, `loan_application_events`, `status_change_history` |
 | Customer service activity | `service_case_events`, `support_interactions` |
 
-The Kafka envelope retains topic, key, partition, offset, timestamp, event type, and raw payload. `bronze.kafka_events_deduplicated` handles transport-level duplicates while retaining the append-only event history.
+Landing retains the nested Kafka event envelope. Bronze exposes source event fields plus topic, key, partition, offset, timestamp, event type, correlation ID, and `_load_type`. Duplicates are intentionally retained for Silver to resolve.
 
 ### File source -- 4 datasets
 
@@ -84,7 +86,7 @@ These represent legacy history, catalogues, or externally delivered extracts whe
 
 ```text
 S3 source drop-zone -> landing-exporter -> S3 bronze/landing/file/<dataset>/*.csv
-                    -> Auto Loader binaryFile -> bronze.file_arrivals
+                    -> Auto Loader CSV -> bronze.file_<dataset>
 ```
 
 | Information area | Datasets |
@@ -92,11 +94,11 @@ S3 source drop-zone -> landing-exporter -> S3 bronze/landing/file/<dataset>/*.cs
 | Historical lending decisions | `accepted_loans`, `rejected_applications` |
 | Product and plan catalogues | `banking_products`, `energy_plans` |
 
-Files are copied byte-for-byte. Bronze records file path, bytes, size, modification time, and ingestion metadata; parsing and schema decisions are deferred until Silver.
+Files are copied byte-for-byte into Landing. Bronze parses one row per source record, retains every business column as a string, and adds file and ingestion metadata. Auto Loader uses `addNewColumns`; incompatible values are retained in `_rescued_data` and surfaced through the shared `ingestion_quarantine` table. Silver owns business typing and validation.
 
 ### Micro-batch manifest
 
-Every exporter cycle writes `bronze/landing/manifests/manifest-<batch_id>.json` containing heartbeat status, dataset artifact paths, record counts, SHA-256 hashes, LSN/offset watermarks, native formats, and total records. A manifest is an audit and reconciliation receipt, not business data and not a fourth ingestion source.
+Every exporter cycle writes `bronze/landing/manifests/manifest-<batch_id>.json` containing heartbeat status, dataset artifact paths, record counts, SHA-256 hashes, LSN/offset watermarks, native formats, and total records. `bronze.control_ingestion_manifests` materialises these receipts for reconciliation; manifest remains control metadata, not a fourth source.
 
 ---
 

@@ -29,11 +29,11 @@ Databricks also exposes the read-only `information_schema` system namespace auto
 `0-ai-trust`
 ├── bronze
 │   ├── landing                         external volume
-│   ├── cdc_changes                     S3-backed streaming table
-│   ├── cdc_scd2                        logical SCD2 view
-│   ├── kafka_events                    S3-backed streaming table
-│   ├── kafka_events_deduplicated       view
-│   └── file_arrivals                   S3-backed streaming table
+│   ├── cdc_<dataset>                   23 source-aligned streaming tables
+│   ├── event_<dataset>                 5 source-aligned streaming tables
+│   ├── file_<dataset>                  4 row-level CSV streaming tables
+│   ├── ingestion_quarantine            malformed/rescued records
+│   └── control_ingestion_manifests     reconciliation control table
 ├── silver                              pending implementation
 └── gold
     ├── 10 external Delta star tables
@@ -44,9 +44,10 @@ Databricks also exposes the read-only `information_schema` system namespace auto
 s3://g3-assignment/g3/0-ai-trust/
 ├── bronze/
 │   ├── landing/
-│   │   ├── cdc/<dataset>/              CDC envelopes plus LSN/topic/offset
-│   │   ├── event/<dataset>/            business-event envelopes
+│   │   ├── cdc/<dataset>/              nested CDC envelope and record image
+│   │   ├── event/<dataset>/            nested event envelope and record
 │   │   ├── file/<dataset>/             source files, byte-for-byte
+│   │   ├── quarantine/<source>/        malformed transport records
 │   │   └── manifests/                  heartbeat and reconciliation receipts
 │   └── __managed/                      UC-managed Bronze streaming tables
 ├── silver/__managed/                   reserved Silver managed root
@@ -64,13 +65,15 @@ Dropping an external table removes Unity Catalog metadata but does not delete it
 
 The native S3 landing is the immutable, schema-on-read audit trail and is the rerun boundary.
 
-Bronze adds only transport and ingestion metadata:
+Bronze is logical raw and source-aligned. It structurally parses source records without applying business casts, masking, deduplication, or merge logic:
 
-- `cdc_changes` retains every snapshot, insert, update, delete, and tombstone envelope. The `cdc_scd2` view orders versions by source LSN and Kafka offset and exposes `valid_from`, `valid_to`, `is_current`, and `is_deleted`.
-- `kafka_events` is append-only because a business event is already historical fact. Pretending that an immutable event is a mutable SCD dimension would destroy its meaning.
-- `file_arrivals` stores every source file byte-for-byte. Parsing and business schema decisions are deferred to Silver.
+- `cdc_<dataset>` flattens the Debezium `after` image, or `before` for deletes, and retains operation, LSN, Kafka offset, commit time, and `_load_type`.
+- `event_<dataset>` exposes source event fields with event ID, type, correlation, Kafka transport metadata, and `_load_type`.
+- `file_<dataset>` parses CSV into rows while leaving source columns as strings. The original CSV remains byte-for-byte in Landing.
+- `_rescued_data` prevents schema mismatches from being dropped; affected rows also appear in `ingestion_quarantine`.
+- `control_ingestion_manifests` makes checksum, record-count, freshness, LSN, and offset evidence queryable.
 
-This gives mutable database entities SCD Type 2 behaviour without rewriting the protected raw landing. Kafka event history and immutable file facts remain append-only. Initial onboarding follows the HVR pattern: complete the initial snapshot, retain its source position, then continue from the same LSN without a gap.
+All Bronze business tables are append-only. Initial and incremental records share a table and are distinguished by `_load_type`. Silver owns deduplication, current-state merge, SCD, typing, and business validation. Initial database onboarding follows the HVR pattern: complete the initial snapshot, retain its source position, then continue from the same LSN without a gap.
 
 Never run a full refresh casually. It resets streaming state and replays the immutable landing. Use it only for an intentional, audited Bronze rebuild.
 
@@ -278,13 +281,13 @@ PostgreSQL and Kafka Connect ports bind only to EC2 loopback and are not exposed
 
 ## Initialize Unity Catalog
 
-Run `v001_create_external_objects.sql` once through Databricks SQL Editor as the storage owner. The pipeline then owns the three Bronze streaming tables. After their first successful update, run `v002_create_bronze_views.sql`. Do not run `v003_create_gold_external_tables.sql` until the approved Silver model exists.
+Run `v001_create_external_objects.sql` once through Databricks SQL Editor as the storage owner. For this migration, stop the old pipeline and run `v002_remove_legacy_bronze_objects.sql` once before starting the source-aligned definitions. Do not run `v003_create_gold_external_tables.sql` until the approved Silver model exists.
 
 - catalog `0-ai-trust`
 - schemas `bronze`, `silver`, and `gold`
 - external landing volume
-- three UC-managed Bronze streaming tables created by the declarative pipeline; the Bronze schema managed location is the team-owned S3 prefix `bronze/__managed`
-- two logical Bronze views created after those tables exist
+- 32 source-aligned Bronze streaming tables plus shared quarantine and manifest control tables
+- the Bronze schema managed location is the team-owned S3 prefix `bronze/__managed`
 
 Confirm that every physical object resolves to the team-owned S3 hierarchy. Unity Catalog does not allow an explicit `path` on a pipeline streaming table; it places the table under the schema's S3 managed location. A streaming table is reported as `STREAMING_TABLE`; its storage path proves storage ownership:
 
@@ -334,19 +337,21 @@ databricks pipelines start-update <pipeline-id-from-list> \
 
 ```
 
-Validate Bronze:
+Validate representative Bronze tables:
 
 ```sql
-SELECT COUNT(*) FROM `0-ai-trust`.bronze.cdc_changes;
-SELECT COUNT(*) FROM `0-ai-trust`.bronze.kafka_events;
-SELECT COUNT(*) FROM `0-ai-trust`.bronze.file_arrivals;
+SELECT _load_type, _operation, COUNT(*)
+FROM `0-ai-trust`.bronze.cdc_customers
+GROUP BY ALL;
 
-SELECT source_dataset, COUNT(*) AS versions,
-       COUNT_IF(is_current) AS current_versions,
-       COUNT_IF(is_deleted) AS delete_markers
-FROM `0-ai-trust`.bronze.cdc_scd2
-GROUP BY source_dataset
-ORDER BY source_dataset;
+SELECT _load_type, COUNT(*)
+FROM `0-ai-trust`.bronze.event_loan_application_events
+GROUP BY ALL;
+
+SELECT COUNT(*) FROM `0-ai-trust`.bronze.file_accepted_loans;
+SELECT failure_reason, COUNT(*)
+FROM `0-ai-trust`.bronze.ingestion_quarantine
+GROUP BY failure_reason;
 ```
 
 ## GitHub and Databricks collaboration

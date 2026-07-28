@@ -237,13 +237,15 @@ def seed_kafka(data: dict[str, list[dict]]) -> None:
                 "event_type": EVENT_TYPES[table], "event_version": "1.0",
                 "occurred_at": occurred_at(row), "producer": table,
                 "correlation_id": row.get("global_id") or row.get("applicationId") or key,
-                "source_dataset": table, "payload": row,
+                "source_dataset": table, "load_type": "INITIAL", "payload": row,
             }
             producer.produce(TOPICS[table], key=key.encode(),
                              value=json.dumps(envelope, separators=(",", ":")).encode())
             producer.poll(0)
             count += 1
-    producer.flush(120)
+    undelivered = producer.flush(120)
+    if undelivered:
+        raise RuntimeError(f"Kafka bootstrap timed out for {undelivered} event(s)")
     print(json.dumps({"event": "kafka_bootstrap_complete", "record_count": count}), flush=True)
 
 
