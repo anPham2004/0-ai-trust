@@ -137,6 +137,7 @@ def with_audit_columns(
     """Attach stable row provenance; the pipeline event log remains run-authoritative."""
     lineage = [F.coalesce(column.cast("string"), F.lit("")) for column in lineage_columns]
     processed = [column.cast("timestamp") for column in processed_columns]
+    processed_at = processed[0] if len(processed) == 1 else F.greatest(*processed)
     return (
         dataframe
         .withColumn(
@@ -144,7 +145,7 @@ def with_audit_columns(
             F.sha2(F.concat_ws("|", F.lit(",".join(sorted(source_tables))), *lineage), 256),
         )
         .withColumn("source_table", F.lit(",".join(sorted(source_tables))))
-        .withColumn("processed_at", F.greatest(*processed))
+        .withColumn("processed_at", processed_at)
         .withColumn("masking_status", F.lit(masking_status))
     )
 
