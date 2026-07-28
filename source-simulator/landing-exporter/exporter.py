@@ -138,13 +138,18 @@ def create_consumer(pattern: str, group_id: str) -> Consumer:
 def consume(consumer: Consumer, limit: int = 100000) -> list:
     messages = []
     idle_polls = 0
+    assignment_deadline = time.monotonic() + 60
     while idle_polls < 5 and len(messages) < limit:
         message = consumer.poll(1.0)
         if message is None:
+            # poll() also drives consumer-group coordination. Do not treat the
+            # initial join/rebalance period as an empty source micro-batch.
+            if not consumer.assignment() and time.monotonic() < assignment_deadline:
+                continue
             idle_polls += 1
             continue
         if message.error():
-            safe_log("kafka_message_error", error_code=message.error().code(), consumer_group=group_id)
+            safe_log("kafka_message_error", error_code=message.error().code())
             continue
         idle_polls = 0
         messages.append(message)
