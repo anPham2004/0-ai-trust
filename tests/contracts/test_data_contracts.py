@@ -14,16 +14,23 @@ def test_contract_files_are_yaml_resources_inside_lifecycle_folders():
     assert all(path.suffix == ".yml" for path in contracts)
 
 
-def test_silver_contracts_are_draft_until_executable_rules_are_approved():
-    for path in (ROOT / "contracts/silver").glob("*.yml"):
+def test_every_approved_silver_entity_has_an_executable_contract():
+    contracts = list((ROOT / "contracts/silver").glob("*.yml"))
+    assert len(contracts) == 19
+    for path in contracts:
         contract = yaml.safe_load(path.read_text(encoding="utf-8"))
-        assert contract["contract_status"] == "DRAFT"
+        assert contract["contract_status"] == "ACTIVE"
         assert contract["product"]
         assert contract["canonical_key"]
+        assert contract["schema"]
+        for severity in ("hard", "warn"):
+            for rule in contract["rules"][severity]:
+                assert rule["id"]
+                assert rule["expression"]
 
 
 def test_contract_fingerprints_are_deterministic():
-    path = ROOT / "contracts/silver/customers.yml"
+    path = ROOT / "contracts/silver/ip_individual.yml"
     contract = yaml.safe_load(path.read_text(encoding="utf-8"))
     canonical = json.dumps(contract, sort_keys=True, separators=(",", ":"), default=str)
     assert hashlib.sha256(canonical.encode("utf-8")).hexdigest() == hashlib.sha256(

@@ -38,10 +38,16 @@ class ArchitectureTests(unittest.TestCase):
             "source": {"source_inventory.yml"},
             "bronze": {".gitkeep"},
             "silver": {
-                "customers.yml",
-                "loan_applications.yml",
-                "organisations.yml",
-                "service_cases.yml",
+                "ip_individual.yml", "ip_organisation.yml",
+                "ip_organisation_party_relationship.yml", "ip_organisation_relationship.yml",
+                "ip_kyc_kyb_record.yml", "arr_banking_arrangement.yml",
+                "arr_loan_arrangement.yml", "arr_mortgage_arrangement.yml",
+                "arr_credit_card_arrangement.yml", "app_application.yml",
+                "app_application_stage_history.yml", "app_status_change_history.yml",
+                "app_document.yml", "app_application_event.yml",
+                "app_accepted_loan.yml", "app_rejected_application.yml",
+                "evt_service_case.yml", "evt_support_interaction.yml",
+                "evt_service_case_event.yml",
             },
             "gold": {"ai_ready_context.yml", "cde_registry.yml", "scope_registry.yml"},
         }
@@ -195,16 +201,19 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn('"payload": parsed', exporter)
         self.assertNotIn('"value": message.value()', exporter)
 
-    def test_silver_remains_owned_by_the_silver_workstream(self):
+    def test_silver_defines_the_approved_nineteen_entity_model(self):
         expected = {
             "application_curated.py", "customer_curated.py", "organisation_curated.py",
             "record_quarantine.py", "service_curated.py",
         }
         actual = {path.name for path in (ROOT / "pipelines/silver").glob("*.py")}
         self.assertEqual(actual, expected)
-        for filename in expected:
-            content = (ROOT / "pipelines/silver" / filename).read_text(encoding="utf-8")
-            self.assertNotIn("@dp.", content)
+        definitions = "\n".join(
+            (ROOT / "pipelines/silver" / filename).read_text(encoding="utf-8")
+            for filename in expected
+        )
+        self.assertEqual(definitions.count('publish_silver_model("'), 19)
+        self.assertNotIn("spark.readStream", definitions)
 
     def test_gold_has_external_star_tables_and_ai_ready_views(self):
         star = sorted((ROOT / "pipelines/gold-sql/star-schema").glob("*.sql"))

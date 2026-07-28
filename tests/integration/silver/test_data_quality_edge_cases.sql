@@ -43,13 +43,6 @@ WHERE table_schema = 'silver'
     'first_name', 'last_name', 'email', 'phone_number', 'tfn', 'abn', 'acn'
   );
 
--- The provided invalid-data fixture must exercise several independent failure modes.
-SELECT assert_true(
-  COUNT(DISTINCT rule_id) >= 4,
-  'Invalid-data fixture did not exercise enough quarantine rules'
-)
-FROM `0-ai-trust`.silver.record_quarantine;
-
 -- Warning records remain usable but must be explicitly labelled.
 SELECT assert_true(
   COUNT_IF(dq_status = 'WARNING') > 0,

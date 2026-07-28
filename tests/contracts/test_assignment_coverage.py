@@ -14,7 +14,9 @@ class AssignmentCoverageTests(unittest.TestCase):
         for path in (ROOT / "contracts/silver").glob("*.yml"):
             contract = yaml.safe_load(path.read_text(encoding="utf-8"))
             for severity in ("hard", "warn"):
-                rules.update(contract.get("rules", {}).get(severity, []))
+                rules.update(
+                    rule["id"] for rule in contract.get("rules", {}).get(severity, [])
+                )
             dimensions.update(contract.get("quality_dimensions", {}))
 
         self.assertGreaterEqual(len(rules), 8)

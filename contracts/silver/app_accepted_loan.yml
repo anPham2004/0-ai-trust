@@ -1,0 +1,17 @@
+product: app_accepted_loan
+version: 1.0.0
+contract_status: ACTIVE
+owner: application-domain
+producer: legacy-lending-files
+canonical_key: loan_id
+critical_data_elements: [loan_id, global_id, loan_status]
+lineage_l1: file_accepted_loans -> silver.app_accepted_loan
+schema: {global_id: STRING, loan_id: STRING, loan_status: STRING, purpose: STRING, term: STRING, grade: STRING, issued_at: DATE, loan_amount_masked: STRING}
+rules:
+  hard:
+    - {id: accepted_loan_key_required, expression: "loan_id IS NOT NULL AND global_id IS NOT NULL"}
+    - {id: accepted_loan_status_required, expression: "loan_status IS NOT NULL"}
+  warn:
+    - {id: accepted_loan_issue_date_missing, expression: "issued_at IS NOT NULL"}
+tolerances: {hard_failure_rate: 0.0, warning_failure_rate: 0.05}
+quality_dimensions: {completeness: [accepted_loan_key_required], validity: [accepted_loan_status_required], consistency: [], timeliness: [accepted_loan_issue_date_missing]}

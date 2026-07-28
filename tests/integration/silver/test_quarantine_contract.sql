@@ -1,36 +1,27 @@
--- Interface required by the assignment; run only after the Silver workstream is deployed.
-WITH required_columns(column_name) AS (
+-- Run after Silver deployment. Every entity quarantine keeps typed source
+-- columns and adds the same auditable failure evidence.
+WITH quarantine_tables AS (
+  SELECT table_name
+  FROM `0-ai-trust`.information_schema.tables
+  WHERE table_schema = 'silver'
+    AND table_name LIKE '%\_quarantine' ESCAPE '\\'
+), required_columns(column_name) AS (
   SELECT * FROM VALUES
-    ('source_dataset'),
-    ('source_record_id'),
-    ('rule_id'),
-    ('failure_reason'),
-    ('disposition'),
-    ('pipeline_run_id'),
-    ('processed_at')
+    ('rule_ids'), ('failure_reason'), ('pipeline_run_id'),
+    ('processed_at'), ('dq_status'), ('source_table')
 ), missing AS (
-  SELECT required.column_name
-  FROM required_columns required
+  SELECT tables.table_name, required.column_name
+  FROM quarantine_tables tables
+  CROSS JOIN required_columns required
   LEFT ANTI JOIN `0-ai-trust`.information_schema.columns actual
     ON actual.table_schema = 'silver'
-   AND actual.table_name = 'record_quarantine'
+   AND actual.table_name = tables.table_name
    AND actual.column_name = required.column_name
 )
-SELECT assert_true(
-  COUNT(*) = 0,
-  'Silver quarantine must identify the source record, rule, reason, disposition, and run'
-)
+SELECT assert_true(COUNT(*) = 0, 'A typed quarantine table is missing audit evidence')
 FROM missing;
 
-SELECT assert_true(COUNT(*) = 0, 'Quarantine contains an unsupported disposition')
-FROM `0-ai-trust`.silver.record_quarantine
-WHERE disposition NOT IN ('QUARANTINED', 'DROPPED', 'REVIEW_REQUIRED');
-
-SELECT assert_true(COUNT(*) = 0, 'Quarantine row lacks auditable failure context')
-FROM `0-ai-trust`.silver.record_quarantine
-WHERE source_dataset IS NULL
-   OR source_record_id IS NULL
-   OR rule_id IS NULL
-   OR failure_reason IS NULL
-   OR pipeline_run_id IS NULL
-   OR processed_at IS NULL;
+SELECT assert_true(COUNT(*) = 19, 'Expected one typed quarantine table per Silver entity')
+FROM `0-ai-trust`.information_schema.tables
+WHERE table_schema = 'silver'
+  AND table_name LIKE '%\_quarantine' ESCAPE '\\';

@@ -1,0 +1,17 @@
+product: arr_mortgage_arrangement
+version: 1.0.0
+contract_status: ACTIVE
+owner: arrangement-domain
+producer: lending-servicing-platform
+canonical_key: mortgage_id
+critical_data_elements: [mortgage_id, global_id, interest_type]
+lineage_l1: cdc_mortgage_accounts + cdc_banking_accounts -> silver.arr_mortgage_arrangement
+schema: {global_id: STRING, mortgage_id: STRING, account_id: STRING, organisation_id: STRING, is_business_arrangement: BOOLEAN, interest_type: STRING, repayment_frequency: STRING, loan_term: INT, start_date: DATE, lvr_percent: STRING, loan_amount_masked: STRING}
+rules:
+  hard:
+    - {id: mortgage_key_required, expression: "mortgage_id IS NOT NULL AND global_id IS NOT NULL"}
+    - {id: mortgage_interest_type_required, expression: "interest_type IS NOT NULL"}
+  warn:
+    - {id: mortgage_account_reference_missing, expression: "account_id IS NOT NULL"}
+tolerances: {hard_failure_rate: 0.0, warning_failure_rate: 0.05}
+quality_dimensions: {completeness: [mortgage_key_required], validity: [mortgage_interest_type_required], consistency: [mortgage_account_reference_missing], timeliness: []}

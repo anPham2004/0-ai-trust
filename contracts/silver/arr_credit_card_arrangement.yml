@@ -1,0 +1,16 @@
+product: arr_credit_card_arrangement
+version: 1.0.0
+contract_status: ACTIVE
+owner: arrangement-domain
+producer: banking-core-platform
+canonical_key: credit_card_id
+critical_data_elements: [credit_card_id, global_id, card_type, status]
+lineage_l1: cdc_credit_cards -> silver.arr_credit_card_arrangement
+schema: {global_id: STRING, credit_card_id: STRING, organisation_id: STRING, is_business_arrangement: BOOLEAN, card_type: STRING, status: STRING, reward_program: STRING, issued_date: DATE, card_number_masked: STRING, credit_limit_masked: STRING}
+rules:
+  hard:
+    - {id: credit_card_key_required, expression: "credit_card_id IS NOT NULL AND global_id IS NOT NULL"}
+    - {id: credit_card_mask_required, expression: "card_number_masked IS NOT NULL"}
+  warn: []
+tolerances: {hard_failure_rate: 0.0, warning_failure_rate: 0.05}
+quality_dimensions: {completeness: [credit_card_key_required], validity: [credit_card_mask_required], consistency: [], timeliness: []}

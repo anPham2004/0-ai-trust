@@ -1,0 +1,17 @@
+product: app_rejected_application
+version: 1.0.0
+contract_status: ACTIVE
+owner: application-domain
+producer: legacy-lending-files
+canonical_key: loan_id
+critical_data_elements: [loan_id, global_id, rejection_reason]
+lineage_l1: file_rejected_applications -> silver.app_rejected_application
+schema: {global_id: STRING, loan_id: STRING, application_title: STRING, application_date: DATE, rejection_reason: STRING}
+rules:
+  hard:
+    - {id: rejected_application_key_required, expression: "loan_id IS NOT NULL AND global_id IS NOT NULL"}
+    - {id: rejection_reason_required, expression: "rejection_reason IS NOT NULL"}
+  warn:
+    - {id: rejected_application_date_missing, expression: "application_date IS NOT NULL"}
+tolerances: {hard_failure_rate: 0.0, warning_failure_rate: 0.05}
+quality_dimensions: {completeness: [rejected_application_key_required], validity: [rejection_reason_required], consistency: [], timeliness: [rejected_application_date_missing]}

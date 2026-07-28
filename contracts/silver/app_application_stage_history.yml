@@ -1,0 +1,18 @@
+product: app_application_stage_history
+version: 1.0.0
+contract_status: ACTIVE
+owner: application-domain
+producer: lending-events-platform
+canonical_key: history_id
+critical_data_elements: [history_id, application_id, stage, entered_at]
+lineage_l1: event_application_stage_history -> silver.app_application_stage_history
+schema: {history_id: STRING, application_id: STRING, global_id: STRING, stage: STRING, entered_at: TIMESTAMP, exited_at: TIMESTAMP, duration_days: INT, is_current_stage: BOOLEAN, assigned_team: STRING, sla_deadline: TIMESTAMP, is_sla_breached: BOOLEAN, pending_action_party: STRING}
+rules:
+  hard:
+    - {id: stage_history_keys_required, expression: "history_id IS NOT NULL AND application_id IS NOT NULL AND global_id IS NOT NULL"}
+    - {id: stage_history_stage_required, expression: "stage IS NOT NULL AND entered_at IS NOT NULL"}
+    - {id: stage_history_dates_valid, expression: "exited_at IS NULL OR exited_at >= entered_at"}
+  warn:
+    - {id: stage_history_sla_breached, expression: "is_sla_breached = false OR is_sla_breached IS NULL"}
+tolerances: {hard_failure_rate: 0.0, warning_failure_rate: 0.05}
+quality_dimensions: {completeness: [stage_history_keys_required], validity: [stage_history_stage_required], consistency: [stage_history_dates_valid], timeliness: [stage_history_sla_breached]}
