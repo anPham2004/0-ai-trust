@@ -132,6 +132,7 @@ services:
       LANDING_ROOT: /landing
       SOURCE_BATCH_PREFIX: ${SOURCE_BATCH_PREFIX:-g3/source/nab/batch}
       MICROBATCH_INTERVAL_SECONDS: ${MICROBATCH_INTERVAL_SECONDS:-60}
+      MAX_RECORDS_PER_SOURCE_BATCH: ${MAX_RECORDS_PER_SOURCE_BATCH:-5000}
       S3_BUCKET: ${S3_BUCKET:-g3-assignment}
       S3_PREFIX: ${S3_PREFIX:-g3/0-ai-trust/bronze/landing}
       AWS_REGION: ${AWS_REGION:-ap-southeast-2}

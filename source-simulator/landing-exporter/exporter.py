@@ -14,6 +14,7 @@ from confluent_kafka import Consumer
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 LANDING_ROOT = Path(os.getenv("LANDING_ROOT", "/landing"))
 INTERVAL = int(os.getenv("MICROBATCH_INTERVAL_SECONDS", "300"))
+MAX_RECORDS_PER_SOURCE_BATCH = int(os.getenv("MAX_RECORDS_PER_SOURCE_BATCH", "5000"))
 SOURCE_BATCH_PREFIX = os.getenv("SOURCE_BATCH_PREFIX", "g3/source/nab/batch").strip("/")
 S3_BUCKET = os.environ["S3_BUCKET"]
 S3_PREFIX = os.getenv("S3_PREFIX", "g3/0-ai-trust/bronze/landing").strip("/")
@@ -130,6 +131,7 @@ def create_consumer(pattern: str, group_id: str) -> Consumer:
         "group.id": group_id,
         "auto.offset.reset": "earliest",
         "enable.auto.commit": False,
+        "queued.max.messages.kbytes": 65536,
     })
     consumer.subscribe([pattern])
     return consumer
@@ -183,7 +185,7 @@ def transport_record(message) -> dict:
 
 def export_cdc(batch_id: str, consumer: Consumer) -> list[dict]:
     """Land HVR-compatible native CDC envelopes with LSN and Kafka offsets intact."""
-    messages = consume(consumer, limit=200000)
+    messages = consume(consumer, limit=MAX_RECORDS_PER_SOURCE_BATCH)
     records, invalid = [], []
     for message in messages:
         record = transport_record(message)
@@ -212,7 +214,7 @@ def export_cdc(batch_id: str, consumer: Consumer) -> list[dict]:
 
 def export_events(batch_id: str, consumer: Consumer) -> list[dict]:
     # Subscribe to the enterprise namespace, never a Banker Assist allowlist. Silver owns scope.
-    messages = consume(consumer, limit=200000)
+    messages = consume(consumer, limit=MAX_RECORDS_PER_SOURCE_BATCH)
     records, invalid = [], []
     for message in messages:
         record = transport_record(message)
