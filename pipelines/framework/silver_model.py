@@ -4,7 +4,8 @@ import hashlib
 import hmac
 
 from pyspark import pipelines as dp
-from pyspark.sql import DataFrame, Window, functions as F
+from pyspark.dbutils import DBUtils
+from pyspark.sql import DataFrame, SparkSession, Window, functions as F
 
 from framework.data_contract_loader import load_data_contract
 from framework.data_quality_validator import executable_rules, with_quality_evidence
@@ -20,6 +21,11 @@ SILVER_TABLE_PROPERTIES = {
     "delta.enableChangeDataFeed": "true",
     "data_classification": "Highly Confidential",
 }
+
+spark = SparkSession.getActiveSession()
+if spark is None:
+    raise RuntimeError("Silver model registration requires an active Spark session")
+dbutils = DBUtils(spark)
 
 
 def _latest_by(dataframe: DataFrame, keys: list[str], ordering: list) -> DataFrame:
