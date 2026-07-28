@@ -9,12 +9,12 @@ from framework.landing_stream_reader import read_transport_stream
 @dp.table(
     name="cdc_changes",
     comment="Append-only source-native CDC history with Debezium transport metadata",
-    spark_conf={"pipelines.trigger.interval": "1 minute"},
+    spark_conf={"pipelines.trigger.interval": "1 minute"}, # continuous/micro-batch stream, checking for new data every minute 
     table_properties={
-        "quality": "bronze",
-        "data_classification": "Highly Confidential",
-        "delta.appendOnly": "true",
-        "delta.enableChangeDataFeed": "true",
+        "quality": "bronze", #tags it as raw/bronze medallion layer
+        "data_classification": "Highly Confidential", #governance tag (enforced by Unity Catalog policies elsewhere)
+        "delta.appendOnly": "true", # the table is insert-only, no updates/deletes allowed on it
+        "delta.enableChangeDataFeed": "true", #turns on Delta CDF so downstream consumers (e.g., Silver layer) can read incremental changes off this table itself.
     },
 )
 def ingest_cdc_changes():

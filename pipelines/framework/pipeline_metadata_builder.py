@@ -1,7 +1,5 @@
 """Attach reproducible contract and Zero Trust evidence to curated records."""
-
 from pyspark.sql import DataFrame, functions as F
-
 from framework.data_contract_loader import contract_fingerprint
 
 
