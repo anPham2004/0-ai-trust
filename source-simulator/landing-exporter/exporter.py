@@ -124,7 +124,7 @@ def write_grouped_jsonl(source: str, batch_id: str, records: list[dict], classif
     ]
 
 
-def consume(pattern: str, group_id: str, limit: int = 100000) -> tuple[list, Consumer]:
+def create_consumer(pattern: str, group_id: str) -> Consumer:
     consumer = Consumer({
         "bootstrap.servers": KAFKA_BOOTSTRAP,
         "group.id": group_id,
@@ -132,6 +132,10 @@ def consume(pattern: str, group_id: str, limit: int = 100000) -> tuple[list, Con
         "enable.auto.commit": False,
     })
     consumer.subscribe([pattern])
+    return consumer
+
+
+def consume(consumer: Consumer, limit: int = 100000) -> list:
     messages = []
     idle_polls = 0
     while idle_polls < 5 and len(messages) < limit:
@@ -144,7 +148,7 @@ def consume(pattern: str, group_id: str, limit: int = 100000) -> tuple[list, Con
             continue
         idle_polls = 0
         messages.append(message)
-    return messages, consumer
+    return messages
 
 
 def transport_record(message) -> dict:
@@ -172,66 +176,58 @@ def transport_record(message) -> dict:
     return record
 
 
-def export_cdc(batch_id: str) -> list[dict]:
+def export_cdc(batch_id: str, consumer: Consumer) -> list[dict]:
     """Land HVR-compatible native CDC envelopes with LSN and Kafka offsets intact."""
-    messages, consumer = consume("^nab-cdc\\..*", "zero-ai-trust-cdc-exporter", limit=200000)
-    try:
-        records, invalid = [], []
-        for message in messages:
-            record = transport_record(message)
-            envelope = payload(record)
-            # Debezium tombstones carry no business image. The preceding delete
-            # envelope is the replayable source record and is retained.
-            if record.get("parse_error"):
-                invalid.append(record)
-                continue
-            if not envelope:  # Debezium tombstone following a retained delete envelope.
-                continue
-            if not (envelope.get("source") or {}).get("table"):
-                record["parse_error"] = "UNCLASSIFIED_CDC_ENVELOPE"
-                invalid.append(record)
-                continue
-            record["record"] = envelope.get("after") or envelope.get("before")
-            record["load_type"] = "INITIAL" if envelope.get("op") == "r" else "INCREMENTAL"
-            records.append(record)
-        results = write_grouped_jsonl("cdc", batch_id, records, cdc_dataset)
-        if invalid_result := write_jsonl("quarantine", "cdc", batch_id, invalid):
-            results.append(invalid_result)
-        if messages:
-            consumer.commit(asynchronous=False)
-        return results
-    finally:
-        consumer.close()
+    messages = consume(consumer, limit=200000)
+    records, invalid = [], []
+    for message in messages:
+        record = transport_record(message)
+        envelope = payload(record)
+        # Debezium tombstones carry no business image. The preceding delete
+        # envelope is the replayable source record and is retained.
+        if record.get("parse_error"):
+            invalid.append(record)
+            continue
+        if not envelope:  # Debezium tombstone following a retained delete envelope.
+            continue
+        if not (envelope.get("source") or {}).get("table"):
+            record["parse_error"] = "UNCLASSIFIED_CDC_ENVELOPE"
+            invalid.append(record)
+            continue
+        record["record"] = envelope.get("after") or envelope.get("before")
+        record["load_type"] = "INITIAL" if envelope.get("op") == "r" else "INCREMENTAL"
+        records.append(record)
+    results = write_grouped_jsonl("cdc", batch_id, records, cdc_dataset)
+    if invalid_result := write_jsonl("quarantine", "cdc", batch_id, invalid):
+        results.append(invalid_result)
+    if messages:
+        consumer.commit(asynchronous=False)
+    return results
 
 
-def export_events(batch_id: str) -> list[dict]:
+def export_events(batch_id: str, consumer: Consumer) -> list[dict]:
     # Subscribe to the enterprise namespace, never a Banker Assist allowlist. Silver owns scope.
-    messages, consumer = consume("^nab\\..*", "zero-ai-trust-event-exporter", limit=200000)
-    try:
-        # Kafka Connect control topics may contain credentials and are never source data.
-        source_messages = [m for m in messages if not m.topic().startswith("_nab_connect")]
-        records, invalid = [], []
-        for message in source_messages:
-            record = transport_record(message)
-            envelope = payload(record)
-            if record.get("parse_error"):
-                invalid.append(record)
-                continue
-            if not envelope.get("source_dataset") or not isinstance(envelope.get("payload"), dict):
-                record["parse_error"] = "UNCLASSIFIED_EVENT_ENVELOPE"
-                invalid.append(record)
-                continue
-            record["record"] = envelope["payload"]
-            record["load_type"] = envelope.get("load_type") or "INCREMENTAL"
-            records.append(record)
-        results = write_grouped_jsonl("event", batch_id, records, event_dataset)
-        if invalid_result := write_jsonl("quarantine", "event", batch_id, invalid):
-            results.append(invalid_result)
-        if source_messages:
-            consumer.commit(asynchronous=False)
-        return results
-    finally:
-        consumer.close()
+    messages = consume(consumer, limit=200000)
+    records, invalid = [], []
+    for message in messages:
+        record = transport_record(message)
+        envelope = payload(record)
+        if record.get("parse_error"):
+            invalid.append(record)
+            continue
+        if not envelope.get("source_dataset") or not isinstance(envelope.get("payload"), dict):
+            record["parse_error"] = "UNCLASSIFIED_EVENT_ENVELOPE"
+            invalid.append(record)
+            continue
+        record["record"] = envelope["payload"]
+        record["load_type"] = envelope.get("load_type") or "INCREMENTAL"
+        records.append(record)
+    results = write_grouped_jsonl("event", batch_id, records, event_dataset)
+    if invalid_result := write_jsonl("quarantine", "event", batch_id, invalid):
+        results.append(invalid_result)
+    if messages:
+        consumer.commit(asynchronous=False)
+    return results
 
 
 def export_native_batch(batch_id: str) -> list[dict]:
@@ -271,12 +267,17 @@ def export_native_batch(batch_id: str) -> list[dict]:
     return results
 
 
-def run_batch() -> None:
+def run_batch(cdc_consumer: Consumer, event_consumer: Consumer) -> None:
     batch_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     artifacts = []
-    for operation in (export_cdc, export_events, export_native_batch):
+    operations = (
+        (export_cdc, (batch_id, cdc_consumer)),
+        (export_events, (batch_id, event_consumer)),
+        (export_native_batch, (batch_id,)),
+    )
+    for operation, arguments in operations:
         try:
-            result = operation(batch_id)
+            result = operation(*arguments)
             artifacts.extend(result if isinstance(result, list) else [result] if result else [])
         except Exception as exc:
             safe_log("source_export_failed", source=operation.__name__, error_type=type(exc).__name__)
@@ -307,6 +308,12 @@ def run_batch() -> None:
 
 if __name__ == "__main__":
     LANDING_ROOT.mkdir(parents=True, exist_ok=True)
-    while True:
-        run_batch()
-        time.sleep(INTERVAL)
+    cdc_consumer = create_consumer("^nab-cdc\\..*", "zero-ai-trust-cdc-exporter")
+    event_consumer = create_consumer("^nab\\..*", "zero-ai-trust-event-exporter")
+    try:
+        while True:
+            run_batch(cdc_consumer, event_consumer)
+            time.sleep(INTERVAL)
+    finally:
+        cdc_consumer.close()
+        event_consumer.close()
