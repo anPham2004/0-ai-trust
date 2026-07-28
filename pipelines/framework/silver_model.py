@@ -150,6 +150,8 @@ def publish_silver_model(name: str, builder, cluster_by: list[str] | None = None
     warning_rules = executable_rules(contract, "warn")
     expectations = {**hard_rules, **warning_rules}
     evaluated_name = f"_{name}_quality_evaluated"
+    target_name = f"{CATALOG}.silver.{name}"
+    quarantine_name = f"{CATALOG}.silver.{name}_quarantine"
 
     @dp.temporary_view(name=evaluated_name, comment=f"Contract-evaluated rows for {name}")
     @dp.expect_all(expectations)
@@ -157,7 +159,7 @@ def publish_silver_model(name: str, builder, cluster_by: list[str] | None = None
         return with_quality_evidence(builder(), contract)
 
     @dp.materialized_view(
-        name=name,
+        name=target_name,
         comment=f"Approved Silver entity: {name}",
         spark_conf=downstream_microbatch_spark_conf(),
         table_properties=SILVER_TABLE_PROPERTIES,
@@ -175,7 +177,7 @@ def publish_silver_model(name: str, builder, cluster_by: list[str] | None = None
         )
 
     @dp.materialized_view(
-        name=f"{name}_quarantine",
+        name=quarantine_name,
         comment=f"Schema-compatible hard DQ failures for {name}",
         spark_conf=downstream_microbatch_spark_conf(),
         table_properties={**SILVER_TABLE_PROPERTIES, "quality": "quarantine"},
