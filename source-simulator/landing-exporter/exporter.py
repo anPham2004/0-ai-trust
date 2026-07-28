@@ -274,7 +274,7 @@ def export_native_batch(batch_id: str) -> list[dict]:
     return results
 
 
-def run_batch(cdc_consumer: Consumer, event_consumer: Consumer) -> None:
+def run_batch(cdc_consumer: Consumer, event_consumer: Consumer) -> int:
     batch_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     artifacts = []
     operations = (
@@ -311,6 +311,7 @@ def run_batch(cdc_consumer: Consumer, event_consumer: Consumer) -> None:
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     publish_file(manifest_path)
     safe_log("microbatch_complete", batch_id=batch_id, artifact_count=len(artifacts), record_count=manifest["total_records"])
+    return manifest["total_records"]
 
 
 if __name__ == "__main__":
@@ -319,8 +320,10 @@ if __name__ == "__main__":
     event_consumer = create_consumer("^nab\\..*", "zero-ai-trust-event-exporter")
     try:
         while True:
-            run_batch(cdc_consumer, event_consumer)
-            time.sleep(INTERVAL)
+            record_count = run_batch(cdc_consumer, event_consumer)
+            # Drain an initial snapshot/backlog in bounded chunks, then return
+            # to the configured near-real-time flush interval.
+            time.sleep(1 if record_count >= MAX_RECORDS_PER_SOURCE_BATCH else INTERVAL)
     finally:
         cdc_consumer.close()
         event_consumer.close()

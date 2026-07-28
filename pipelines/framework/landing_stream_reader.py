@@ -42,7 +42,7 @@ def read_json_dataset_stream(source_type: str, source_directory: str):
         .option("cloudFiles.includeExistingFiles", "true")
         .option("cloudFiles.useManagedFileEvents", "true")
         .option("cloudFiles.schemaEvolutionMode", "addNewColumns")
-        .option("cloudFiles.inferColumnTypes", "false")
+        .option("cloudFiles.inferColumnTypes", "true")
         .option("rescuedDataColumn", "_rescued_data")
         .load(f"{_landing()}/{source_type}/{source_directory}")
     )
