@@ -12,30 +12,32 @@ CATALOG = "`0-ai-trust`"
 RECORD_FAILURES = f"{CATALOG}.quarantine.record_failures"
 
 
-dp.create_streaming_table(
-    name=RECORD_FAILURES,
-    comment="Contract failures excluded from canonical Silver",
-    schema="""
-      failure_id STRING,
-      validation_stage STRING,
-      contract_id STRING,
-      contract_version STRING,
-      entity_name STRING,
-      record_key STRING,
-      failed_rule_ids ARRAY<STRING>,
-      record_payload STRING,
-      source_reference STRING,
-      processed_at TIMESTAMP,
-      contract_hash STRING
-    """,
-    spark_conf=downstream_microbatch_spark_conf(),
-    table_properties={
-        "quality": "quarantine",
-        "delta.enableChangeDataFeed": "true",
-        "data_classification": "Highly Confidential",
-    },
-    cluster_by=["entity_name", "validation_stage"],
-)
+def register_record_quarantine_target() -> None:
+    """Register the shared target once from the Silver control module."""
+    dp.create_streaming_table(
+        name=RECORD_FAILURES,
+        comment="Contract failures excluded from canonical Silver",
+        schema="""
+          failure_id STRING,
+          validation_stage STRING,
+          contract_id STRING,
+          contract_version STRING,
+          entity_name STRING,
+          record_key STRING,
+          failed_rule_ids ARRAY<STRING>,
+          record_payload STRING,
+          source_reference STRING,
+          processed_at TIMESTAMP,
+          contract_hash STRING
+        """,
+        spark_conf=downstream_microbatch_spark_conf(),
+        table_properties={
+            "quality": "quarantine",
+            "delta.enableChangeDataFeed": "true",
+            "data_classification": "Highly Confidential",
+        },
+        cluster_by=["entity_name", "validation_stage"],
+    )
 
 
 def quarantine_envelope(

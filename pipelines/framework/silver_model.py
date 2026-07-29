@@ -35,9 +35,6 @@ spark = SparkSession.getActiveSession()
 if spark is None:
     raise RuntimeError("Silver model registration requires an active Spark session")
 dbutils = DBUtils(spark)
-SOURCE_VALIDATED_VIEWS: dict[tuple[str, str], str] = {}
-
-
 def _latest_by(dataframe: DataFrame, keys: list[str], ordering: list) -> DataFrame:
     order_columns = [F.col(column) if isinstance(column, str) else column for column in ordering]
     rank = Window.partitionBy(*keys).orderBy(
@@ -60,7 +57,7 @@ def _bronze_cdf(table_name: str) -> DataFrame:
 
 def cdc_change_stream(dataset: str) -> DataFrame:
     """Return source CDC records incrementally from the Bronze Delta CDF."""
-    return spark.readStream.table(SOURCE_VALIDATED_VIEWS[("DATABASE", dataset)]).withColumn(
+    return spark.readStream.table(f"_source_cdc_{dataset}_validated").withColumn(
         "_sequence_ts",
         F.coalesce(
             F.col("_commit_ts"),
@@ -73,12 +70,12 @@ def cdc_change_stream(dataset: str) -> DataFrame:
 
 def event_change_stream(dataset: str) -> DataFrame:
     """Return immutable events incrementally from the Bronze Delta CDF."""
-    return spark.readStream.table(SOURCE_VALIDATED_VIEWS[("EVENT", dataset)])
+    return spark.readStream.table(f"_source_event_{dataset}_validated")
 
 
 def file_change_stream(dataset: str) -> DataFrame:
     """Return immutable file rows incrementally from the Bronze Delta CDF."""
-    return spark.readStream.table(SOURCE_VALIDATED_VIEWS[("FILE", dataset)])
+    return spark.readStream.table(f"_source_file_{dataset}_validated")
 
 
 def current_cdc_snapshot(dataset: str, keys: list[str]) -> DataFrame:
@@ -352,7 +349,7 @@ def _source_contract_references() -> list[tuple[str, str]]:
     return sorted(references)
 
 
-def _register_source_validations() -> None:
+def register_source_validations() -> None:
     prefixes = {"DATABASE": "cdc", "EVENT": "event", "FILE": "file"}
     for source_type, dataset in _source_contract_references():
         contract = load_layer_contract("source", dataset)
@@ -364,8 +361,6 @@ def _register_source_validations() -> None:
         ]
         source_table = f"{prefixes[source_type]}_{dataset}"
         view_name = f"_source_{source_table}_validated"
-        SOURCE_VALIDATED_VIEWS[(source_type, dataset)] = view_name
-
         def source_builder(table_name=source_table):
             return _bronze_cdf(table_name)
 
@@ -385,6 +380,3 @@ def _register_source_validations() -> None:
             rules,
             validation_stage="PRE_TRANSFORM",
         )
-
-
-_register_source_validations()
