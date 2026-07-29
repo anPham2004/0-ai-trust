@@ -1,6 +1,6 @@
 # 0 AI Trust
 
-This repository simulates a NAB-style data platform for the Banker Assist assignment. Bronze ingestion and the approved 19-entity Silver model are implemented. Gold SQL is prepared against the agreed Silver and Gold schemas, but remains outside the active pipeline until Silver deployment evidence is complete.
+This repository simulates a NAB-style data platform for the Banker Assist assignment. Bronze ingestion and the approved 19-entity Silver model are implemented. Gold remains outside the active pipeline until Silver deployment evidence is complete and its former row-level `dq_status` dependency is replaced by the agreed metrics-only quality interface.
 
 ## Outcome
 
@@ -101,7 +101,7 @@ The pipeline uses the successor Spark Declarative Pipelines interface, `from pys
 
 Databricks renamed Delta Live Tables to Lakeflow Spark Declarative Pipelines. The pipeline runs continuously and owns the Auto Loader and Silver checkpoints. Bronze flows run every minute. Silver reads Bronze Delta CDF with `readStream` and runs in 15-minute micro-batches inside the same pipeline.
 
-Gold is deliberately outside the Spark Declarative Pipeline source glob. The star layer uses explicit SQL `MERGE` statements into external Delta tables, and the AI-ready layer uses logical views. A 15-minute Lakeflow Job or equivalent SQL orchestration can be configured only after Silver is complete; no Gold scheduler is deployed by this change.
+Gold is deliberately outside the Spark Declarative Pipeline source glob. Its SQL is not activated by this change because the previous draft expects row-level `dq_status`, which no longer belongs in canonical Silver. Gold quality context must be sourced from aggregate pipeline metrics or a later approved control interface before orchestration is enabled.
 
 ## Repository structure
 
