@@ -1,4 +1,4 @@
-"""Service and interaction Silver entities."""
+"""Event subject-area Silver models."""
 
 from pyspark.sql import functions as F
 
@@ -26,13 +26,17 @@ def build_evt_service_case():
     source = cdc_change_stream("service_cases")
     status = F.lower(trimmed(F.col("status")))
     deadline = F.to_timestamp("slaDeadline")
+    resolved_at = F.to_timestamp("resolvedAt")
     selected = source.select(
         F.col("caseId").cast("string").alias("case_id"),
         F.col("global_id").cast("string").alias("global_id"),
         F.col("organisationId").cast("string").alias("organisation_id"),
         F.col("applicationId").cast("string").alias("application_id"),
         deadline.alias("sla_deadline"),
-        (deadline.isNotNull() & status.isin("open", "in_progress") & (F.current_timestamp() > deadline)).alias("is_sla_breached"),
+        F.when(
+            deadline.isNotNull() & resolved_at.isNotNull(),
+            resolved_at > deadline,
+        ).cast("boolean").alias("is_sla_breached"),
         F.col("organisationId").isNotNull().alias("is_business_case"),
         F.upper(trimmed(F.col("caseType"))).alias("case_type"),
         trimmed(F.col("subject")).alias("subject"),
@@ -40,7 +44,7 @@ def build_evt_service_case():
         F.upper(trimmed(F.col("priority"))).alias("priority"),
         trimmed(F.col("assignedTeam")).alias("assigned_team"),
         F.to_timestamp("createdAt").alias("created_at"),
-        F.to_timestamp("resolvedAt").alias("resolved_at"),
+        resolved_at.alias("resolved_at"),
         trimmed(F.col("resolutionSummary")).alias("resolution_summary"),
         F.col("_operation"),
         F.col("_sequence_ts"),
@@ -82,5 +86,5 @@ def build_evt_service_case_event():
 
 
 publish_scd2_model("evt_service_case", build_evt_service_case, ["case_id"])
-publish_append_model("evt_support_interaction", build_evt_support_interaction, ["global_id"])
-publish_append_model("evt_service_case_event", build_evt_service_case_event, ["case_id"])
+publish_append_model("evt_support_interaction", build_evt_support_interaction, ["interaction_id"])
+publish_append_model("evt_service_case_event", build_evt_service_case_event, ["event_id"])

@@ -1,4 +1,4 @@
-"""Organisation and arrangement Silver entities."""
+"""Arrangement subject-area Silver models."""
 
 from pyspark.sql import functions as F
 
@@ -7,7 +7,6 @@ from framework.silver_model import (
     current_cdc_snapshot,
     masked_amount,
     masked_card_number,
-    masked_identifier,
     publish_joined_scd2_model,
     publish_scd2_model,
     trimmed,
@@ -15,7 +14,7 @@ from framework.silver_model import (
 )
 
 
-def _single_source(dataset, key, columns, source_name=None, masking_status="CLEAN"):
+def _single_source(dataset, columns, masking_status="CLEAN"):
     source = cdc_change_stream(dataset)
     selected = source.select(
         *columns,
@@ -26,55 +25,11 @@ def _single_source(dataset, key, columns, source_name=None, masking_status="CLEA
     )
     return with_audit_columns(
         selected,
-        [source_name or f"cdc_{dataset}"],
+        [f"cdc_{dataset}"],
         [F.col("_batch_id")],
         [F.col("_ingested_at")],
         masking_status,
     ).drop("_batch_id", "_ingested_at")
-
-
-def build_ip_organisation():
-    return _single_source("organisations", "organisationId", [
-        F.col("global_id").cast("string").alias("global_id"),
-        F.col("organisationId").cast("string").alias("organisation_id"),
-        trimmed(F.col("businessName")).alias("business_name"),
-        trimmed(F.col("legalName")).alias("legal_name"),
-        trimmed(F.col("shortName")).alias("short_name"),
-        F.upper(trimmed(F.col("organisationType"))).alias("organisation_type"),
-        trimmed(F.col("industryCode")).alias("industry_code"),
-        trimmed(F.col("industryCodeVersion")).alias("industry_code_version"),
-        F.upper(trimmed(F.col("registeredCountry"))).alias("registered_country"),
-        F.col("isACNCRegistered").cast("boolean").alias("is_acnc_registered"),
-        F.upper(trimmed(F.col("agentRole"))).alias("agent_role"),
-        masked_identifier(F.col("abn")).alias("abn_masked"),
-        masked_identifier(F.col("acn")).alias("acn_masked"),
-        F.to_date("establishmentDate").alias("establishment_date"),
-        F.to_timestamp("lastUpdateTime").alias("last_updated_at"),
-    ], masking_status="MASKED")
-
-
-def build_ip_organisation_party_relationship():
-    return _single_source("organisation_party_relationships", "relationshipId", [
-        F.col("relationshipId").cast("string").alias("relationship_id"),
-        F.col("global_id").cast("string").alias("global_id"),
-        F.col("organisationId").cast("string").alias("organisation_id"),
-        F.upper(trimmed(F.col("partyRole"))).alias("party_role"),
-        F.upper(trimmed(F.col("authorityLevel"))).alias("authority_level"),
-        F.col("isActive").cast("boolean").alias("is_active"),
-        F.to_date("startDate").alias("relationship_start_date"),
-        F.to_date("endDate").alias("relationship_end_date"),
-    ])
-
-
-def build_ip_organisation_relationship():
-    return _single_source("organisation_relationships", "relationshipId", [
-        F.col("relationshipId").cast("string").alias("relationship_id"),
-        F.col("sourceOrgId").cast("string").alias("source_org_id"),
-        F.col("targetOrgId").cast("string").alias("target_org_id"),
-        F.upper(trimmed(F.col("relationshipType"))).alias("relationship_type"),
-        F.col("isActive").cast("boolean").alias("is_active"),
-        F.to_date("startDate").alias("relationship_start_date"),
-    ])
 
 
 def build_arr_banking_arrangement():
@@ -177,7 +132,7 @@ def build_arr_mortgage_arrangement():
 
 
 def build_arr_credit_card_arrangement():
-    return _single_source("credit_cards", "creditCardId", [
+    return _single_source("credit_cards", [
         F.col("global_id").cast("string").alias("global_id"),
         F.col("creditCardId").cast("string").alias("credit_card_id"),
         F.col("organisationId").cast("string").alias("organisation_id"),
@@ -191,9 +146,6 @@ def build_arr_credit_card_arrangement():
     ], masking_status="MASKED")
 
 
-publish_scd2_model("ip_organisation", build_ip_organisation, ["organisation_id"])
-publish_scd2_model("ip_organisation_party_relationship", build_ip_organisation_party_relationship, ["relationship_id"])
-publish_scd2_model("ip_organisation_relationship", build_ip_organisation_relationship, ["relationship_id"])
 publish_joined_scd2_model("arr_banking_arrangement", build_arr_banking_arrangement, ["account_id"])
 publish_joined_scd2_model("arr_loan_arrangement", build_arr_loan_arrangement, ["loan_id"])
 publish_joined_scd2_model("arr_mortgage_arrangement", build_arr_mortgage_arrangement, ["mortgage_id"])

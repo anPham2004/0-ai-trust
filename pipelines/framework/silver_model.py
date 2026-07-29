@@ -21,6 +21,7 @@ SILVER_TABLE_PROPERTIES = {
     "delta.enableChangeDataFeed": "true",
     "data_classification": "Highly Confidential",
 }
+APPEND_DEDUPLICATION_WATERMARK = "7 days"
 
 JOINED_CDF_CONTROL_COLUMNS = [
     "_change_type",
@@ -161,7 +162,12 @@ def with_audit_columns(
     processed_columns: list,
     masking_status: str,
 ) -> DataFrame:
-    """Attach stable row provenance; the pipeline event log remains run-authoritative."""
+    """Attach stable source-batch provenance.
+
+    ``pipeline_run_id`` is the deterministic logical ingestion run for the
+    contributing source batches. The Databricks update ID remains available in
+    the pipeline event log and is not exposed as a supported row expression.
+    """
     lineage = [F.coalesce(column.cast("string"), F.lit("")) for column in lineage_columns]
     processed = [column.cast("timestamp") for column in processed_columns]
     processed_at = processed[0] if len(processed) == 1 else F.greatest(*processed)
@@ -245,7 +251,13 @@ def publish_joined_scd2_model(
     keys: list[str],
     cluster_by: list[str] | None = None,
 ) -> None:
-    """Publish a multi-source entity through a private current-state staging MV."""
+    """Publish a composite entity and retain changes observed after onboarding.
+
+    The private materialized view resolves the current state of all contributing
+    Bronze sources. Its change feed then gives AUTO CDC a single ordered stream.
+    The initial version is the onboarding state; subsequent source changes form
+    the SCD2 history.
+    """
     hard_rules, warning_rules = _contract_rules(name)
     staging_name = f"_{name}_current_state"
     source_name = f"_{name}_validated_changes"
@@ -276,7 +288,14 @@ def publish_joined_scd2_model(
                 "_operation",
                 F.when(F.col("_change_type") == "delete", F.lit("DELETE")).otherwise(F.lit("UPSERT")),
             )
-            .withColumn("_sequence_ts", F.col("_commit_timestamp").cast("timestamp"))
+            .withColumn(
+                "_sequence_ts",
+                F.when(
+                    F.col("_change_type") == "delete",
+                    F.col("_commit_timestamp"),
+                ).otherwise(F.coalesce(F.col("processed_at"), F.col("_commit_timestamp")))
+                .cast("timestamp"),
+            )
         )
 
     _register_scd2_target(
@@ -291,20 +310,35 @@ def publish_joined_scd2_model(
 def publish_append_model(
     name: str,
     builder,
+    keys: list[str],
     cluster_by: list[str] | None = None,
 ) -> None:
-    """Publish an immutable event/history/file entity as a streaming table."""
+    """Publish idempotent immutable records as a streaming table.
+
+    Pipeline checkpoints prevent a source row from being reprocessed. The
+    watermark additionally removes business duplicates emitted more than once
+    by an at-least-once source or repeated file delivery.
+    """
     hard_rules, warning_rules = _contract_rules(name)
     target_name = f"{CATALOG}.silver.{name}"
+    source_name = f"_{name}_validated_records"
+
+    @dp.temporary_view(name=source_name, comment=f"Validated immutable records for {name}")
+    @dp.expect_all(warning_rules)
+    @dp.expect_all_or_drop(hard_rules)
+    def validated_records():
+        return builder()
 
     @dp.table(
         name=target_name,
         comment=f"Silver append-only entity: {name}",
         spark_conf=downstream_microbatch_spark_conf(),
         table_properties={**SILVER_TABLE_PROPERTIES, "history_mode": "append_only"},
-        cluster_by=cluster_by,
+        cluster_by=cluster_by or keys,
     )
-    @dp.expect_all(warning_rules)
-    @dp.expect_all_or_drop(hard_rules)
     def append_only_entity():
-        return builder()
+        return (
+            spark.readStream.table(source_name)
+            .withWatermark("processed_at", APPEND_DEDUPLICATION_WATERMARK)
+            .dropDuplicatesWithinWatermark(keys)
+        )

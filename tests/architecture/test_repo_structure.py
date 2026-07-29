@@ -203,8 +203,8 @@ class ArchitectureTests(unittest.TestCase):
 
     def test_silver_defines_the_approved_nineteen_entity_model(self):
         expected = {
-            "application_curated.py", "customer_curated.py", "organisation_curated.py",
-            "service_curated.py",
+            "application_models.py", "arrangement_models.py", "event_models.py",
+            "involved_party_models.py",
         }
         actual = {path.name for path in (ROOT / "pipelines/silver").glob("*.py")}
         self.assertEqual(actual, expected)
@@ -222,7 +222,22 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn('stored_as_scd_type="2"', framework)
         self.assertIn('F.col("_sequence_ts")', framework)
         self.assertIn('private=True', framework)
+        self.assertIn('dropDuplicatesWithinWatermark(keys)', framework)
+        self.assertIn('withWatermark("processed_at", APPEND_DEDUPLICATION_WATERMARK)', framework)
         self.assertNotIn("quarantine_name", framework)
+
+        self.assertIn(
+            'publish_append_model("app_application_stage_history", build_app_application_stage_history, ["history_id"])',
+            definitions,
+        )
+        self.assertIn(
+            'publish_append_model("app_status_change_history", build_app_status_change_history, ["change_id"])',
+            definitions,
+        )
+        self.assertIn(
+            'publish_append_model("evt_support_interaction", build_evt_support_interaction, ["interaction_id"])',
+            definitions,
+        )
 
     def test_gold_has_external_star_tables_and_ai_ready_views(self):
         star = sorted((ROOT / "pipelines/gold-sql/star-schema").glob("*.sql"))

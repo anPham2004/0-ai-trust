@@ -1,4 +1,4 @@
-"""Application Silver entities."""
+"""Application subject-area Silver models."""
 
 from pyspark.sql import functions as F
 
@@ -60,7 +60,10 @@ def build_app_application_stage_history():
         F.col("exitedAt").isNull().alias("is_current_stage"),
         trimmed(F.col("assignedTeam")).alias("assigned_team"),
         F.to_timestamp("slaDeadline").alias("sla_deadline"),
-        (F.to_timestamp("slaDeadline").isNotNull() & (F.current_timestamp() > F.to_timestamp("slaDeadline")) & F.col("exitedAt").isNull()).alias("is_sla_breached"),
+        F.when(
+            F.col("exitedAt").isNotNull() & F.col("slaDeadline").isNotNull(),
+            F.to_timestamp("exitedAt") > F.to_timestamp("slaDeadline"),
+        ).cast("boolean").alias("is_sla_breached"),
         F.upper(trimmed(F.col("pendingActionParty"))).alias("pending_action_party"),
         F.col("_batch_id"),
         F.col("_ingested_at"),
@@ -94,9 +97,7 @@ def build_app_document():
         F.col("global_id").cast("string").alias("global_id"),
         trimmed(F.col("documentType")).alias("document_type"),
         status.alias("status"),
-        (status.isin("INVALID", "EXPIRED") | (expiry.isNotNull() & (expiry < F.current_date()))).alias(
-            "is_invalid_or_expired"
-        ),
+        status.isin("INVALID", "EXPIRED").alias("is_invalid_or_expired"),
         F.to_timestamp("requestedAt").alias("requested_at"),
         F.to_timestamp("receivedAt").alias("received_at"),
         expiry.alias("expiry_date"),
@@ -160,9 +161,9 @@ def build_app_rejected_application():
 
 
 publish_scd2_model("app_application", build_app_application, ["application_id"])
-publish_append_model("app_application_stage_history", build_app_application_stage_history, ["application_id"])
-publish_append_model("app_status_change_history", build_app_status_change_history, ["application_id"])
+publish_append_model("app_application_stage_history", build_app_application_stage_history, ["history_id"])
+publish_append_model("app_status_change_history", build_app_status_change_history, ["change_id"])
 publish_scd2_model("app_document", build_app_document, ["document_id"])
-publish_append_model("app_application_event", build_app_application_event, ["application_id"])
+publish_append_model("app_application_event", build_app_application_event, ["event_id"])
 publish_append_model("app_accepted_loan", build_app_accepted_loan, ["loan_id"])
 publish_append_model("app_rejected_application", build_app_rejected_application, ["loan_id"])

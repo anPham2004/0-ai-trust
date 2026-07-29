@@ -1,4 +1,4 @@
-"""Involved-party Silver entities sourced from customer-master Bronze tables."""
+"""Involved Party subject-area Silver models."""
 
 from pyspark.sql import Window, functions as F
 
@@ -7,12 +7,31 @@ from framework.silver_model import (
     current_cdc_snapshot,
     hmac_name_token,
     masked_email,
+    masked_identifier,
     masked_phone,
     publish_joined_scd2_model,
     publish_scd2_model,
     trimmed,
     with_audit_columns,
 )
+
+
+def _single_source(dataset, columns, masking_status="CLEAN"):
+    source = cdc_change_stream(dataset)
+    selected = source.select(
+        *columns,
+        F.col("_operation"),
+        F.col("_sequence_ts"),
+        F.col("_batch_id"),
+        F.col("_ingested_at"),
+    )
+    return with_audit_columns(
+        selected,
+        [f"cdc_{dataset}"],
+        [F.col("_batch_id")],
+        [F.col("_ingested_at")],
+        masking_status,
+    ).drop("_batch_id", "_ingested_at")
 
 
 def build_ip_individual():
@@ -113,5 +132,52 @@ def build_ip_kyc_kyb_record():
     ).drop("_batch_id", "_ingested_at")
 
 
+def build_ip_organisation():
+    return _single_source("organisations", [
+        F.col("global_id").cast("string").alias("global_id"),
+        F.col("organisationId").cast("string").alias("organisation_id"),
+        trimmed(F.col("businessName")).alias("business_name"),
+        trimmed(F.col("legalName")).alias("legal_name"),
+        trimmed(F.col("shortName")).alias("short_name"),
+        F.upper(trimmed(F.col("organisationType"))).alias("organisation_type"),
+        trimmed(F.col("industryCode")).alias("industry_code"),
+        trimmed(F.col("industryCodeVersion")).alias("industry_code_version"),
+        F.upper(trimmed(F.col("registeredCountry"))).alias("registered_country"),
+        F.col("isACNCRegistered").cast("boolean").alias("is_acnc_registered"),
+        F.upper(trimmed(F.col("agentRole"))).alias("agent_role"),
+        masked_identifier(F.col("abn")).alias("abn_masked"),
+        masked_identifier(F.col("acn")).alias("acn_masked"),
+        F.to_date("establishmentDate").alias("establishment_date"),
+        F.to_timestamp("lastUpdateTime").alias("last_updated_at"),
+    ], masking_status="MASKED")
+
+
+def build_ip_organisation_party_relationship():
+    return _single_source("organisation_party_relationships", [
+        F.col("relationshipId").cast("string").alias("relationship_id"),
+        F.col("global_id").cast("string").alias("global_id"),
+        F.col("organisationId").cast("string").alias("organisation_id"),
+        F.upper(trimmed(F.col("partyRole"))).alias("party_role"),
+        F.upper(trimmed(F.col("authorityLevel"))).alias("authority_level"),
+        F.col("isActive").cast("boolean").alias("is_active"),
+        F.to_date("startDate").alias("relationship_start_date"),
+        F.to_date("endDate").alias("relationship_end_date"),
+    ])
+
+
+def build_ip_organisation_relationship():
+    return _single_source("organisation_relationships", [
+        F.col("relationshipId").cast("string").alias("relationship_id"),
+        F.col("sourceOrgId").cast("string").alias("source_org_id"),
+        F.col("targetOrgId").cast("string").alias("target_org_id"),
+        F.upper(trimmed(F.col("relationshipType"))).alias("relationship_type"),
+        F.col("isActive").cast("boolean").alias("is_active"),
+        F.to_date("startDate").alias("relationship_start_date"),
+    ])
+
+
 publish_joined_scd2_model("ip_individual", build_ip_individual, ["global_id"])
 publish_scd2_model("ip_kyc_kyb_record", build_ip_kyc_kyb_record, ["kyc_id"])
+publish_scd2_model("ip_organisation", build_ip_organisation, ["organisation_id"])
+publish_scd2_model("ip_organisation_party_relationship", build_ip_organisation_party_relationship, ["relationship_id"])
+publish_scd2_model("ip_organisation_relationship", build_ip_organisation_relationship, ["relationship_id"])

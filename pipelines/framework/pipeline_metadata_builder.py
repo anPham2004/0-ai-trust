@@ -1,4 +1,4 @@
-"""Attach reproducible contract and Zero Trust evidence to curated records."""
+"""Attach reproducible contract and Zero Trust evidence to governed records."""
 
 from pyspark.sql import DataFrame, functions as F
 
