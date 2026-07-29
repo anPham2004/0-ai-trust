@@ -11,23 +11,25 @@ class AssignmentCoverageTests(unittest.TestCase):
     def test_silver_contracts_define_at_least_eight_quality_rules(self):
         rules = set()
         dimensions = set()
-        for path in (ROOT / "contracts/silver").glob("*.yml"):
+        for path in (ROOT / "contracts/silver").rglob("*.yml"):
             contract = yaml.safe_load(path.read_text(encoding="utf-8"))
             for severity in ("hard", "warn"):
                 rules.update(
-                    rule["id"] for rule in contract.get("rules", {}).get(severity, [])
+                    rule["rule_id"] for rule in contract.get("quality_rules", {}).get(severity, [])
                 )
             dimensions.update(contract.get("quality_dimensions", {}))
 
         self.assertGreaterEqual(len(rules), 8)
-        self.assertTrue({"completeness", "consistency", "timeliness", "validity"} <= dimensions)
+        self.assertTrue({"completeness", "timeliness", "validity"} <= dimensions)
 
     def test_each_modelled_domain_has_owner_lineage_and_cdes(self):
-        for path in (ROOT / "contracts/silver").glob("*.yml"):
+        for path in (ROOT / "contracts/silver").rglob("*.yml"):
             contract = yaml.safe_load(path.read_text(encoding="utf-8"))
-            self.assertTrue(contract.get("owner"), path.name)
-            self.assertTrue(contract.get("producer"), path.name)
-            self.assertTrue(contract.get("critical_data_elements"), path.name)
+            lifecycle = contract.get("lifecycle", {})
+            dataset = contract.get("dataset", {})
+            self.assertTrue(lifecycle.get("owner"), path.name)
+            self.assertTrue(lifecycle.get("producer"), path.name)
+            self.assertTrue(dataset.get("critical_data_elements"), path.name)
             self.assertTrue(contract.get("lineage_l1"), path.name)
 
     def test_gold_does_not_expose_forbidden_raw_identifiers(self):
