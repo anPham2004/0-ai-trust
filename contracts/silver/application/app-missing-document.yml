@@ -90,7 +90,7 @@ schema:
     type: custom
     engine: databricks-lakeflow
     implementation:
-      expression: application_id IS NULL OR application_id RLIKE '^Application_[0-9]{9}$'
+      expression: application_id IS NULL OR application_id RLIKE '^(Application_[0-9]{9}|SIM-[0-9]{14}-[0-9a-f]{8})$'
     severity: error
     dimension: conformity
     description: application_id must match the BPI business-key format when present
