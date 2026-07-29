@@ -204,7 +204,7 @@ class ArchitectureTests(unittest.TestCase):
     def test_silver_defines_the_approved_nineteen_entity_model(self):
         expected = {
             "application_curated.py", "customer_curated.py", "organisation_curated.py",
-            "record_quarantine.py", "service_curated.py",
+            "service_curated.py",
         }
         actual = {path.name for path in (ROOT / "pipelines/silver").glob("*.py")}
         self.assertEqual(actual, expected)
@@ -212,8 +212,17 @@ class ArchitectureTests(unittest.TestCase):
             (ROOT / "pipelines/silver" / filename).read_text(encoding="utf-8")
             for filename in expected
         )
-        self.assertEqual(definitions.count('publish_silver_model("'), 19)
-        self.assertNotIn("spark.readStream", definitions)
+        self.assertEqual(definitions.count('publish_scd2_model("'), 8)
+        self.assertEqual(definitions.count('publish_joined_scd2_model("'), 4)
+        self.assertEqual(definitions.count('publish_append_model("'), 7)
+
+        framework = (ROOT / "pipelines/framework/silver_model.py").read_text(encoding="utf-8")
+        self.assertIn('.option("readChangeFeed", "true")', framework)
+        self.assertIn("dp.create_auto_cdc_flow(", framework)
+        self.assertIn('stored_as_scd_type="2"', framework)
+        self.assertIn('F.col("_sequence_ts")', framework)
+        self.assertIn('private=True', framework)
+        self.assertNotIn("quarantine_name", framework)
 
     def test_gold_has_external_star_tables_and_ai_ready_views(self):
         star = sorted((ROOT / "pipelines/gold-sql/star-schema").glob("*.sql"))

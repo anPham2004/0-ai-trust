@@ -4,6 +4,7 @@ contract_status: ACTIVE
 owner: application-domain
 producer: lending-events-platform
 canonical_key: change_id
+history_mode: APPEND_ONLY
 critical_data_elements: [change_id, application_id, old_status, new_status, changed_at]
 lineage_l1: event_status_change_history -> silver.app_status_change_history
 schema: {change_id: STRING, application_id: STRING, global_id: STRING, old_status: STRING, new_status: STRING, changed_at: TIMESTAMP, reason: STRING}

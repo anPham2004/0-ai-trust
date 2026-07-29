@@ -4,9 +4,10 @@ contract_status: ACTIVE
 owner: involved-party-domain
 producer: organisation-master-platform
 canonical_key: relationship_id
+history_mode: SCD_TYPE_2
 critical_data_elements: [relationship_id, source_org_id, target_org_id, relationship_type]
 lineage_l1: cdc_organisation_relationships -> silver.ip_organisation_relationship
-schema: {relationship_id: STRING, source_org_id: STRING, target_org_id: STRING, relationship_type: STRING, is_active: BOOLEAN, start_date: DATE}
+schema: {relationship_id: STRING, source_org_id: STRING, target_org_id: STRING, relationship_type: STRING, is_active: BOOLEAN, relationship_start_date: DATE}
 rules:
   hard:
     - {id: organisation_relationship_keys_required, expression: "relationship_id IS NOT NULL AND source_org_id IS NOT NULL AND target_org_id IS NOT NULL"}

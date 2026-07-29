@@ -4,13 +4,14 @@ contract_status: ACTIVE
 owner: arrangement-domain
 producer: lending-servicing-platform
 canonical_key: loan_id
+history_mode: SCD_TYPE_2
 critical_data_elements: [loan_id, global_id, loan_type, status]
 lineage_l1: cdc_loan_accounts + cdc_banking_accounts -> silver.arr_loan_arrangement
-schema: {global_id: STRING, loan_id: STRING, account_id: STRING, organisation_id: STRING, is_business_arrangement: BOOLEAN, loan_type: STRING, status: STRING, interest_type: STRING, repayment_frequency: STRING, term_months: INT, start_date: DATE, maturity_date: DATE, original_amount_masked: STRING, current_balance_masked: STRING}
+schema: {global_id: STRING, loan_id: STRING, account_id: STRING, organisation_id: STRING, is_business_arrangement: BOOLEAN, loan_type: STRING, status: STRING, interest_type: STRING, repayment_frequency: STRING, term_months: INT, loan_start_date: DATE, maturity_date: DATE, original_amount_masked: STRING, current_balance_masked: STRING}
 rules:
   hard:
     - {id: loan_arrangement_key_required, expression: "loan_id IS NOT NULL AND global_id IS NOT NULL"}
-    - {id: loan_arrangement_dates_valid, expression: "maturity_date IS NULL OR start_date IS NULL OR maturity_date >= start_date"}
+    - {id: loan_arrangement_dates_valid, expression: "maturity_date IS NULL OR loan_start_date IS NULL OR maturity_date >= loan_start_date"}
   warn:
     - {id: loan_interest_type_missing, expression: "interest_type IS NOT NULL"}
     - {id: loan_account_reference_missing, expression: "account_id IS NULL OR organisation_id IS NOT NULL OR is_business_arrangement = false"}

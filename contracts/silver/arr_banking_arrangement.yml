@@ -4,6 +4,7 @@ contract_status: ACTIVE
 owner: arrangement-domain
 producer: banking-core-platform
 canonical_key: account_id
+history_mode: SCD_TYPE_2
 critical_data_elements: [account_id, global_id, account_type, is_active]
 lineage_l1: cdc_banking_accounts + cdc_banking_balances -> silver.arr_banking_arrangement
 schema: {global_id: STRING, account_id: STRING, organisation_id: STRING, is_business_arrangement: BOOLEAN, account_type: STRING, is_active: BOOLEAN, is_owner: BOOLEAN, open_date: DATE, current_balance_masked: STRING, available_balance_masked: STRING, currency: STRING}

@@ -6,7 +6,7 @@ USING (
     target_org_id,
     relationship_type,
     is_active,
-    start_date,
+    relationship_start_date AS start_date,
     pipeline_run_id,
     current_timestamp() AS processed_at,
     dq_status

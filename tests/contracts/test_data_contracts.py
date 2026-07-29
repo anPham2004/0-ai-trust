@@ -22,11 +22,22 @@ def test_every_approved_silver_entity_has_an_executable_contract():
         assert contract["contract_status"] == "ACTIVE"
         assert contract["product"]
         assert contract["canonical_key"]
+        assert contract["history_mode"] in {"SCD_TYPE_2", "APPEND_ONLY"}
         assert contract["schema"]
         for severity in ("hard", "warn"):
             for rule in contract["rules"][severity]:
                 assert rule["id"]
                 assert rule["expression"]
+
+
+def test_silver_history_modes_match_the_approved_design():
+    contracts = [
+        yaml.safe_load(path.read_text(encoding="utf-8"))
+        for path in (ROOT / "contracts/silver").glob("*.yml")
+    ]
+    modes = [contract["history_mode"] for contract in contracts]
+    assert modes.count("SCD_TYPE_2") == 12
+    assert modes.count("APPEND_ONLY") == 7
 
 
 def test_contract_fingerprints_are_deterministic():

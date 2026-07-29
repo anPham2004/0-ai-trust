@@ -4,6 +4,7 @@ contract_status: ACTIVE
 owner: application-domain
 producer: lending-events-platform
 canonical_key: event_id
+history_mode: APPEND_ONLY
 critical_data_elements: [event_id, application_id, lifecycle_transition, event_timestamp]
 lineage_l1: event_loan_application_events -> silver.app_application_event
 schema: {event_id: STRING, application_id: STRING, global_id: STRING, concept_name: STRING, lifecycle_transition: STRING, event_timestamp: TIMESTAMP, event_origin: STRING, action: STRING}

@@ -4,6 +4,7 @@ contract_status: ACTIVE
 owner: arrangement-domain
 producer: banking-core-platform
 canonical_key: credit_card_id
+history_mode: SCD_TYPE_2
 critical_data_elements: [credit_card_id, global_id, card_type, status]
 lineage_l1: cdc_credit_cards -> silver.arr_credit_card_arrangement
 schema: {global_id: STRING, credit_card_id: STRING, organisation_id: STRING, is_business_arrangement: BOOLEAN, card_type: STRING, status: STRING, reward_program: STRING, issued_date: DATE, card_number_masked: STRING, credit_limit_masked: STRING}

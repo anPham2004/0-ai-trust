@@ -4,6 +4,7 @@ contract_status: ACTIVE
 owner: involved-party-domain
 producer: customer-master-platform
 canonical_key: global_id
+history_mode: SCD_TYPE_2
 critical_data_elements: [global_id, customer_id, customer_type, name_token]
 lineage_l1: cdc_customers + cdc_customer_preferences + cdc_physical_addresses -> silver.ip_individual
 schema: {global_id: STRING, customer_id: STRING, customer_type: STRING, prefix: STRING, full_name: STRING, name_token: STRING, middle_names: STRING, gender: STRING, age: INT, state: STRING, occupation_code: STRING, email_masked: STRING, phone_masked: STRING, preferred_contact_channel: STRING, preferred_language: STRING, marketing_opt_in: BOOLEAN, satisfaction_score: STRING, address_suburb: STRING, address_state: STRING, address_postcode: STRING, customer_since: TIMESTAMP, last_updated_at: TIMESTAMP}

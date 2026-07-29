@@ -4,6 +4,7 @@ contract_status: ACTIVE
 owner: application-domain
 producer: lending-origination-platform
 canonical_key: document_id
+history_mode: SCD_TYPE_2
 critical_data_elements: [document_id, application_id, document_type, status]
 lineage_l1: cdc_missing_documents -> silver.app_document
 schema: {document_id: STRING, application_id: STRING, global_id: STRING, document_type: STRING, status: STRING, is_invalid_or_expired: BOOLEAN, requested_at: TIMESTAMP, received_at: TIMESTAMP, expiry_date: DATE, reminders_sent: INT, last_reminder_at: TIMESTAMP, rejection_reason: STRING}

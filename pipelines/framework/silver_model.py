@@ -1,4 +1,4 @@
-"""Small, shared primitives for the approved Bronze-to-Silver model."""
+"""Shared Bronze-to-Silver primitives for incremental and SCD2 models."""
 
 import hashlib
 import hmac
@@ -8,7 +8,7 @@ from pyspark.dbutils import DBUtils
 from pyspark.sql import DataFrame, SparkSession, Window, functions as F
 
 from framework.data_contract_loader import load_data_contract
-from framework.data_quality_validator import executable_rules, with_quality_evidence
+from framework.data_quality_validator import executable_rules
 from framework.refresh_policy import downstream_microbatch_spark_conf
 
 
@@ -21,6 +21,20 @@ SILVER_TABLE_PROPERTIES = {
     "delta.enableChangeDataFeed": "true",
     "data_classification": "Highly Confidential",
 }
+
+JOINED_CDF_CONTROL_COLUMNS = [
+    "_change_type",
+    "_commit_version",
+    "_commit_timestamp",
+    "_operation",
+    "_sequence_ts",
+]
+AUDIT_COLUMNS_EXCLUDED_FROM_HISTORY = [
+    "pipeline_run_id",
+    "source_table",
+    "processed_at",
+    "masking_status",
+]
 
 spark = SparkSession.getActiveSession()
 if spark is None:
@@ -38,8 +52,41 @@ def _latest_by(dataframe: DataFrame, keys: list[str], ordering: list) -> DataFra
     ).drop("_silver_rank")
 
 
-def latest_cdc(dataset: str, keys: list[str]) -> DataFrame:
-    """Return the current source state using source-native ordering and deletes."""
+def _bronze_cdf(table_name: str) -> DataFrame:
+    """Read the Delta change feed; Bronze is append-only, so changes are inserts."""
+    return (
+        spark.readStream
+        .option("readChangeFeed", "true")
+        .table(f"{CATALOG}.bronze.{table_name}")
+        .filter(F.col("_change_type") == "insert")
+    )
+
+
+def cdc_change_stream(dataset: str) -> DataFrame:
+    """Return source CDC records incrementally from the Bronze Delta CDF."""
+    return _bronze_cdf(f"cdc_{dataset}").withColumn(
+        "_sequence_ts",
+        F.coalesce(
+            F.col("_commit_ts"),
+            F.col("_captured_at"),
+            F.col("_ingested_at"),
+            F.col("_commit_timestamp"),
+        ).cast("timestamp"),
+    )
+
+
+def event_change_stream(dataset: str) -> DataFrame:
+    """Return immutable events incrementally from the Bronze Delta CDF."""
+    return _bronze_cdf(f"event_{dataset}")
+
+
+def file_change_stream(dataset: str) -> DataFrame:
+    """Return immutable file rows incrementally from the Bronze Delta CDF."""
+    return _bronze_cdf(f"file_{dataset}")
+
+
+def current_cdc_snapshot(dataset: str, keys: list[str]) -> DataFrame:
+    """Resolve current source state for a private multi-source staging view."""
     source = spark.read.table(f"{CATALOG}.bronze.cdc_{dataset}")
     current = _latest_by(
         source,
@@ -47,26 +94,6 @@ def latest_cdc(dataset: str, keys: list[str]) -> DataFrame:
         ["_source_lsn", "_commit_ts", "_kafka_offset", "_ingested_at"],
     )
     return current.filter(F.col("_operation") != "DELETE")
-
-
-def latest_event(dataset: str, key: str, business_timestamp: str) -> DataFrame:
-    """Deduplicate immutable events by their business identifier, retaining late events."""
-    source = spark.read.table(f"{CATALOG}.bronze.event_{dataset}")
-    return _latest_by(
-        source,
-        [key],
-        [business_timestamp, "_kafka_offset", "_ingested_at"],
-    )
-
-
-def latest_file(dataset: str, key: str) -> DataFrame:
-    """Resolve initial and incremental file rows to one current record per key."""
-    source = spark.read.table(f"{CATALOG}.bronze.file_{dataset}")
-    return _latest_by(
-        source,
-        [key],
-        ["_source_file_modified_at", "_ingested_at", "_source_file"],
-    )
 
 
 def trimmed(column):
@@ -150,52 +177,134 @@ def with_audit_columns(
     )
 
 
-def publish_silver_model(name: str, builder, cluster_by: list[str] | None = None) -> None:
-    """Register native expectations, curated MV, and typed quarantine MV for one entity."""
+def _contract_rules(name: str) -> tuple[dict[str, str], dict[str, str]]:
     contract = load_data_contract(f"silver/{name}.yml")
-    hard_rules = executable_rules(contract, "hard")
-    warning_rules = executable_rules(contract, "warn")
-    expectations = {**hard_rules, **warning_rules}
-    evaluated_name = f"_{name}_quality_evaluated"
+    return executable_rules(contract, "hard"), executable_rules(contract, "warn")
+
+
+def _register_scd2_target(
+    name: str,
+    source_name: str,
+    keys: list[str],
+    cluster_by: list[str],
+    control_columns: list[str],
+) -> None:
     target_name = f"{CATALOG}.silver.{name}"
-    quarantine_name = f"{CATALOG}.silver.{name}_quarantine"
-
-    @dp.temporary_view(name=evaluated_name, comment=f"Contract-evaluated rows for {name}")
-    @dp.expect_all(expectations)
-    def quality_evaluated():
-        return with_quality_evidence(builder(), contract)
-
-    @dp.materialized_view(
+    dp.create_streaming_table(
         name=target_name,
-        comment=f"Approved Silver entity: {name}",
+        comment=f"Silver SCD2 entity: {name}",
         spark_conf=downstream_microbatch_spark_conf(),
-        table_properties=SILVER_TABLE_PROPERTIES,
+        table_properties={
+            **SILVER_TABLE_PROPERTIES,
+            "history_mode": "scd_type_2",
+            "pipelines.cdc.tombstoneGCThresholdInSeconds": "604800",
+        },
         cluster_by=cluster_by,
     )
-    def curated():
-        return (
-            spark.read.table(evaluated_name)
-            .filter(F.size("failed_hard_rules") == 0)
-            .withColumn(
-                "dq_status",
-                F.when(F.size("failed_warning_rules") > 0, F.lit("WARNING")).otherwise(F.lit("PASSED")),
-            )
-            .drop("failed_hard_rules", "failed_warning_rules", "quality_status")
-        )
+    dp.create_auto_cdc_flow(
+        target=target_name,
+        source=source_name,
+        keys=keys,
+        sequence_by=F.col("_sequence_ts"),
+        apply_as_deletes=F.expr("_operation = 'DELETE'"),
+        except_column_list=control_columns,
+        stored_as_scd_type="2",
+        track_history_except_column_list=AUDIT_COLUMNS_EXCLUDED_FROM_HISTORY,
+        name=f"{name}_scd2_changes",
+    )
+
+
+def publish_scd2_model(
+    name: str,
+    builder,
+    keys: list[str],
+    cluster_by: list[str] | None = None,
+) -> None:
+    """Publish a one-source CDC entity as a native AUTO CDC SCD2 table."""
+    hard_rules, warning_rules = _contract_rules(name)
+    source_name = f"_{name}_validated_changes"
+
+    @dp.temporary_view(name=source_name, comment=f"Validated CDC changes for {name}")
+    @dp.expect_all(warning_rules)
+    @dp.expect_all_or_drop(hard_rules)
+    def validated_changes():
+        return builder()
+
+    _register_scd2_target(
+        name,
+        source_name,
+        keys,
+        cluster_by or keys,
+        ["_operation", "_sequence_ts"],
+    )
+
+
+def publish_joined_scd2_model(
+    name: str,
+    builder,
+    keys: list[str],
+    cluster_by: list[str] | None = None,
+) -> None:
+    """Publish a multi-source entity through a private current-state staging MV."""
+    hard_rules, warning_rules = _contract_rules(name)
+    staging_name = f"_{name}_current_state"
+    source_name = f"_{name}_validated_changes"
 
     @dp.materialized_view(
-        name=quarantine_name,
-        comment=f"Schema-compatible hard DQ failures for {name}",
+        name=staging_name,
+        comment=f"Private current-state join for {name}",
+        private=True,
         spark_conf=downstream_microbatch_spark_conf(),
-        table_properties={**SILVER_TABLE_PROPERTIES, "quality": "quarantine"},
+        table_properties={
+            "quality": "silver_staging",
+            "delta.enableChangeDataFeed": "true",
+        },
+    )
+    def current_state():
+        return builder()
+
+    @dp.temporary_view(name=source_name, comment=f"Validated staging changes for {name}")
+    @dp.expect_all(warning_rules)
+    @dp.expect_all_or_drop(hard_rules)
+    def validated_changes():
+        return (
+            spark.readStream
+            .option("readChangeFeed", "true")
+            .table(staging_name)
+            .filter(F.col("_change_type").isin("insert", "update_postimage", "delete"))
+            .withColumn(
+                "_operation",
+                F.when(F.col("_change_type") == "delete", F.lit("DELETE")).otherwise(F.lit("UPSERT")),
+            )
+            .withColumn("_sequence_ts", F.col("_commit_timestamp").cast("timestamp"))
+        )
+
+    _register_scd2_target(
+        name,
+        source_name,
+        keys,
+        cluster_by or keys,
+        JOINED_CDF_CONTROL_COLUMNS,
+    )
+
+
+def publish_append_model(
+    name: str,
+    builder,
+    cluster_by: list[str] | None = None,
+) -> None:
+    """Publish an immutable event/history/file entity as a streaming table."""
+    hard_rules, warning_rules = _contract_rules(name)
+    target_name = f"{CATALOG}.silver.{name}"
+
+    @dp.table(
+        name=target_name,
+        comment=f"Silver append-only entity: {name}",
+        spark_conf=downstream_microbatch_spark_conf(),
+        table_properties={**SILVER_TABLE_PROPERTIES, "history_mode": "append_only"},
         cluster_by=cluster_by,
     )
-    def quarantined():
-        return (
-            spark.read.table(evaluated_name)
-            .filter(F.size("failed_hard_rules") > 0)
-            .withColumn("dq_status", F.lit("FAILED"))
-            .withColumn("rule_ids", F.col("failed_hard_rules"))
-            .withColumn("failure_reason", F.concat_ws(",", F.col("failed_hard_rules")))
-            .drop("failed_hard_rules", "failed_warning_rules", "quality_status")
-        )
+    @dp.expect_all(warning_rules)
+    @dp.expect_all_or_drop(hard_rules)
+    def append_only_entity():
+        return builder()

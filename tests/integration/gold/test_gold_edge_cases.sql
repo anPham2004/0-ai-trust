@@ -9,7 +9,7 @@ WHERE received_at < requested_at;
 
 SELECT assert_true(COUNT(*) = 0, 'Arrangement maturity precedes start')
 FROM `0-ai-trust`.gold.dim_arrangement
-WHERE maturity_date < start_date;
+WHERE maturity_date < loan_start_date;
 
 -- A late event must not disappear merely because its event time is old.
 SELECT assert_true(

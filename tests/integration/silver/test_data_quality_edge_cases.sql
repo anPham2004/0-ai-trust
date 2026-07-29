@@ -1,6 +1,7 @@
 -- Run after Silver is deployed. These assertions define the hand-off expected by Gold.
 
--- Invalid terminal values must be quarantined rather than curated.
+-- Invalid terminal values are dropped from canonical Silver and counted by
+-- native pipeline expectation metrics.
 SELECT assert_true(COUNT(*) = 0, 'Invalid application status reached curated Silver')
 FROM `0-ai-trust`.silver.app_application
 WHERE final_outcome IS NOT NULL
@@ -42,10 +43,3 @@ WHERE table_schema = 'silver'
   AND LOWER(column_name) IN (
     'first_name', 'last_name', 'email', 'phone_number', 'tfn', 'abn', 'acn'
   );
-
--- Warning records remain usable but must be explicitly labelled.
-SELECT assert_true(
-  COUNT_IF(dq_status = 'WARNING') > 0,
-  'Freshness or non-critical warning fixture was not retained'
-)
-FROM `0-ai-trust`.silver.app_application;

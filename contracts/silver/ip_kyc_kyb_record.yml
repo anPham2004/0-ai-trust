@@ -4,6 +4,7 @@ contract_status: ACTIVE
 owner: involved-party-domain
 producer: customer-master-platform
 canonical_key: kyc_id
+history_mode: SCD_TYPE_2
 critical_data_elements: [kyc_id, global_id, record_type, verification_status]
 lineage_l1: cdc_kyc_records -> silver.ip_kyc_kyb_record
 schema: {global_id: STRING, kyc_id: STRING, organisation_id: STRING, record_type: STRING, verification_status: STRING, verification_date: DATE, verification_method: STRING, risk_rating: STRING, pep_status: BOOLEAN, sanctions_check: STRING, last_review_date: DATE, next_review_date: DATE, document_types: STRING, abn_verified: BOOLEAN, asic_check_status: STRING, beneficial_ownership_verified: BOOLEAN}

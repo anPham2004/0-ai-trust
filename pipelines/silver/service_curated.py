@@ -2,7 +2,14 @@
 
 from pyspark.sql import functions as F
 
-from framework.silver_model import latest_cdc, latest_event, publish_silver_model, trimmed, with_audit_columns
+from framework.silver_model import (
+    cdc_change_stream,
+    event_change_stream,
+    publish_append_model,
+    publish_scd2_model,
+    trimmed,
+    with_audit_columns,
+)
 
 
 def _with_audit(dataframe, source_table):
@@ -16,7 +23,7 @@ def _with_audit(dataframe, source_table):
 
 
 def build_evt_service_case():
-    source = latest_cdc("service_cases", ["caseId"])
+    source = cdc_change_stream("service_cases")
     status = F.lower(trimmed(F.col("status")))
     deadline = F.to_timestamp("slaDeadline")
     selected = source.select(
@@ -35,6 +42,8 @@ def build_evt_service_case():
         F.to_timestamp("createdAt").alias("created_at"),
         F.to_timestamp("resolvedAt").alias("resolved_at"),
         trimmed(F.col("resolutionSummary")).alias("resolution_summary"),
+        F.col("_operation"),
+        F.col("_sequence_ts"),
         F.col("_batch_id"),
         F.col("_ingested_at"),
     )
@@ -42,7 +51,7 @@ def build_evt_service_case():
 
 
 def build_evt_support_interaction():
-    source = latest_event("support_interactions", "interactionId", "timestamp")
+    source = event_change_stream("support_interactions")
     selected = source.select(
         F.col("interactionId").cast("string").alias("interaction_id"),
         F.col("global_id").cast("string").alias("global_id"),
@@ -58,7 +67,7 @@ def build_evt_support_interaction():
 
 
 def build_evt_service_case_event():
-    source = latest_event("service_case_events", "eventId", "eventTimestamp")
+    source = event_change_stream("service_case_events")
     selected = source.select(
         F.col("eventId").cast("string").alias("event_id"),
         F.col("caseId").cast("string").alias("case_id"),
@@ -72,6 +81,6 @@ def build_evt_service_case_event():
     return _with_audit(selected, "event_service_case_events")
 
 
-publish_silver_model("evt_service_case", build_evt_service_case, ["case_id"])
-publish_silver_model("evt_support_interaction", build_evt_support_interaction, ["global_id"])
-publish_silver_model("evt_service_case_event", build_evt_service_case_event, ["case_id"])
+publish_scd2_model("evt_service_case", build_evt_service_case, ["case_id"])
+publish_append_model("evt_support_interaction", build_evt_support_interaction, ["global_id"])
+publish_append_model("evt_service_case_event", build_evt_service_case_event, ["case_id"])

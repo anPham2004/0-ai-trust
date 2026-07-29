@@ -12,7 +12,7 @@ SELECT
   a.is_active,
   a.is_approaching_maturity,
   a.repayment_frequency,
-  a.start_date,
+  a.loan_start_date,
   a.maturity_date,
   s.snapshot_date,
   'BANKER_ONLY' AS usage_restriction,

@@ -4,6 +4,7 @@ contract_status: ACTIVE
 owner: application-domain
 producer: legacy-lending-files
 canonical_key: loan_id
+history_mode: APPEND_ONLY
 critical_data_elements: [loan_id, global_id, loan_status]
 lineage_l1: file_accepted_loans -> silver.app_accepted_loan
 schema: {global_id: STRING, loan_id: STRING, loan_status: STRING, purpose: STRING, term: STRING, grade: STRING, issued_at: DATE, loan_amount_masked: STRING}

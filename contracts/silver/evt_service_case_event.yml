@@ -4,6 +4,7 @@ contract_status: ACTIVE
 owner: service-domain
 producer: customer-service-events
 canonical_key: event_id
+history_mode: APPEND_ONLY
 critical_data_elements: [event_id, case_id, global_id, event_type, event_timestamp]
 lineage_l1: event_service_case_events -> silver.evt_service_case_event
 schema: {event_id: STRING, case_id: STRING, global_id: STRING, event_type: STRING, event_timestamp: TIMESTAMP, description: STRING}

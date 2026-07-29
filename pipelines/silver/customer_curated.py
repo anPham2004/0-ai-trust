@@ -3,21 +3,23 @@
 from pyspark.sql import Window, functions as F
 
 from framework.silver_model import (
+    cdc_change_stream,
+    current_cdc_snapshot,
     hmac_name_token,
-    latest_cdc,
     masked_email,
     masked_phone,
-    publish_silver_model,
+    publish_joined_scd2_model,
+    publish_scd2_model,
     trimmed,
     with_audit_columns,
 )
 
 
 def build_ip_individual():
-    customers = latest_cdc("customers", ["global_id"]).alias("customer")
-    preferences = latest_cdc("customer_preferences", ["customerId"]).alias("preference")
+    customers = current_cdc_snapshot("customers", ["global_id"]).alias("customer")
+    preferences = current_cdc_snapshot("customer_preferences", ["customerId"]).alias("preference")
 
-    addresses = latest_cdc("physical_addresses", ["addressId"])
+    addresses = current_cdc_snapshot("physical_addresses", ["addressId"])
     address_priority = (
         F.when(F.upper("purpose").isin("PRIMARY", "HOME", "RESIDENTIAL"), F.lit(0))
         .otherwise(F.lit(1))
@@ -79,7 +81,7 @@ def build_ip_individual():
 
 
 def build_ip_kyc_kyb_record():
-    source = latest_cdc("kyc_records", ["kycId"])
+    source = cdc_change_stream("kyc_records")
     selected = source.select(
         F.col("global_id").cast("string").alias("global_id"),
         F.col("kycId").cast("string").alias("kyc_id"),
@@ -97,6 +99,8 @@ def build_ip_kyc_kyb_record():
         F.col("abnVerified").cast("boolean").alias("abn_verified"),
         F.upper(trimmed(F.col("asicCheckStatus"))).alias("asic_check_status"),
         F.col("beneficialOwnershipVerified").cast("boolean").alias("beneficial_ownership_verified"),
+        F.col("_operation"),
+        F.col("_sequence_ts"),
         F.col("_batch_id"),
         F.col("_ingested_at"),
     )
@@ -109,5 +113,5 @@ def build_ip_kyc_kyb_record():
     ).drop("_batch_id", "_ingested_at")
 
 
-publish_silver_model("ip_individual", build_ip_individual, ["global_id"])
-publish_silver_model("ip_kyc_kyb_record", build_ip_kyc_kyb_record, ["kyc_id"])
+publish_joined_scd2_model("ip_individual", build_ip_individual, ["global_id"])
+publish_scd2_model("ip_kyc_kyb_record", build_ip_kyc_kyb_record, ["kyc_id"])

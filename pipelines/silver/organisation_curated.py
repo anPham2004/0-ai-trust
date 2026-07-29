@@ -3,20 +3,24 @@
 from pyspark.sql import functions as F
 
 from framework.silver_model import (
-    latest_cdc,
+    cdc_change_stream,
+    current_cdc_snapshot,
     masked_amount,
     masked_card_number,
     masked_identifier,
-    publish_silver_model,
+    publish_joined_scd2_model,
+    publish_scd2_model,
     trimmed,
     with_audit_columns,
 )
 
 
 def _single_source(dataset, key, columns, source_name=None, masking_status="CLEAN"):
-    source = latest_cdc(dataset, [key])
+    source = cdc_change_stream(dataset)
     selected = source.select(
         *columns,
+        F.col("_operation"),
+        F.col("_sequence_ts"),
         F.col("_batch_id"),
         F.col("_ingested_at"),
     )
@@ -57,8 +61,8 @@ def build_ip_organisation_party_relationship():
         F.upper(trimmed(F.col("partyRole"))).alias("party_role"),
         F.upper(trimmed(F.col("authorityLevel"))).alias("authority_level"),
         F.col("isActive").cast("boolean").alias("is_active"),
-        F.to_date("startDate").alias("start_date"),
-        F.to_date("endDate").alias("end_date"),
+        F.to_date("startDate").alias("relationship_start_date"),
+        F.to_date("endDate").alias("relationship_end_date"),
     ])
 
 
@@ -69,13 +73,13 @@ def build_ip_organisation_relationship():
         F.col("targetOrgId").cast("string").alias("target_org_id"),
         F.upper(trimmed(F.col("relationshipType"))).alias("relationship_type"),
         F.col("isActive").cast("boolean").alias("is_active"),
-        F.to_date("startDate").alias("start_date"),
+        F.to_date("startDate").alias("relationship_start_date"),
     ])
 
 
 def build_arr_banking_arrangement():
-    accounts = latest_cdc("banking_accounts", ["accountId"]).alias("account")
-    balances = latest_cdc("banking_balances", ["accountId"]).alias("balance")
+    accounts = current_cdc_snapshot("banking_accounts", ["accountId"]).alias("account")
+    balances = current_cdc_snapshot("banking_balances", ["accountId"]).alias("balance")
     selected = accounts.join(balances, "accountId", "left").select(
         F.col("account.global_id").cast("string").alias("global_id"),
         F.col("accountId").cast("string").alias("account_id"),
@@ -103,7 +107,7 @@ def build_arr_banking_arrangement():
 
 
 def _account_owner_lookup():
-    return latest_cdc("banking_accounts", ["accountId"]).select(
+    return current_cdc_snapshot("banking_accounts", ["accountId"]).select(
         F.col("accountId").alias("_owner_account_id"),
         F.col("organisationId").alias("_derived_organisation_id"),
         F.col("_batch_id").alias("_owner_batch"),
@@ -112,7 +116,7 @@ def _account_owner_lookup():
 
 
 def build_arr_loan_arrangement():
-    loans = latest_cdc("loan_accounts", ["loanId"]).alias("loan")
+    loans = current_cdc_snapshot("loan_accounts", ["loanId"]).alias("loan")
     owners = _account_owner_lookup().alias("owner")
     selected = loans.join(owners, F.col("loan.accountId") == F.col("owner._owner_account_id"), "left").select(
         F.col("loan.global_id").cast("string").alias("global_id"),
@@ -125,7 +129,7 @@ def build_arr_loan_arrangement():
         F.lit(None).cast("string").alias("interest_type"),
         F.upper(trimmed(F.col("loan.repaymentFrequency"))).alias("repayment_frequency"),
         F.col("loan.termMonths").cast("int").alias("term_months"),
-        F.to_date(F.col("loan.startDate")).alias("start_date"),
+        F.to_date(F.col("loan.startDate")).alias("loan_start_date"),
         F.to_date(F.col("loan.maturityDate")).alias("maturity_date"),
         masked_amount(F.col("loan.originalAmount")).alias("original_amount_masked"),
         masked_amount(F.col("loan.currentBalance")).alias("current_balance_masked"),
@@ -144,7 +148,7 @@ def build_arr_loan_arrangement():
 
 
 def build_arr_mortgage_arrangement():
-    mortgages = latest_cdc("mortgage_accounts", ["mortgageId"]).alias("mortgage")
+    mortgages = current_cdc_snapshot("mortgage_accounts", ["mortgageId"]).alias("mortgage")
     owners = _account_owner_lookup().alias("owner")
     selected = mortgages.join(owners, F.col("mortgage.accountId") == F.col("owner._owner_account_id"), "left").select(
         F.col("mortgage.global_id").cast("string").alias("global_id"),
@@ -155,7 +159,7 @@ def build_arr_mortgage_arrangement():
         F.upper(trimmed(F.col("mortgage.interestType"))).alias("interest_type"),
         F.upper(trimmed(F.col("mortgage.repaymentFrequency"))).alias("repayment_frequency"),
         F.col("mortgage.loanTerm").cast("int").alias("loan_term"),
-        F.to_date(F.col("mortgage.startDate")).alias("start_date"),
+        F.to_date(F.col("mortgage.startDate")).alias("mortgage_start_date"),
         trimmed(F.col("mortgage.lvrPercent")).alias("lvr_percent"),
         masked_amount(F.col("mortgage.loanAmount")).alias("loan_amount_masked"),
         F.col("mortgage._batch_id").alias("_mortgage_batch"),
@@ -187,10 +191,10 @@ def build_arr_credit_card_arrangement():
     ], masking_status="MASKED")
 
 
-publish_silver_model("ip_organisation", build_ip_organisation, ["organisation_id"])
-publish_silver_model("ip_organisation_party_relationship", build_ip_organisation_party_relationship, ["relationship_id"])
-publish_silver_model("ip_organisation_relationship", build_ip_organisation_relationship, ["relationship_id"])
-publish_silver_model("arr_banking_arrangement", build_arr_banking_arrangement, ["account_id"])
-publish_silver_model("arr_loan_arrangement", build_arr_loan_arrangement, ["loan_id"])
-publish_silver_model("arr_mortgage_arrangement", build_arr_mortgage_arrangement, ["mortgage_id"])
-publish_silver_model("arr_credit_card_arrangement", build_arr_credit_card_arrangement, ["credit_card_id"])
+publish_scd2_model("ip_organisation", build_ip_organisation, ["organisation_id"])
+publish_scd2_model("ip_organisation_party_relationship", build_ip_organisation_party_relationship, ["relationship_id"])
+publish_scd2_model("ip_organisation_relationship", build_ip_organisation_relationship, ["relationship_id"])
+publish_joined_scd2_model("arr_banking_arrangement", build_arr_banking_arrangement, ["account_id"])
+publish_joined_scd2_model("arr_loan_arrangement", build_arr_loan_arrangement, ["loan_id"])
+publish_joined_scd2_model("arr_mortgage_arrangement", build_arr_mortgage_arrangement, ["mortgage_id"])
+publish_scd2_model("arr_credit_card_arrangement", build_arr_credit_card_arrangement, ["credit_card_id"])

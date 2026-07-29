@@ -4,6 +4,7 @@ contract_status: ACTIVE
 owner: application-domain
 producer: legacy-lending-files
 canonical_key: loan_id
+history_mode: APPEND_ONLY
 critical_data_elements: [loan_id, global_id, rejection_reason]
 lineage_l1: file_rejected_applications -> silver.app_rejected_application
 schema: {global_id: STRING, loan_id: STRING, application_title: STRING, application_date: DATE, rejection_reason: STRING}

@@ -31,7 +31,7 @@ USING (
     CAST(NULL AS STRING), loan_type, CAST(NULL AS STRING), interest_type,
     status, UPPER(status) = 'ACTIVE', is_business_arrangement,
     maturity_date BETWEEN current_date() AND date_add(current_date(), 90),
-    CAST(NULL AS DATE), start_date, maturity_date, repayment_frequency,
+    CAST(NULL AS DATE), loan_start_date, maturity_date, repayment_frequency,
     CAST(NULL AS STRING), pipeline_run_id, current_timestamp(), dq_status
   FROM `0-ai-trust`.silver.arr_loan_arrangement
   WHERE dq_status IN ('PASSED', 'WARNING') AND masking_status IN ('MASKED', 'CLEAN')
@@ -42,7 +42,7 @@ USING (
     CONCAT('MORTGAGE:', mortgage_id), global_id, organisation_id, 'MORTGAGE',
     CAST(NULL AS STRING), 'MORTGAGE', CAST(NULL AS STRING), interest_type,
     'ACTIVE', true, is_business_arrangement, false,
-    CAST(NULL AS DATE), start_date, CAST(NULL AS DATE), repayment_frequency,
+    CAST(NULL AS DATE), mortgage_start_date, CAST(NULL AS DATE), repayment_frequency,
     CAST(NULL AS STRING), pipeline_run_id, current_timestamp(), dq_status
   FROM `0-ai-trust`.silver.arr_mortgage_arrangement
   WHERE dq_status IN ('PASSED', 'WARNING') AND masking_status IN ('MASKED', 'CLEAN')

@@ -4,6 +4,7 @@ contract_status: ACTIVE
 owner: application-domain
 producer: lending-origination-platform
 canonical_key: application_id
+history_mode: SCD_TYPE_2
 critical_data_elements: [application_id, global_id, application_type, final_outcome]
 lineage_l1: cdc_loan_applications -> silver.app_application
 schema: {global_id: STRING, application_id: STRING, organisation_id: STRING, is_business_application: BOOLEAN, num_offers: STRING, loan_goal: STRING, application_type: STRING, final_outcome: STRING, submitted_at: TIMESTAMP, last_updated_at: TIMESTAMP, requested_amount_masked: STRING, credit_score: INT}
