@@ -100,26 +100,6 @@ def _stage_queries() -> list[str]:
     transitions = ", ".join(f"'{item}'" for item in lifecycle["allowed_transitions"])
 
     completeness = f"""
-        WITH observed AS (
-          SELECT application_id, collect_set(upper(stage)) AS stages
-          FROM {CATALOG}.silver.app_stage_history
-          GROUP BY application_id
-        ), evaluated AS (
-          SELECT
-            a.application_id,
-            a.processed_at,
-            coalesce(o.stages, array()) AS stages,
-            filter(
-              array({core}),
-              stage -> NOT array_contains(coalesce(o.stages, array()), stage)
-            ) AS missing_core,
-            CASE upper(a.final_outcome) {terminal_cases} END AS expected_terminal
-          FROM {CATALOG}.silver.app_application a
-          LEFT JOIN observed o ON a.application_id = o.application_id
-          WHERE a.`__END_AT` IS NULL
-            AND upper(a.final_outcome) IN ({', '.join(repr(key) for key in lifecycle['terminal_stage_by_outcome'])})
-            AND a.processed_at < current_timestamp() - INTERVAL {grace_hours} HOURS
-        )
         SELECT
           sha2(concat_ws('|', 'APPLICATION_STAGE_COMPLETENESS', application_id), 256) AS violation_id,
           'APPLICATION_STAGE_COMPLETENESS' AS rule_id,
@@ -135,24 +115,32 @@ def _stage_queries() -> list[str]:
             'expected_terminal_stage', expected_terminal,
             'observed_stages', stages
           )) AS details
-        FROM evaluated
+        FROM (
+          SELECT
+            a.application_id,
+            a.processed_at,
+            coalesce(o.stages, array()) AS stages,
+            filter(
+              array({core}),
+              stage -> NOT array_contains(coalesce(o.stages, array()), stage)
+            ) AS missing_core,
+            CASE upper(a.final_outcome) {terminal_cases} END AS expected_terminal
+          FROM {CATALOG}.silver.app_application a
+          LEFT JOIN (
+            SELECT application_id, collect_set(upper(stage)) AS stages
+            FROM {CATALOG}.silver.app_stage_history
+            GROUP BY application_id
+          ) o ON a.application_id = o.application_id
+          WHERE a.`__END_AT` IS NULL
+            AND upper(a.final_outcome) IN ({', '.join(repr(key) for key in lifecycle['terminal_stage_by_outcome'])})
+            AND a.processed_at < current_timestamp() - INTERVAL {grace_hours} HOURS
+        ) evaluated
         WHERE size(missing_core) > 0
            OR expected_terminal IS NULL
            OR NOT array_contains(stages, expected_terminal)
     """
 
     transitions_query = f"""
-        WITH ordered AS (
-          SELECT
-            history_id,
-            application_id,
-            processed_at,
-            upper(stage) AS stage,
-            lag(upper(stage)) OVER (
-              PARTITION BY application_id ORDER BY entered_at, history_id
-            ) AS previous_stage
-          FROM {CATALOG}.silver.app_stage_history
-        )
         SELECT
           sha2(concat_ws('|', 'APPLICATION_STAGE_TRANSITION', history_id), 256) AS violation_id,
           'APPLICATION_STAGE_TRANSITION' AS rule_id,
@@ -167,7 +155,17 @@ def _stage_queries() -> list[str]:
             'previous_stage', previous_stage,
             'current_stage', stage
           )) AS details
-        FROM ordered
+        FROM (
+          SELECT
+            history_id,
+            application_id,
+            processed_at,
+            upper(stage) AS stage,
+            lag(upper(stage)) OVER (
+              PARTITION BY application_id ORDER BY entered_at, history_id
+            ) AS previous_stage
+          FROM {CATALOG}.silver.app_stage_history
+        ) ordered
         WHERE previous_stage IS NOT NULL
           AND processed_at < current_timestamp() - INTERVAL {grace_hours} HOURS
           AND concat(previous_stage, '->', stage) NOT IN ({transitions})
