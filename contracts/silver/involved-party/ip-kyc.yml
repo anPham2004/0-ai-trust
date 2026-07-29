@@ -46,7 +46,7 @@ schema:
     type: custom
     engine: databricks-lakeflow
     implementation:
-      expression: verification_status IN ('VERIFIED','PENDING','FAILED')
+      expression: verification_status IN ('VERIFIED','PENDING','FAILED','EXPIRED')
     severity: error
     dimension: conformity
     description: Must be a known verification status
@@ -108,14 +108,14 @@ schema:
     customProperties:
     - property: g3:action
       value: QUARANTINE
-  - id: ORGANISATION_ID_UUID_FORMAT
+  - id: ORGANISATION_ID_FORMAT
     type: custom
     engine: databricks-lakeflow
     implementation:
-      expression: organisation_id IS NULL OR organisation_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      expression: organisation_id IS NULL OR organisation_id RLIKE '^ORG-[0-9]{5}$'
     severity: error
     dimension: conformity
-    description: organisation_id must be valid UUID format when present
+    description: organisation_id must match the organisation business-key format when present
     customProperties:
     - property: g3:action
       value: QUARANTINE
@@ -468,7 +468,7 @@ customProperties:
     - RECORD_TYPE_INVALID
     - KYC_ID_UUID_FORMAT
     - GLOBAL_ID_UUID_FORMAT
-    - ORGANISATION_ID_UUID_FORMAT
+    - ORGANISATION_ID_FORMAT
     - REVIEW_DATE_ORDER
     timeliness:
     - KYC_REVIEW_OVERDUE

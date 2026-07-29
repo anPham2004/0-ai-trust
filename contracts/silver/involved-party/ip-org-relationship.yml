@@ -86,25 +86,25 @@ schema:
     customProperties:
     - property: g3:action
       value: QUARANTINE
-  - id: SOURCE_ORG_ID_UUID_FORMAT
+  - id: SOURCE_ORG_ID_FORMAT
     type: custom
     engine: databricks-lakeflow
     implementation:
-      expression: source_org_id IS NULL OR source_org_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      expression: source_org_id IS NULL OR source_org_id RLIKE '^ORG-[0-9]{5}$'
     severity: error
     dimension: conformity
-    description: source_org_id must be valid UUID format when present
+    description: source_org_id must match the organisation business-key format when present
     customProperties:
     - property: g3:action
       value: QUARANTINE
-  - id: TARGET_ORG_ID_UUID_FORMAT
+  - id: TARGET_ORG_ID_FORMAT
     type: custom
     engine: databricks-lakeflow
     implementation:
-      expression: target_org_id IS NULL OR target_org_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      expression: target_org_id IS NULL OR target_org_id RLIKE '^ORG-[0-9]{5}$'
     severity: error
     dimension: conformity
-    description: target_org_id must be valid UUID format when present
+    description: target_org_id must match the organisation business-key format when present
     customProperties:
     - property: g3:action
       value: QUARANTINE
@@ -302,8 +302,8 @@ customProperties:
     - RELATIONSHIP_TYPE_INVALID
     - SELF_RELATIONSHIP
     - RELATIONSHIP_ID_UUID_FORMAT
-    - SOURCE_ORG_ID_UUID_FORMAT
-    - TARGET_ORG_ID_UUID_FORMAT
+    - SOURCE_ORG_ID_FORMAT
+    - TARGET_ORG_ID_FORMAT
 - property: g3:aiPolicy
   value:
     allowed:

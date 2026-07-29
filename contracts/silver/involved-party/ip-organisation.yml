@@ -64,14 +64,14 @@ schema:
     customProperties:
     - property: g3:action
       value: QUARANTINE
-  - id: ORGANISATION_ID_UUID_FORMAT
+  - id: ORGANISATION_ID_FORMAT
     type: custom
     engine: databricks-lakeflow
     implementation:
-      expression: organisation_id IS NULL OR organisation_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      expression: organisation_id IS NULL OR organisation_id RLIKE '^ORG-[0-9]{5}$'
     severity: error
     dimension: conformity
-    description: organisation_id must be valid UUID format when present
+    description: organisation_id must match the organisation business-key format when present
     customProperties:
     - property: g3:action
       value: QUARANTINE
@@ -413,7 +413,7 @@ customProperties:
     - ORG_TYPE_NULL
     - BUSINESS_NAME_NOT_BLANK
     validity:
-    - ORGANISATION_ID_UUID_FORMAT
+    - ORGANISATION_ID_FORMAT
     - GLOBAL_ID_UUID_FORMAT
     - ABN_FORMAT_CHECK
     timeliness:

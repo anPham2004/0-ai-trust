@@ -108,14 +108,14 @@ schema:
     customProperties:
     - property: g3:action
       value: QUARANTINE
-  - id: APPLICATION_ID_UUID_FORMAT
+  - id: APPLICATION_ID_FORMAT
     type: custom
     engine: databricks-lakeflow
     implementation:
-      expression: application_id IS NULL OR application_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      expression: application_id IS NULL OR application_id RLIKE '^Application_[0-9]{9}$'
     severity: error
     dimension: conformity
-    description: application_id must be valid UUID format when present
+    description: application_id must match the BPI business-key format when present
     customProperties:
     - property: g3:action
       value: QUARANTINE
@@ -350,7 +350,7 @@ customProperties:
     validity:
     - STATUS_SAME
     - CHANGE_ID_UUID_FORMAT
-    - APPLICATION_ID_UUID_FORMAT
+    - APPLICATION_ID_FORMAT
     - GLOBAL_ID_UUID_FORMAT
 - property: g3:aiPolicy
   value:
