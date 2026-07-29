@@ -1,0 +1,381 @@
+kind: DataContract
+apiVersion: v3.1.0
+id: silver.application.app_status_change
+version: 1.0.0
+name: app_status_change
+status: draft
+domain: LENDING
+description:
+  purpose: |
+    Application status change history from Kafka events. Records each status transition with reason.
+servers:
+- server: silver-delta-lake
+  type: databricks
+  description: Silver Delta Lake table for app_status_change
+  environment: prod
+schema:
+- name: app_status_change
+  logicalType: object
+  physicalType: table
+  quality:
+  - id: CHANGE_ID_NULL
+    type: sql
+    query: change_id IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Primary key must exist
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: APPLICATION_ID_NULL
+    type: sql
+    query: application_id IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Application FK must exist
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: GLOBAL_ID_NULL
+    type: sql
+    query: global_id IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Customer FK must exist
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: OLD_STATUS_NULL
+    type: sql
+    query: old_status IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Previous status required
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: NEW_STATUS_NULL
+    type: sql
+    query: new_status IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: New status required
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: CHANGED_AT_NULL
+    type: sql
+    query: changed_at IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Change timestamp required
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: STATUS_SAME
+    type: sql
+    query: old_status != new_status
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: Status must actually change
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: CHANGE_ID_UUID_FORMAT
+    type: sql
+    query: change_id IS NULL OR change_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: change_id must be valid UUID format when present
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: APPLICATION_ID_UUID_FORMAT
+    type: sql
+    query: application_id IS NULL OR application_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: application_id must be valid UUID format when present
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: GLOBAL_ID_UUID_FORMAT
+    type: sql
+    query: global_id IS NULL OR global_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: global_id must be valid UUID format when present
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: OLD_STATUS_NOT_BLANK
+    type: sql
+    query: old_status IS NULL OR length(trim(old_status)) > 0
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: old_status must not be empty or whitespace-only when present
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: NEW_STATUS_NOT_BLANK
+    type: sql
+    query: new_status IS NULL OR length(trim(new_status)) > 0
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: new_status must not be empty or whitespace-only when present
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  properties:
+  - name: change_id
+    logicalType: string
+    physicalType: STRING
+    required: true
+    primaryKey: true
+    primaryKeyPosition: 1
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: application_id
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: global_id
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: old_status
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+  - name: new_status
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+  - name: changed_at
+    logicalType: timestamp
+    physicalType: TIMESTAMP
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: timestamp
+  - name: reason
+    logicalType: string
+    physicalType: STRING
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: description
+  - name: pipeline_run_id
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: source_table
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: identifier
+  - name: processed_at
+    logicalType: timestamp
+    physicalType: TIMESTAMP
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: timestamp
+  - name: dq_status
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+    - property: g3:accepted
+      value:
+        values:
+        - PASSED
+        - FAILED
+        - WARNING
+  - name: masking_status
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+    - property: g3:accepted
+      value:
+        values:
+        - MASKED
+        - CLEAN
+slaProperties:
+- property: hardFailureRate
+  value: 0.01
+  description: Max proportion of hard-rule failures before pipeline halts
+- property: freshnessBreachRate
+  value: 0.05
+  description: Max proportion of freshness breaches before alert
+customProperties:
+- property: g3:sources
+  value:
+  - type: EVENT
+    ingestion_mechanism: APACHE_KAFKA
+    bronze_sink: kafka_events
+    source_dataset: status_change_history
+    fields:
+    - changeId
+    - applicationId
+    - global_id
+    - oldStatus
+    - newStatus
+    - changedAt
+    - reason
+- property: g3:freshnessSla
+  value: 24 hours
+- property: g3:lineage
+  value:
+    l1: |
+      loan-origination events -> Kafka -> landing-exporter -> S3 bronze/landing/event/ -> Auto Loader -> bronze.kafka_events -> Silver
+    l2_required: true
+- property: g3:lifecycle
+  value:
+    owner: lending-domain
+    producer: loan-origination-platform
+    consumers:
+    - banker-assist
+    - lending-operations
+    approver: TBD
+    effective_from: null
+- property: g3:dataset
+  value:
+    canonical_key: change_id
+    customer_key: global_id
+    critical_data_elements:
+    - change_id
+    - application_id
+    - old_status
+    - new_status
+    lifecycle_stage: Monitor
+- property: g3:qualityDimensions
+  value:
+    completeness:
+    - CHANGE_ID_NULL
+    - APPLICATION_ID_NULL
+    - GLOBAL_ID_NULL
+    - OLD_STATUS_NULL
+    - NEW_STATUS_NULL
+    - CHANGED_AT_NULL
+    - OLD_STATUS_NOT_BLANK
+    - NEW_STATUS_NOT_BLANK
+    validity:
+    - STATUS_SAME
+    - CHANGE_ID_UUID_FORMAT
+    - APPLICATION_ID_UUID_FORMAT
+    - GLOBAL_ID_UUID_FORMAT
+- property: g3:aiPolicy
+  value:
+    allowed:
+    - status_history_summary
+    - transition_lookup
+    prohibited:
+    - display_raw_pii
+    - credit_decision
+    - risk_scoring
+    - fraud_assessment
+- property: g3:zeroTrust
+  value:
+    quality_status_required: true
+    source_reference_required: true
+    quarantined_excluded: true
+    stale_flagged: true
+- property: g3:parameters
+  value:
+    allowed_status_transitions:
+    - Assessment->Cancelled
+    - Assessment->Conditionally_Approved
+    - Assessment->Credit_Check
+    - Assessment->Withdrawn
+    - Conditionally_Approved->Document_Verification
+    - Credit_Check->Approved
+    - Credit_Check->Denied
+    - Document_Verification->Assessment
+    - Submitted->Document_Verification
+- property: g3:notes
+  value:
+  - |
+    This contract describes the Silver output table. PII is masked, hashed, or redacted before landing in Silver. Quality rules are executable Spark SQL expressions that can be compiled via F.expr().

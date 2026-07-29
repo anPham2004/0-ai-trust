@@ -1,0 +1,428 @@
+kind: DataContract
+apiVersion: v3.1.0
+id: source.database.banking_direct_debits
+version: 1.0.0
+name: banking_direct_debits
+status: draft
+domain: BANKING
+description:
+  purpose: |
+    Source dataset containing direct debit arrangements associated with banking accounts. Each record identifies the authorised entity and the latest known debit date and amount.
+servers:
+- server: source-postgresql
+  type: postgresql
+  description: PostgreSQL CDC source via Debezium for banking_direct_debits
+  environment: prod
+schema:
+- name: banking_direct_debits
+  logicalType: object
+  physicalType: table
+  physicalName: public.banking_direct_debits
+  relationships:
+  - type: foreignKey
+    from:
+    - banking_direct_debits.global_id
+    to:
+    - customers.global_id
+    customProperties:
+    - property: g3:nullable
+      value: true
+  - type: foreignKey
+    from:
+    - banking_direct_debits.accountId
+    to:
+    - banking_accounts.accountId
+    customProperties:
+    - property: g3:nullable
+      value: true
+  quality:
+  - id: DDB_DIRECT_DEBIT_ID_UNIQUE
+    type: library
+    metric: duplicateValues
+    mustBe: 0
+    severity: error
+    dimension: uniqueness
+    description: |
+      directDebitId must be unique across the dataset.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+    - property: g3:columns
+      value:
+      - directDebitId
+  - id: DDB_ACCOUNT_LINK_PRESENT
+    type: library
+    metric: nullValues
+    mustBe: 0
+    severity: warning
+    dimension: completeness
+    description: |
+      A direct debit arrangement should identify its banking account. The physical schema currently permits accountId to be null.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+    - property: g3:columns
+      value:
+      - accountId
+  - id: DDB_CUSTOMER_LINK_PRESENT
+    type: library
+    metric: nullValues
+    mustBe: 0
+    severity: warning
+    dimension: completeness
+    description: |
+      A direct debit arrangement should identify its customer. The physical schema currently permits global_id to be null.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+    - property: g3:columns
+      value:
+      - global_id
+  - id: DDB_ACCOUNT_CUSTOMER_CONSISTENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: REFERENCE_PAIR_CONSISTENT
+      parameters:
+        reference_dataset: banking_accounts
+        source_columns:
+        - accountId
+        - global_id
+        reference_columns:
+        - accountId
+        - global_id
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      accountId and global_id must refer to the same banking account record.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: DDB_LAST_DEBIT_FIELDS_COMPLETE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: ALL_OR_NONE_NULL
+      columns:
+      - lastDebitDate
+      - lastDebitAmount
+    severity: warning
+    dimension: consistency
+    description: |
+      lastDebitDate and lastDebitAmount should normally be populated together or both be null.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: DDB_LAST_DEBIT_DATE_NOT_IN_FUTURE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: TIMESTAMP_NOT_IN_FUTURE
+      columns:
+      - lastDebitDate
+    severity: warning
+    dimension: timeliness
+    description: |
+      lastDebitDate should not be later than the pipeline processing timestamp.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: DDB_ACTIVE_ACCOUNT_EXPECTED
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: REFERENCE_CONDITION
+      parameters:
+        reference_dataset: banking_accounts
+        source_key:
+          accountId: accountId
+        expected_condition:
+          column: isActive
+          equals: true
+        ignore_missing_reference: false
+    severity: warning
+    dimension: consistency
+    description: |
+      Direct debit arrangements are normally expected to belong to active banking accounts.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  properties:
+  - name: global_id
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - 65df84b8-4274-4dbd-9667-6c9967ae6538
+    quality:
+    - id: DDB_GLOBAL_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: global_id must be a valid UUID when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: DDB_GLOBAL_ID_CUSTOMER_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: customers
+          reference_column: global_id
+      severity: error
+      dimension: consistency
+      description: |
+        global_id must exist in customers.global_id when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: person_identifier
+  - name: accountId
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - a5ef7c5b-04b6-49fa-8a0a-6b6a86be900f
+    quality:
+    - id: DDB_ACCOUNT_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: accountId must be a valid UUID when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: DDB_ACCOUNT_ID_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: banking_accounts
+          reference_column: accountId
+      severity: error
+      dimension: consistency
+      description: |
+        accountId must exist in banking_accounts.accountId when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: account_identifier
+  - name: directDebitId
+    logicalType: string
+    physicalType: string
+    required: true
+    primaryKey: true
+    primaryKeyPosition: 1
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - 7f2d52af-56c5-49d6-a4de-33f2e5ac3ceb
+    quality:
+    - id: DDB_DIRECT_DEBIT_ID_NOT_NULL
+      type: library
+      metric: nullValues
+      mustBe: 0
+      severity: error
+      dimension: completeness
+      description: directDebitId must always be present.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: DDB_DIRECT_DEBIT_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: directDebitId must be a valid UUID.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: direct_debit_identifier
+  - name: authorisedEntity
+    logicalType: string
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      minLength: 1
+      maxLength: 250
+    examples:
+    - Southern Utilities Pty Ltd
+    quality:
+    - id: DDB_AUTHORISED_ENTITY_NON_BLANK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: NON_BLANK_IF_PRESENT
+      severity: warning
+      dimension: completeness
+      description: |
+        authorisedEntity must not be blank when supplied.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: authorised_entity_name
+  - name: lastDebitDate
+    logicalType: timestamp
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      format: ISO_8601_TIMESTAMP
+    examples:
+    - '2026-06-15T09:45:00Z'
+    quality:
+    - id: DDB_LAST_DEBIT_DATE_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_TIMESTAMP_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        lastDebitDate must be parseable as a timestamp when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_ACTIVITY_METADATA
+        handling: RESTRICT_OR_GENERALISE
+    - property: g3:domainType
+      value: timestamp
+  - name: lastDebitAmount
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    examples:
+    - '129.95'
+    quality:
+    - id: DDB_LAST_DEBIT_AMOUNT_DECIMAL
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DECIMAL_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        lastDebitAmount must be parseable as a decimal amount when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: DDB_LAST_DEBIT_AMOUNT_POSITIVE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: RANGE_IF_PRESENT
+        parameters:
+          min_exclusive: 0
+      severity: error
+      dimension: conformity
+      description: |
+        lastDebitAmount must be greater than zero when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+    - property: g3:domainType
+      value: decimal_amount
+    - property: g3:accepted
+      value:
+        currency: AUD
+        min_exclusive: 0
+customProperties:
+- property: g3:source
+  value:
+    category: DATABASE
+    system_type: POSTGRESQL
+    source_object: public.banking_direct_debits
+    authoritative: true
+- property: g3:ingestion
+  value:
+    mechanism: DEBEZIUM_CDC
+    transport: APACHE_KAFKA
+    landing:
+      format: JSONL
+      path_template: s3://<bucket>/bronze/landing/cdc/banking_direct_debits/
+      immutable: true
+    bronze_target: bronze.cdc_changes
+    cdc:
+      supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+      ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+- property: g3:lifecycle
+  value:
+    owner: TBD
+    approver: TBD
+    effective_from: null
+- property: g3:dataset
+  value:
+    expected_rows_scale_1: 2250
+    physical_schema_ref: dev-tools/datagen/output/master-schema.json#/banking_direct_debits
+- property: g3:notes
+  value:
+  - |
+    This contract describes the raw direct debit source and does not expose the exact debit amount to AI-ready outputs.
+  - |
+    lastDebitAmount must be converted to an approved range bucket or removed before downstream AI consumption.
+  - |
+    authorisedEntity is a business name rather than a direct personal identifier, but it still reveals customer financial relationships and is therefore treated as confidential.
+  - |
+    The maximum authorisedEntity length is a proposed contract limit because the source schema does not define an exact maximum length.
+  - Account-link and customer-link completeness remain warnings because the physical schema marks accountId and global_id
+    as nullable.

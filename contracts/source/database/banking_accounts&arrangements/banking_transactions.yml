@@ -1,0 +1,1083 @@
+kind: DataContract
+apiVersion: v3.1.0
+id: source.database.banking_transactions
+version: 1.0.0
+name: banking_transactions
+status: draft
+domain: BANKING
+description:
+  purpose: |
+    Source dataset containing full banking transaction history with account and customer links, debit or credit direction, CDR transaction type, amount, timestamps, merchant information, transaction category, currency, and optional BPAY and clearing information.
+servers:
+- server: source-postgresql
+  type: postgresql
+  description: PostgreSQL CDC source via Debezium for banking_transactions
+  environment: prod
+schema:
+- name: banking_transactions
+  logicalType: object
+  physicalType: table
+  physicalName: public.banking_transactions
+  relationships:
+  - type: foreignKey
+    from:
+    - banking_transactions.global_id
+    to:
+    - customers.global_id
+    customProperties:
+    - property: g3:nullable
+      value: true
+  - type: foreignKey
+    from:
+    - banking_transactions.accountId
+    to:
+    - banking_accounts.accountId
+    customProperties:
+    - property: g3:nullable
+      value: true
+  quality:
+  - id: TXN_ID_UNIQUE
+    type: library
+    metric: duplicateValues
+    mustBe: 0
+    severity: error
+    dimension: uniqueness
+    description: transactionId must be unique across the dataset.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+    - property: g3:columns
+      value:
+      - transactionId
+  - id: TXN_ACCOUNT_LINK_PRESENT
+    type: library
+    metric: nullValues
+    mustBe: 0
+    severity: warning
+    dimension: completeness
+    description: |
+      A transaction should identify its banking account. The physical schema currently permits accountId to be null.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+    - property: g3:columns
+      value:
+      - accountId
+  - id: TXN_CUSTOMER_LINK_PRESENT
+    type: library
+    metric: nullValues
+    mustBe: 0
+    severity: warning
+    dimension: completeness
+    description: |
+      A transaction should identify its customer. The physical schema currently permits global_id to be null.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+    - property: g3:columns
+      value:
+      - global_id
+  - id: TXN_ACCOUNT_CUSTOMER_CONSISTENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: REFERENCE_PAIR_CONSISTENT
+      parameters:
+        reference_dataset: banking_accounts
+        source_columns:
+        - accountId
+        - global_id
+        reference_columns:
+        - accountId
+        - global_id
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      accountId and global_id must refer to the same banking account record.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: TXN_TYPE_MATCHES_DIRECTION
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_ACCEPTED_VALUES
+      parameters:
+        source_column: transactionType
+        mappings:
+          debit:
+          - PAYMENT
+          - DIRECT_DEBIT
+          - FEE
+          - TRANSFER_OUTGOING
+          credit:
+          - TRANSFER_INCOMING
+          - INTEREST_PAID
+          - OTHER
+        target_column: type
+    severity: error
+    dimension: consistency
+    description: |
+      The CDR transaction type must be valid for the debit or credit direction.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: TXN_VALUE_TIME_MATCHES_TIMESTAMP
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: TIMESTAMP_EQUALITY
+      columns:
+      - valueDateTime
+      - timestamp
+    severity: error
+    dimension: consistency
+    description: |
+      valueDateTime must equal timestamp in the current source model.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: TXN_EXECUTION_TIME_MATCHES_TIMESTAMP
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: TIMESTAMP_EQUALITY
+      columns:
+      - executionDateTime
+      - timestamp
+    severity: error
+    dimension: consistency
+    description: |
+      executionDateTime must equal timestamp in the current source model.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: TXN_POSTING_TIME_WINDOW
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: TIMESTAMP_OFFSET_RANGE
+      parameters:
+        start_column: timestamp
+        end_column: postingDateTime
+        min_seconds: 0
+        max_seconds: 3600
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      postingDateTime must be between timestamp and one hour after timestamp.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: TXN_TIMESTAMP_NOT_IN_FUTURE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: TIMESTAMP_NOT_IN_FUTURE
+      columns:
+      - timestamp
+    severity: warning
+    dimension: timeliness
+    description: |
+      timestamp should not be later than the pipeline processing timestamp.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: TXN_MERCHANT_NAME_PRESENT_FOR_MERCHANT_TYPES
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_NOT_NULL_FOR_VALUES
+      parameters:
+        source_column: type
+        source_values:
+        - PAYMENT
+        - DIRECT_DEBIT
+        target_column: merchantName
+    severity: warning
+    dimension: consistency
+    description: |
+      PAYMENT and DIRECT_DEBIT transactions should include merchantName.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: TXN_MERCHANT_NAME_NULL_FOR_NON_MERCHANT_TYPES
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_NULL_EXCEPT_VALUES
+      parameters:
+        source_column: type
+        allowed_source_values:
+        - PAYMENT
+        - DIRECT_DEBIT
+        target_column: merchantName
+    severity: warning
+    dimension: consistency
+    description: |
+      merchantName should normally be null for non-merchant transaction types.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: TXN_BPAY_FIELDS_COMPLETE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_ALL_NOT_NULL
+      parameters:
+        when:
+          column: billerCode
+          operator: IS_NOT_NULL
+        target_columns:
+        - billerName
+        - crn
+    severity: error
+    dimension: consistency
+    description: |
+      When billerCode is present, billerName and crn must also be present.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: TXN_BPAY_FIELDS_NULL_WITHOUT_BILLER
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_ALL_NULL
+      parameters:
+        when:
+          column: billerCode
+          operator: IS_NULL
+        target_columns:
+        - billerName
+        - crn
+    severity: warning
+    dimension: consistency
+    description: |
+      billerName and crn should normally be null when billerCode is absent.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: TXN_DETAIL_FIELDS_EXPECTED_WHEN_AVAILABLE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_ANY_NOT_NULL
+      parameters:
+        when:
+          column: isDetailAvailable
+          equals: true
+        target_columns:
+        - description
+        - reference
+        - merchantName
+        - billerCode
+        - apcaNumber
+    severity: warning
+    dimension: consistency
+    description: |
+      When isDetailAvailable is true, at least one detail field should be present.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  properties:
+  - name: global_id
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - 65df84b8-4274-4dbd-9667-6c9967ae6538
+    quality:
+    - id: TXN_GLOBAL_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: global_id must be a valid UUID when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: TXN_GLOBAL_ID_CUSTOMER_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: customers
+          reference_column: global_id
+      severity: error
+      dimension: consistency
+      description: |
+        global_id must exist in customers.global_id when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: person_identifier
+  - name: transactionId
+    logicalType: string
+    physicalType: string
+    required: true
+    primaryKey: true
+    primaryKeyPosition: 1
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - 4b78df48-f1d4-4e7f-8ef8-24ad8034ea9a
+    quality:
+    - id: TXN_ID_NOT_NULL
+      type: library
+      metric: nullValues
+      mustBe: 0
+      severity: error
+      dimension: completeness
+      description: transactionId must always be present.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: TXN_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: transactionId must be a valid UUID.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: transaction_identifier
+  - name: accountId
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - a5ef7c5b-04b6-49fa-8a0a-6b6a86be900f
+    quality:
+    - id: TXN_ACCOUNT_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: accountId must be a valid UUID when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: TXN_ACCOUNT_ID_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: banking_accounts
+          reference_column: accountId
+      severity: error
+      dimension: consistency
+      description: |
+        accountId must exist in banking_accounts.accountId when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: account_identifier
+  - name: amount
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    examples:
+    - '84.75'
+    quality:
+    - id: TXN_AMOUNT_DECIMAL
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DECIMAL_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: amount must be parseable as a decimal when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: TXN_AMOUNT_POSITIVE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: RANGE_IF_PRESENT
+        parameters:
+          min_exclusive: 0
+      severity: error
+      dimension: conformity
+      description: |
+        amount must be greater than zero in the current mock-data model.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+    - property: g3:domainType
+      value: decimal_amount
+    - property: g3:accepted
+      value:
+        min_exclusive: 0
+  - name: transactionType
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: CONFIDENTIAL
+    examples:
+    - debit
+    quality:
+    - id: TXN_DIRECTION_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - debit
+        - credit
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: transactionType must be debit or credit.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: transaction_direction
+    - property: g3:accepted
+      value:
+        values:
+        - debit
+        - credit
+  - name: type
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: CONFIDENTIAL
+    examples:
+    - PAYMENT
+    quality:
+    - id: TXN_TYPE_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - PAYMENT
+        - DIRECT_DEBIT
+        - FEE
+        - TRANSFER_OUTGOING
+        - TRANSFER_INCOMING
+        - INTEREST_PAID
+        - OTHER
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: type must be one of the supported CDR transaction types.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: cdr_transaction_type
+    - property: g3:accepted
+      value:
+        values:
+        - PAYMENT
+        - DIRECT_DEBIT
+        - FEE
+        - TRANSFER_OUTGOING
+        - TRANSFER_INCOMING
+        - INTEREST_PAID
+        - OTHER
+  - name: timestamp
+    logicalType: timestamp
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      format: ISO_8601_TIMESTAMP
+    examples:
+    - '2026-06-15T11:20:00Z'
+    quality:
+    - id: TXN_TIMESTAMP_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_TIMESTAMP_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: timestamp must be parseable when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_ACTIVITY_METADATA
+        handling: RESTRICT_OR_GENERALISE
+    - property: g3:domainType
+      value: timestamp
+  - name: description
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    logicalTypeOptions:
+      minLength: 1
+      maxLength: 500
+    examples:
+    - Harbour Market
+    quality:
+    - id: TXN_DESCRIPTION_NON_BLANK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: NON_BLANK_IF_PRESENT
+      severity: warning
+      dimension: completeness
+      description: description must not be blank when supplied.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: CUSTOMER_FINANCIAL_RELATIONSHIP_INFORMATION
+        handling: REDACT_OR_RESTRICT
+    - property: g3:domainType
+      value: transaction_description
+  - name: category
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: HIGHLY_CONFIDENTIAL
+    examples:
+    - groceries
+    quality:
+    - id: TXN_CATEGORY_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - groceries
+        - utilities
+        - transport
+        - dining
+        - healthcare
+        - entertainment
+        - shopping
+        - other
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: category must be one of the supported spending categories.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: SPENDING_BEHAVIOUR_INFORMATION
+        handling: GENERALISE_OR_RESTRICT
+    - property: g3:domainType
+      value: transaction_category
+    - property: g3:accepted
+      value:
+        values:
+        - groceries
+        - utilities
+        - transport
+        - dining
+        - healthcare
+        - entertainment
+        - shopping
+        - other
+  - name: status
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: CONFIDENTIAL
+    examples:
+    - POSTED
+    quality:
+    - id: TXN_STATUS_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - POSTED
+        - PENDING
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: status must be POSTED or PENDING.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: transaction_status
+    - property: g3:accepted
+      value:
+        values:
+        - POSTED
+        - PENDING
+  - name: reference
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    logicalTypeOptions:
+      pattern: ^\d{9}$
+    examples:
+    - '123456789'
+    quality:
+    - id: TXN_REFERENCE_PATTERN
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: REGEX_OR_BLANK_IF_PRESENT
+        parameters:
+          regex: ^\d{9}$
+      severity: warning
+      dimension: conformity
+      description: |
+        reference should contain nine digits or be blank when supplied.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_REFERENCE_INFORMATION
+        handling: TOKENISE_OR_REDACT
+    - property: g3:domainType
+      value: transaction_reference
+    - property: g3:accepted
+      value:
+        blank_allowed: true
+  - name: isDetailAvailable
+    logicalType: boolean
+    physicalType: bool
+    required: true
+    classification: INTERNAL
+    examples:
+    - true
+    quality:
+    - id: TXN_DETAIL_AVAILABLE_BOOLEAN
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: BOOLEAN
+      severity: error
+      dimension: conformity
+      description: isDetailAvailable must be a boolean value.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: detail_availability_flag
+    - property: g3:accepted
+      value:
+        values:
+        - true
+        - false
+  - name: postingDateTime
+    logicalType: timestamp
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      format: ISO_8601_TIMESTAMP
+    examples:
+    - '2026-06-15T11:45:00Z'
+    quality:
+    - id: TXN_POSTING_TIME_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_TIMESTAMP_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: postingDateTime must be parseable when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_ACTIVITY_METADATA
+        handling: RESTRICT_OR_GENERALISE
+    - property: g3:domainType
+      value: timestamp
+  - name: valueDateTime
+    logicalType: timestamp
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      format: ISO_8601_TIMESTAMP
+    examples:
+    - '2026-06-15T11:20:00Z'
+    quality:
+    - id: TXN_VALUE_TIME_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_TIMESTAMP_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: valueDateTime must be parseable when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_ACTIVITY_METADATA
+        handling: RESTRICT_OR_GENERALISE
+    - property: g3:domainType
+      value: timestamp
+  - name: executionDateTime
+    logicalType: timestamp
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      format: ISO_8601_TIMESTAMP
+    examples:
+    - '2026-06-15T11:20:00Z'
+    quality:
+    - id: TXN_EXECUTION_TIME_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_TIMESTAMP_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: executionDateTime must be parseable when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_ACTIVITY_METADATA
+        handling: RESTRICT_OR_GENERALISE
+    - property: g3:domainType
+      value: timestamp
+  - name: currency
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: INTERNAL
+    examples:
+    - AUD
+    quality:
+    - id: TXN_CURRENCY_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - AUD
+        - USD
+        - GBP
+        - EUR
+        - JPY
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: currency must be one of the supported source currencies.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: currency_code
+    - property: g3:accepted
+      value:
+        values:
+        - AUD
+        - USD
+        - GBP
+        - EUR
+        - JPY
+  - name: merchantName
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    logicalTypeOptions:
+      minLength: 1
+      maxLength: 250
+    examples:
+    - Harbour Market Pty Ltd
+    quality:
+    - id: TXN_MERCHANT_NAME_NON_BLANK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: NON_BLANK_IF_PRESENT
+      severity: warning
+      dimension: completeness
+      description: merchantName must not be blank when supplied.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: CUSTOMER_FINANCIAL_RELATIONSHIP_INFORMATION
+        handling: REDACT_OR_RESTRICT
+    - property: g3:domainType
+      value: merchant_name
+  - name: merchantCategoryCode
+    logicalType: string
+    physicalType: string
+    classification: CONFIDENTIAL
+    examples:
+    - '5411'
+    quality:
+    - id: TXN_MCC_REFERENCE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: REFERENCE_SET_IF_PRESENT
+        parameters:
+          reference_set: MCC
+      severity: warning
+      dimension: consistency
+      description: |
+        merchantCategoryCode should exist in the approved MCC reference set.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: SPENDING_BEHAVIOUR_INFORMATION
+        handling: GENERALISE_OR_RESTRICT
+    - property: g3:domainType
+      value: merchant_category_code
+    - property: g3:accepted
+      value:
+        reference_set: MCC
+        exact_mapping_status: TBD_FROM_GENERATOR_CONFIG
+  - name: billerCode
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    logicalTypeOptions:
+      pattern: ^\d{4}$
+    examples:
+    - '1234'
+    quality:
+    - id: TXN_BILLER_CODE_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^\d{4}$
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: billerCode must contain four digits when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: BILL_PAYMENT_INFORMATION
+        handling: TOKENISE_OR_REDACT
+    - property: g3:domainType
+      value: bpay_biller_code
+  - name: billerName
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    logicalTypeOptions:
+      minLength: 1
+      maxLength: 250
+    examples:
+    - Southern Energy
+    quality:
+    - id: TXN_BILLER_NAME_NON_BLANK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: NON_BLANK_IF_PRESENT
+      severity: warning
+      dimension: completeness
+      description: billerName must not be blank when supplied.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: BILL_PAYMENT_INFORMATION
+        handling: REDACT_OR_RESTRICT
+    - property: g3:domainType
+      value: bpay_biller_name
+  - name: crn
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    logicalTypeOptions:
+      pattern: ^\d{9}$
+    examples:
+    - '987654321'
+    quality:
+    - id: TXN_CRN_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^\d{9}$
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: crn must contain nine digits when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_REFERENCE_INFORMATION
+        handling: TOKENISE_OR_REDACT
+    - property: g3:domainType
+      value: bpay_customer_reference_number
+  - name: apcaNumber
+    logicalType: string
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      pattern: ^\d{6}$
+    examples:
+    - '123456'
+    quality:
+    - id: TXN_APCA_NUMBER_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^\d{6}$
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: apcaNumber must contain six digits when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: apca_clearing_code
+customProperties:
+- property: g3:source
+  value:
+    category: DATABASE
+    system_type: POSTGRESQL
+    source_object: public.banking_transactions
+    authoritative: true
+- property: g3:ingestion
+  value:
+    mechanism: DEBEZIUM_CDC
+    transport: APACHE_KAFKA
+    landing:
+      format: JSONL
+      path_template: s3://<bucket>/bronze/landing/cdc/banking_transactions/
+      immutable: true
+    bronze_target: bronze.cdc_changes
+    cdc:
+      supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+      ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+- property: g3:lifecycle
+  value:
+    owner: TBD
+    approver: TBD
+    effective_from: null
+- property: g3:dataset
+  value:
+    expected_rows_scale_1: 15000
+    physical_schema_ref: dev-tools/datagen/output/master-schema.json#/banking_transactions
+- property: g3:notes
+  value:
+  - |
+    This contract follows the latest master schema and includes all twenty-two physical fields defined for banking_transactions.
+  - |
+    amount, description, category, merchantName, biller information, reference, and CRN reveal sensitive customer financial behaviour and must not be exposed directly to AI-ready outputs.
+  - |
+    The exact category-to-MCC mapping must be copied from the generator or an approved MCC reference before this contract is promoted to APPROVED.
+  - |
+    The maximum lengths for description, merchantName, and billerName are proposed contract limits because the source schema does not define exact maximum lengths.
+  - 'Merchant and BPAY completeness rules are derived from the source notes: merchantName is populated only for PAYMENT or
+    DIRECT_DEBIT, while billerName and crn are populated when a BPAY billerCode is present.'

@@ -1,0 +1,849 @@
+kind: DataContract
+apiVersion: v3.1.0
+id: source.event.support_interactions
+version: 1.0.0
+name: support_interactions
+status: draft
+domain: CUSTOMER_SERVICE
+description:
+  purpose: |
+    Append-only CRM support-contact events across chat, phone, email, and branch channels. Each record contains customer identifiers, interaction timestamp, support topic, resolution, handling agent, and duration.
+servers:
+- server: source-kafka
+  type: kafka
+  description: Kafka event stream for support_interactions
+  environment: prod
+schema:
+- name: support_interactions
+  logicalType: object
+  physicalType: table
+  physicalName: support_interactions
+  relationships:
+  - type: foreignKey
+    from:
+    - support_interactions.global_id
+    to:
+    - customers.global_id
+    customProperties:
+    - property: g3:nullable
+      value: true
+  - type: foreignKey
+    from:
+    - support_interactions.customerId
+    to:
+    - customers.customerId
+    customProperties:
+    - property: g3:nullable
+      value: true
+  quality:
+  - id: SPI_INTERACTION_ID_UNIQUE
+    type: library
+    metric: duplicateValues
+    mustBe: 0
+    severity: error
+    dimension: uniqueness
+    description: |
+      interactionId must uniquely identify a business interaction. Repeated interactionId values are treated as transport duplicates.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+    - property: g3:columns
+      value:
+      - interactionId
+  - id: SPI_CUSTOMER_LINK_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: ALL_NOT_NULL
+      columns:
+      - global_id
+      - customerId
+    severity: warning
+    dimension: completeness
+    description: |
+      A support interaction should identify its customer using both global_id and customerId. The physical schema currently permits null values.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: SPI_CUSTOMER_IDENTIFIERS_CONSISTENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: REFERENCE_PAIR_CONSISTENT
+      parameters:
+        reference_dataset: customers
+        source_columns:
+        - global_id
+        - customerId
+        reference_columns:
+        - global_id
+        - customerId
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      global_id and customerId must refer to the same customer record.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: SPI_CORE_EVENT_FIELDS_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: ALL_NOT_NULL
+      columns:
+      - timestamp
+      - agentId
+      - durationMinutes
+    severity: warning
+    dimension: completeness
+    description: |
+      A usable support interaction should contain its timestamp, handling agent, and duration. The physical schema currently permits null values.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: SPI_TIMESTAMP_NOT_IN_FUTURE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: TIMESTAMP_NOT_IN_FUTURE
+      columns:
+      - timestamp
+    severity: warning
+    dimension: timeliness
+    description: |
+      The interaction timestamp should not be later than the pipeline processing timestamp.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: SPI_CHRONOLOGICAL_ORDER_PER_CUSTOMER
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: MONOTONIC_EVENT_TIME_PER_GROUP
+      parameters:
+        group_columns:
+        - global_id
+        timestamp_column: timestamp
+        tiebreaker_columns:
+        - interactionId
+        allow_equal_timestamps: true
+        comparison_scope: COMPLETE_SNAPSHOT
+        ignore_nulls: true
+    severity: warning
+    dimension: timeliness
+    description: |
+      Interactions for the same customer should be chronologically orderable.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: SPI_MAX_ONE_IDENTICAL_INTERACTION
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: UNIQUE_WITHIN_GROUP
+      parameters:
+        comparison_scope: COMPLETE_SNAPSHOT
+        ignore_nulls: true
+      columns:
+      - global_id
+      - channel
+      - timestamp
+      - topic
+      - resolution
+      - agentId
+      - durationMinutes
+    severity: warning
+    dimension: consistency
+    description: |
+      Identical interaction details may indicate duplicate event production even when interactionId values differ.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: SPI_CHANNEL_DISTRIBUTION_MONITORING
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CATEGORICAL_DISTRIBUTION_TOLERANCE
+      parameters:
+        column: channel
+        expected_ratios:
+          chat: 0.4
+          phone: 0.3
+          email: 0.2
+          branch: 0.1
+        absolute_tolerance: 0.1
+        comparison_scope: COMPLETE_SNAPSHOT
+    severity: warning
+    dimension: consistency
+    description: |
+      Channel proportions should remain reasonably close to the configured mock-data distribution in a complete snapshot.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: SPI_TOPIC_DISTRIBUTION_MONITORING
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CATEGORICAL_DISTRIBUTION_TOLERANCE
+      parameters:
+        column: topic
+        expected_ratios:
+          Application_Status: 0.35
+          Account_Inquiry: 0.25
+          Document_Upload: 0.2
+          Complaint: 0.12
+          General: 0.08
+        absolute_tolerance: 0.1
+        comparison_scope: COMPLETE_SNAPSHOT
+    severity: warning
+    dimension: consistency
+    description: |
+      Topic proportions should remain reasonably close to the configured mock-data distribution in a complete snapshot.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: SPI_RESOLUTION_DISTRIBUTION_MONITORING
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CATEGORICAL_DISTRIBUTION_TOLERANCE
+      parameters:
+        column: resolution
+        expected_ratios:
+          resolved: 0.6
+          escalated: 0.2
+          follow_up_required: 0.15
+          unresolved: 0.05
+        absolute_tolerance: 0.1
+        comparison_scope: COMPLETE_SNAPSHOT
+    severity: warning
+    dimension: consistency
+    description: |
+      Resolution proportions should remain reasonably close to the configured mock-data distribution in a complete snapshot.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: SPI_COMPLAINT_ESCALATION_MONITORING
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_CATEGORY_RATIO_RANGE
+      parameters:
+        when:
+          column: topic
+          equals: Complaint
+        target_column: resolution
+        target_value: escalated
+        expected_ratio: 0.45
+        min_ratio: 0.3
+        max_ratio: 0.6
+        comparison_scope: COMPLETE_SNAPSHOT
+    severity: warning
+    dimension: consistency
+    description: |
+      Complaint interactions are generated with a substantially higher escalation rate, approximately forty-five percent.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: SPI_AGENT_TIER_DISTRIBUTION_MONITORING
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: IDENTIFIER_RANGE_POPULATION_RATIO
+      parameters:
+        column: agentId
+        regex: ^AGENT-(\d{4})$
+        capture_group: 1
+        tiers:
+        - name: primary_agents
+          min: 1
+          max: 40
+          expected_ratio: 0.8
+        - name: extended_agents
+          min: 41
+          max: 200
+          expected_ratio: 0.2
+        absolute_tolerance: 0.1
+        comparison_scope: COMPLETE_SNAPSHOT
+    severity: warning
+    dimension: consistency
+    description: |
+      Approximately eighty percent of interactions should be handled by AGENT-0001 through AGENT-0040 and twenty percent by AGENT-0041 through AGENT-0200.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: SPI_BUSINESS_HOURS_DISTRIBUTION_MONITORING
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: TIMESTAMP_HOUR_POPULATION_RATIO
+      parameters:
+        column: timestamp
+        timezone: SOURCE_TIMEZONE_TBD
+        start_hour_inclusive: 9
+        end_hour_exclusive: 17
+        expected_ratio: 0.75
+        absolute_tolerance: 0.12
+        comparison_scope: COMPLETE_SNAPSHOT
+    severity: warning
+    dimension: timeliness
+    description: |
+      Approximately seventy-five percent of interactions should occur between 09:00 and 17:00 in the source timezone.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: SPI_WEEKDAY_DISTRIBUTION_MONITORING
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: TIMESTAMP_WEEKDAY_POPULATION_RATIO
+      parameters:
+        column: timestamp
+        timezone: SOURCE_TIMEZONE_TBD
+        weekdays:
+        - MONDAY
+        - TUESDAY
+        - WEDNESDAY
+        - THURSDAY
+        - FRIDAY
+        expected_ratio: 0.78
+        absolute_tolerance: 0.12
+        comparison_scope: COMPLETE_SNAPSHOT
+    severity: warning
+    dimension: consistency
+    description: |
+      Approximately seventy-eight percent of interactions should occur on weekdays.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: SPI_DURATION_CHANNEL_DISTRIBUTION_MONITORING
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_LOGNORMAL_DISTRIBUTION_MONITORING
+      parameters:
+        value_column: durationMinutes
+        selector_column: channel
+        configured_parameters:
+          chat:
+            mu: 2.0
+            sigma: 0.4
+          phone:
+            mu: 2.4
+            sigma: 0.4
+          email:
+            mu: 1.5
+            sigma: 0.3
+          branch:
+            mu: 2.9
+            sigma: 0.4
+        comparison_scope: COMPLETE_SNAPSHOT
+        exact_test_thresholds_status: TBD_FROM_ANALYTICAL_IMPLEMENTATION
+    severity: warning
+    dimension: consistency
+    description: |
+      Interaction duration follows a channel-specific log-normal distribution. Exact statistical acceptance thresholds must be defined in the monitoring implementation.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  properties:
+  - name: global_id
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - 65df84b8-4274-4dbd-9667-6c9967ae6538
+    quality:
+    - id: SPI_GLOBAL_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: global_id must be a valid UUID when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: SPI_GLOBAL_ID_CUSTOMER_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: customers
+          reference_column: global_id
+      severity: error
+      dimension: consistency
+      description: |
+        global_id must exist in customers.global_id when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: person_identifier
+  - name: interactionId
+    logicalType: string
+    physicalType: string
+    required: true
+    primaryKey: true
+    primaryKeyPosition: 1
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - 645a1d25-f81d-4670-b2bc-0ba0314f1db4
+    quality:
+    - id: SPI_INTERACTION_ID_NOT_NULL
+      type: library
+      metric: nullValues
+      mustBe: 0
+      severity: error
+      dimension: completeness
+      description: interactionId must always be present.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: SPI_INTERACTION_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: interactionId must be a valid UUID.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: support_interaction_identifier
+  - name: customerId
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      pattern: ^CUST-\d{5}$
+    examples:
+    - CUST-00042
+    quality:
+    - id: SPI_CUSTOMER_ID_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^CUST-\d{5}$
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        customerId must follow the CUST-00000 pattern when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: SPI_CUSTOMER_ID_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: customers
+          reference_column: customerId
+      severity: error
+      dimension: consistency
+      description: |
+        customerId must exist in customers.customerId when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: customer_identifier
+  - name: channel
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: CONFIDENTIAL
+    examples:
+    - chat
+    quality:
+    - id: SPI_CHANNEL_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - chat
+        - phone
+        - email
+        - branch
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: channel must be one of the four documented contact channels.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: APPROVED_CONTEXT_ONLY
+    - property: g3:domainType
+      value: support_contact_channel
+    - property: g3:accepted
+      value:
+        values:
+        - chat
+        - phone
+        - email
+        - branch
+  - name: timestamp
+    logicalType: timestamp
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      format: ISO_8601_TIMESTAMP
+    examples:
+    - '2026-07-15T10:40:00Z'
+    quality:
+    - id: SPI_TIMESTAMP_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_TIMESTAMP_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: timestamp must be parseable when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: CUSTOMER_CONTACT_METADATA
+        handling: RESTRICT_OR_GENERALISE
+    - property: g3:domainType
+      value: timestamp
+  - name: topic
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: CONFIDENTIAL
+    examples:
+    - Application_Status
+    quality:
+    - id: SPI_TOPIC_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - Application_Status
+        - Account_Inquiry
+        - Document_Upload
+        - Complaint
+        - General
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: topic must be one of the documented support topics.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: CUSTOMER_SERVICE_SUBJECT_INFORMATION
+        handling: APPROVED_CONTEXT_ONLY
+    - property: g3:domainType
+      value: support_interaction_topic
+    - property: g3:accepted
+      value:
+        values:
+        - Application_Status
+        - Account_Inquiry
+        - Document_Upload
+        - Complaint
+        - General
+  - name: resolution
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: CONFIDENTIAL
+    examples:
+    - resolved
+    quality:
+    - id: SPI_RESOLUTION_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - resolved
+        - escalated
+        - follow_up_required
+        - unresolved
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        resolution must be one of the documented support outcomes.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: CUSTOMER_SERVICE_OUTCOME_INFORMATION
+        handling: APPROVED_CONTEXT_ONLY
+    - property: g3:domainType
+      value: support_interaction_resolution
+    - property: g3:accepted
+      value:
+        values:
+        - resolved
+        - escalated
+        - follow_up_required
+        - unresolved
+  - name: agentId
+    logicalType: string
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      pattern: ^AGENT-\d{4}$
+    examples:
+    - AGENT-0037
+    quality:
+    - id: SPI_AGENT_ID_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^AGENT-\d{4}$
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        agentId must follow the AGENT-0000 pattern when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: SPI_AGENT_ID_RANGE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: REGEX_NUMERIC_COMPONENT_RANGE_IF_PRESENT
+        parameters:
+          regex: ^AGENT-(\d{4})$
+          capture_group: 1
+          min: 1
+          max: 200
+      severity: error
+      dimension: conformity
+      description: |
+        agentId must identify a documented source agent from AGENT-0001 through AGENT-0200.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: EMPLOYEE_IDENTIFIER
+        handling: REDACT_FROM_CUSTOMER_AI
+    - property: g3:domainType
+      value: internal_support_agent_identifier
+    - property: g3:accepted
+      value:
+        numeric_suffix_min: 1
+        numeric_suffix_max: 200
+  - name: durationMinutes
+    logicalType: integer
+    physicalType: int32
+    classification: INTERNAL
+    examples:
+    - 12
+    quality:
+    - id: SPI_DURATION_POSITIVE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: RANGE_IF_PRESENT
+        parameters:
+          min_exclusive: 0
+      severity: error
+      dimension: conformity
+      description: |
+        durationMinutes must be greater than zero when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: interaction_duration_minutes
+    - property: g3:accepted
+      value:
+        min_exclusive: 0
+customProperties:
+- property: g3:source
+  value:
+    category: EVENT
+    system_type: BUSINESS_EVENT_STREAM
+    authoritative: true
+    event_name: support_interactions
+    topic_name: TBD
+    append_only: true
+- property: g3:ingestion
+  value:
+    mechanism: KAFKA_EVENT
+    transport: APACHE_KAFKA
+    landing:
+      format: JSONL
+      path_template: s3://<bucket>/bronze/landing/event/support_interactions/
+      immutable: true
+    bronze_target: bronze.kafka_events
+    deduplicated_bronze_target: bronze.kafka_events_deduplicated
+    event_envelope:
+      retained_metadata:
+      - topic
+      - key
+      - partition
+      - offset
+      - timestamp
+      - event_type
+      - raw_payload
+    append_only_policy:
+      allowed_operations:
+      - APPEND
+      prohibited_operations:
+      - UPDATE_EXISTING_EVENT
+      - DELETE_HISTORICAL_EVENT
+      description: |
+        Transport-level duplicates may be deduplicated, but valid customer-contact events must remain immutable and append-only.
+- property: g3:lifecycle
+  value:
+    owner: TBD
+    approver: TBD
+    effective_from: null
+- property: g3:dataset
+  value:
+    expected_rows_scale_1: 3000
+    physical_schema_ref: dev-tools/datagen/output/master-schema.json#/support_interactions
+- property: g3:eventDeduplicationKey
+  value:
+  - interactionId
+- property: g3:eventQualityRules
+  value:
+  - id: SPI_KAFKA_POSITION_UNIQUE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: UNIQUE_EVENT_ENVELOPE_POSITION
+      columns:
+      - topic
+      - partition
+      - offset
+    severity: error
+    dimension: uniqueness
+    description: |
+      A Kafka topic, partition, and offset combination must identify one landed transport record.
+    customProperties:
+    - property: g3:action
+      value: DEDUPLICATE_TRANSPORT_COPY
+  - id: SPI_EVENT_KEY_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: ENVELOPE_FIELD_NOT_NULL
+    severity: warning
+    dimension: completeness
+    description: |
+      The Kafka event key should be present for deterministic partitioning and replay.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: SPI_EVENT_TIMESTAMP_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: ENVELOPE_FIELD_NOT_NULL
+    severity: warning
+    dimension: completeness
+    description: |
+      The Kafka envelope should retain the broker event timestamp.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+- property: g3:derivedQualityChecks
+  value:
+  - rule_id: SPI_RECENT_INTERACTION_RANK
+    type: WINDOW_DERIVATION
+    partition_by:
+    - global_id
+    order_by:
+    - timestamp DESC
+    - interactionId DESC
+    output_field: interaction_recency_rank
+    description: |
+      Silver may rank validated interactions from most recent to oldest for each customer.
+  - rule_id: SPI_RECENT_SUPPORT_SUMMARY
+    type: APPROVED_CONTEXT_PROJECTION
+    approved_fields:
+    - channel
+    - timestamp
+    - topic
+    - resolution
+    - durationMinutes
+    prohibited_fields:
+    - agentId
+    description: |
+      Customer-facing support history may expose an approved high-level summary, while the internal handling-agent identifier remains excluded.
+  - rule_id: SPI_AGENT_REDACTION
+    type: PRIVACY_TRANSFORMATION
+    source_field: agentId
+    output_field: agent_id_redacted
+    description: |
+      Internal support-agent identifiers must be excluded from Customer.AI output.
+  - rule_id: SPI_FOLLOW_UP_FLAG_DERIVATION
+    type: DERIVED_BOOLEAN
+    expression: resolution IN ('escalated', 'follow_up_required', 'unresolved')
+    output_field: requires_follow_up
+    description: |
+      Silver may derive a follow-up flag for interactions that were not fully resolved.
+- property: g3:notes
+  value:
+  - |
+    This contract follows the authoritative physical source schema and includes all nine fields defined for support_interactions.
+  - |
+    support_interactions is an EVENT source and must remain append-only. Transport duplicates may be removed, but valid historical interactions must never be updated or deleted.
+  - |
+    The source explicitly documents channel, topic, resolution, agent-tier, business-hour, weekday, and channel-specific duration distributions. These are implemented as complete-snapshot monitoring warnings rather than record-level validity rules.
+  - |
+    Complaint interactions have an escalation rate of approximately forty-five percent, which is substantially above the overall escalation rate.
+  - |
+    agentId is an internal employee identifier and must not be exposed to Customer.AI.
+  - |
+    The physical source does not contain free-text notes, interaction content, caseId, applicationId, organisationId, satisfaction score, or contact transcript. This contract must not imply that those details are available.
+  - The Kafka topic name, event-key convention, source timezone, and exact statistical thresholds for duration monitoring
+    remain TBD.

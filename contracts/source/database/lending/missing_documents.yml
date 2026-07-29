@@ -1,0 +1,837 @@
+kind: DataContract
+apiVersion: v3.1.0
+id: source.database.missing_documents
+version: 1.0.0
+name: missing_documents
+status: draft
+domain: LENDING_ORIGINATION
+description:
+  purpose: |
+    Source dataset containing the document checklist for loan applications. Each record identifies one requested document and tracks its lifecycle from request through receipt, verification, invalidation, or expiry.
+servers:
+- server: source-postgresql
+  type: postgresql
+  description: PostgreSQL CDC source via Debezium for missing_documents
+  environment: prod
+schema:
+- name: missing_documents
+  logicalType: object
+  physicalType: table
+  physicalName: public.missing_documents
+  relationships:
+  - type: foreignKey
+    from:
+    - missing_documents.global_id
+    to:
+    - customers.global_id
+    customProperties:
+    - property: g3:nullable
+      value: true
+  - type: foreignKey
+    from:
+    - missing_documents.customerId
+    to:
+    - customers.customerId
+    customProperties:
+    - property: g3:nullable
+      value: true
+  - type: foreignKey
+    from:
+    - missing_documents.applicationId
+    to:
+    - loan_applications.applicationId
+    customProperties:
+    - property: g3:nullable
+      value: true
+  quality:
+  - id: MDOC_DOCUMENT_ID_UNIQUE
+    type: library
+    metric: duplicateValues
+    mustBe: 0
+    severity: error
+    dimension: uniqueness
+    description: documentId must be unique across the dataset.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+    - property: g3:columns
+      value:
+      - documentId
+  - id: MDOC_APPLICATION_LINK_PRESENT
+    type: library
+    metric: nullValues
+    mustBe: 0
+    severity: warning
+    dimension: completeness
+    description: |
+      A document checklist record should identify its loan application. The physical schema currently permits applicationId to be null.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+    - property: g3:columns
+      value:
+      - applicationId
+  - id: MDOC_CUSTOMER_LINK_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: ALL_NOT_NULL
+      columns:
+      - global_id
+      - customerId
+    severity: warning
+    dimension: completeness
+    description: |
+      A document checklist record should identify its customer using both global_id and customerId. The physical schema currently permits nulls.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: MDOC_APPLICATION_CUSTOMER_CONSISTENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: REFERENCE_TRIPLE_CONSISTENT
+      parameters:
+        reference_dataset: loan_applications
+        source_columns:
+        - applicationId
+        - global_id
+        - customerId
+        reference_columns:
+        - applicationId
+        - global_id
+        - customerId
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      applicationId, global_id, and customerId must refer to the same loan application record.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: MDOC_RECEIVED_NOT_BEFORE_REQUESTED
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: TIMESTAMP_COLUMN_COMPARISON
+      parameters:
+        left_column: receivedAt
+        operator: GREATER_THAN_OR_EQUAL
+        right_column: requestedAt
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: receivedAt cannot be earlier than requestedAt.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: MDOC_EXPIRY_AFTER_RECEIPT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: DATE_AFTER_TIMESTAMP_DATE
+      parameters:
+        date_column: expiryDate
+        timestamp_column: receivedAt
+        operator: GREATER_THAN
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      expiryDate must be later than the calendar date of receivedAt.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: MDOC_REQUIRED_FIELDS_NULL
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_ALL_NULL
+      parameters:
+        when:
+          column: status
+          equals: required
+        target_columns:
+        - receivedAt
+        - expiryDate
+        - rejectionReason
+    severity: error
+    dimension: consistency
+    description: |
+      A required document has not yet been received, so receivedAt, expiryDate, and rejectionReason must be null.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: MDOC_RECEIVED_TIMESTAMP_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_NOT_NULL_FOR_VALUES
+      parameters:
+        source_column: status
+        source_values:
+        - verified
+        - received
+        - invalid
+        - expired
+        target_column: receivedAt
+    severity: error
+    dimension: consistency
+    description: |
+      Documents that are verified, received, invalid, or expired must include receivedAt.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: MDOC_EXPIRY_DATE_PRESENT_AFTER_RECEIPT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_NOT_NULL_FOR_VALUES
+      parameters:
+        source_column: status
+        source_values:
+        - verified
+        - received
+        - invalid
+        - expired
+        target_column: expiryDate
+    severity: warning
+    dimension: consistency
+    description: |
+      Documents that have been received should normally include expiryDate.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: MDOC_INVALID_REASON_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_NOT_NULL
+      parameters:
+        when:
+          column: status
+          equals: invalid
+        target_column: rejectionReason
+    severity: error
+    dimension: consistency
+    description: An invalid document must include rejectionReason.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: MDOC_REJECTION_REASON_ONLY_FOR_INVALID
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_NULL_EXCEPT_VALUES
+      parameters:
+        source_column: status
+        allowed_source_values:
+        - invalid
+        target_column: rejectionReason
+    severity: error
+    dimension: consistency
+    description: |
+      rejectionReason must be null unless status is invalid.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: MDOC_VERIFIED_HAS_NO_REMINDERS
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_VALUE
+      parameters:
+        when:
+          column: status
+          equals: verified
+        target_column: remindersSent
+        expected_value: 0
+    severity: error
+    dimension: consistency
+    description: |
+      remindersSent must be zero when status is verified in the current source model.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: MDOC_LAST_REMINDER_REQUIRED_WHEN_SENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_NOT_NULL_BY_NUMERIC_THRESHOLD
+      parameters:
+        source_column: remindersSent
+        operator: GREATER_THAN
+        threshold: 0
+        target_column: lastReminderAt
+    severity: error
+    dimension: consistency
+    description: |
+      lastReminderAt must be present when one or more reminders were sent.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: MDOC_LAST_REMINDER_NULL_WHEN_NONE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_NULL_BY_NUMERIC_VALUE
+      parameters:
+        source_column: remindersSent
+        equals: 0
+        target_column: lastReminderAt
+    severity: error
+    dimension: consistency
+    description: |
+      lastReminderAt must be null when remindersSent is zero.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: MDOC_LAST_REMINDER_NOT_BEFORE_REQUEST
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: TIMESTAMP_COLUMN_COMPARISON
+      parameters:
+        left_column: lastReminderAt
+        operator: GREATER_THAN_OR_EQUAL
+        right_column: requestedAt
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      lastReminderAt cannot be earlier than requestedAt.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: MDOC_REMINDER_CADENCE_APPROXIMATE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: TIMESTAMP_APPROXIMATE_OFFSET
+      parameters:
+        start_column: requestedAt
+        end_column: lastReminderAt
+        multiplier_column: remindersSent
+        expected_days_per_unit: 7
+        tolerance_days: 4
+        ignore_nulls: true
+    severity: warning
+    dimension: consistency
+    description: |
+      lastReminderAt should be approximately requestedAt plus seven days for each reminder, allowing variation in the generated schedule.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: MDOC_EXPIRED_STATUS_MATCHES_DATE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: STATUS_DATE_CONSISTENCY
+      parameters:
+        status_column: status
+        expired_status: expired
+        expiry_date_column: expiryDate
+        reference_date: PROCESSING_DATE
+        require_past_date_for_expired: true
+        flag_past_date_for_non_expired: true
+        ignore_nulls: true
+    severity: warning
+    dimension: consistency
+    description: |
+      An expired record should have an expiryDate before the processing date, and a non-expired record with a past expiryDate should be investigated.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  properties:
+  - name: global_id
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - 65df84b8-4274-4dbd-9667-6c9967ae6538
+    quality:
+    - id: MDOC_GLOBAL_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: global_id must be a valid UUID when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: MDOC_GLOBAL_ID_CUSTOMER_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: customers
+          reference_column: global_id
+      severity: error
+      dimension: consistency
+      description: |
+        global_id must exist in customers.global_id when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: person_identifier
+  - name: documentId
+    logicalType: string
+    physicalType: string
+    required: true
+    primaryKey: true
+    primaryKeyPosition: 1
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - 4fa4b0bf-6824-4f62-af91-f9cefa1bd938
+    quality:
+    - id: MDOC_DOCUMENT_ID_NOT_NULL
+      type: library
+      metric: nullValues
+      mustBe: 0
+      severity: error
+      dimension: completeness
+      description: documentId must always be present.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: MDOC_DOCUMENT_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: documentId must be a valid UUID.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: document_checklist_identifier
+  - name: applicationId
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      pattern: ^Application_\d{9}$
+    examples:
+    - Application_000000042
+    quality:
+    - id: MDOC_APPLICATION_ID_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^Application_\d{9}$
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        applicationId must follow the Application_000000000 pattern when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: MDOC_APPLICATION_ID_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: loan_applications
+          reference_column: applicationId
+      severity: error
+      dimension: consistency
+      description: |
+        applicationId must exist in loan_applications.applicationId when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: loan_application_identifier
+  - name: customerId
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      pattern: ^CUST-\d{5}$
+    examples:
+    - CUST-00042
+    quality:
+    - id: MDOC_CUSTOMER_ID_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^CUST-\d{5}$
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        customerId must follow the CUST-00000 pattern when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: MDOC_CUSTOMER_ID_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: customers
+          reference_column: customerId
+      severity: error
+      dimension: consistency
+      description: |
+        customerId must exist in customers.customerId when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: customer_identifier
+  - name: documentType
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: CONFIDENTIAL
+    examples:
+    - bank_statement
+    quality:
+    - id: MDOC_DOCUMENT_TYPE_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - payslip
+        - ID_proof
+        - address_proof
+        - bank_statement
+        - tax_return
+        - other
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        documentType must be one of the supported source document types.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: APPLICATION_DOCUMENT_REQUIREMENT
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: required_document_type
+    - property: g3:accepted
+      value:
+        values:
+        - payslip
+        - ID_proof
+        - address_proof
+        - bank_statement
+        - tax_return
+        - other
+  - name: status
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: CONFIDENTIAL
+    examples:
+    - required
+    quality:
+    - id: MDOC_STATUS_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - verified
+        - received
+        - required
+        - invalid
+        - expired
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        status must be one of the supported source lifecycle values.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: APPLICATION_DOCUMENT_STATUS
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: document_lifecycle_status
+    - property: g3:accepted
+      value:
+        values:
+        - verified
+        - received
+        - required
+        - invalid
+        - expired
+  - name: requestedAt
+    logicalType: timestamp
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      format: ISO_8601_TIMESTAMP
+    examples:
+    - '2026-02-16T09:15:00Z'
+    quality:
+    - id: MDOC_REQUESTED_AT_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_TIMESTAMP_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: requestedAt must be parseable as a timestamp.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: APPLICATION_ACTIVITY_METADATA
+        handling: RESTRICT_OR_GENERALISE
+    - property: g3:domainType
+      value: timestamp
+  - name: receivedAt
+    logicalType: timestamp
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      format: ISO_8601_TIMESTAMP
+    examples:
+    - '2026-02-22T14:30:00Z'
+    quality:
+    - id: MDOC_RECEIVED_AT_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_TIMESTAMP_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: receivedAt must be parseable as a timestamp.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: APPLICATION_ACTIVITY_METADATA
+        handling: RESTRICT_OR_GENERALISE
+    - property: g3:domainType
+      value: timestamp
+  - name: expiryDate
+    logicalType: date
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      format: ISO_8601_DATE
+    examples:
+    - '2027-02-22'
+    quality:
+    - id: MDOC_EXPIRY_DATE_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DATE_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: expiryDate must be parseable as a date.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: APPLICATION_DOCUMENT_METADATA
+        handling: RESTRICT_OR_GENERALISE
+    - property: g3:domainType
+      value: date
+  - name: remindersSent
+    logicalType: integer
+    physicalType: int32
+    required: true
+    classification: INTERNAL
+    logicalTypeOptions:
+      minimum: 0
+      maximum: 10
+    examples:
+    - 2
+    quality:
+    - id: MDOC_REMINDERS_RANGE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: RANGE
+        parameters:
+          min: 0
+          max: 10
+      severity: error
+      dimension: conformity
+      description: remindersSent must be between zero and ten.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: reminder_count
+  - name: lastReminderAt
+    logicalType: timestamp
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      format: ISO_8601_TIMESTAMP
+    examples:
+    - '2026-03-01T09:15:00Z'
+    quality:
+    - id: MDOC_LAST_REMINDER_AT_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_TIMESTAMP_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: lastReminderAt must be parseable as a timestamp.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: CUSTOMER_CONTACT_METADATA
+        handling: RESTRICT_OR_GENERALISE
+    - property: g3:domainType
+      value: timestamp
+  - name: rejectionReason
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    examples:
+    - name_mismatch
+    quality:
+    - id: MDOC_REJECTION_REASON_ENUM_IF_PRESENT
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - blurry_scan
+        - document_expired
+        - name_mismatch
+        - wrong_document_type
+        - poor_quality
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        rejectionReason must be one of the supported source values when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: DOCUMENT_VERIFICATION_INFORMATION
+        handling: BANKER_ONLY_OR_RESTRICT
+    - property: g3:domainType
+      value: document_rejection_reason
+    - property: g3:accepted
+      value:
+        values:
+        - blurry_scan
+        - document_expired
+        - name_mismatch
+        - wrong_document_type
+        - poor_quality
+customProperties:
+- property: g3:source
+  value:
+    category: DATABASE
+    system_type: POSTGRESQL
+    source_object: public.missing_documents
+    authoritative: true
+- property: g3:ingestion
+  value:
+    mechanism: DEBEZIUM_CDC
+    transport: APACHE_KAFKA
+    landing:
+      format: JSONL
+      path_template: s3://<bucket>/bronze/landing/cdc/missing_documents/
+      immutable: true
+    bronze_target: bronze.cdc_changes
+    cdc:
+      supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+      ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+- property: g3:lifecycle
+  value:
+    owner: TBD
+    approver: TBD
+    effective_from: null
+- property: g3:dataset
+  value:
+    expected_rows_scale_1: 1500
+    physical_schema_ref: dev-tools/datagen/output/master-schema.json#/missing_documents
+- property: g3:notes
+  value:
+  - |
+    This contract follows the authoritative physical source schema and includes all twelve fields defined for missing_documents.
+  - |
+    The source status values are verified, received, required, invalid, and expired. Any downstream normalisation to PENDING, RECEIVED, or REJECTED belongs in the Silver transformation rather than in this source contract.
+  - |
+    rejectionReason is highly sensitive document-verification information and should only be available to approved banker-facing consumers.
+  - |
+    The source stores document checklist metadata rather than the underlying document files. This contract must not be interpreted as authorising access to document contents.
+  - |
+    The reminder cadence rule is a warning because the source description uses an approximate seven-day interval rather than an exact timestamp formula.
+  - These records support application-status questions such as identifying outstanding, received, invalid, or expired application
+    documents.

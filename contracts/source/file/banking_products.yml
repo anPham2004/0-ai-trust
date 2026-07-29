@@ -1,0 +1,946 @@
+kind: DataContract
+apiVersion: v3.1.0
+id: source.file.banking_products
+version: 1.0.0
+name: banking_products
+status: draft
+domain: PRODUCT_CATALOGUE
+description:
+  purpose: |
+    CDR BankingProduct catalogue containing fifty fixed product records across nine banking product categories. Each record includes product identity, descriptive content, BankCorp branding, an application URI, tailoring flag, effective dates, update timestamp, additional-information JSON, and optional card-art JSON.
+servers:
+- server: source-s3
+  type: s3
+  description: S3 file drop for banking_products
+  environment: prod
+schema:
+- name: banking_products
+  logicalType: object
+  physicalType: table
+  physicalName: banking_products
+  quality:
+  - id: BPR_PRODUCT_ID_UNIQUE
+    type: library
+    metric: duplicateValues
+    mustBe: 0
+    severity: error
+    dimension: uniqueness
+    description: productId must be unique within the catalogue file.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+    - property: g3:columns
+      value:
+      - productId
+  - id: BPR_FIXED_RECORD_COUNT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: RECORD_COUNT_EXACT
+      parameters:
+        expected: 50
+    severity: error
+    dimension: consistency
+    description: |
+      The fixed banking product catalogue must contain exactly fifty records.
+    customProperties:
+    - property: g3:action
+      value: REJECT_FILE
+  - id: BPR_EFFECTIVE_PERIOD_ORDER
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: DATE_COLUMN_COMPARISON
+      parameters:
+        left_column: effectiveTo
+        operator: GREATER_THAN
+        right_column: effectiveFrom
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: effectiveTo must be later than effectiveFrom when populated.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: BPR_EFFECTIVE_TO_OFFSET
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: DATE_YEAR_OFFSET_RANGE
+      parameters:
+        start_column: effectiveFrom
+        end_column: effectiveTo
+        min_years: 2
+        max_years: 5
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      A populated effectiveTo must be between two and five years after effectiveFrom in the current source generator.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: BPR_LAST_UPDATED_NOT_IN_FUTURE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: TIMESTAMP_NOT_IN_FUTURE
+      columns:
+      - lastUpdated
+    severity: warning
+    dimension: timeliness
+    description: |
+      lastUpdated should not be later than the file processing timestamp.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: BPR_PRODUCT_CATEGORY_DISTRIBUTION
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CATEGORICAL_DISTRIBUTION_TOLERANCE
+      parameters:
+        column: productCategory
+        expected_ratios:
+          TRANS_AND_SAVINGS_ACCOUNTS: 0.3
+          TERM_DEPOSITS: 0.15
+          RESIDENTIAL_MORTGAGES: 0.15
+          CRED_AND_CHRG_CARDS: 0.15
+          PERS_LOANS: 0.1
+          TRAVEL_CARDS: 0.05
+          REGULATED_TRUST_ACCOUNTS: 0.05
+          MARGIN_LOANS: 0.03
+          LEASES: 0.02
+        absolute_tolerance: 0.1
+        comparison_scope: COMPLETE_FILE
+    severity: warning
+    dimension: consistency
+    description: |
+      Product-category proportions should remain reasonably close to the configured fixed-catalogue distribution.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: BPR_TAILORED_RATIO_MONITORING
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: POPULATION_RATIO_RANGE
+      parameters:
+        column: isTailored
+        condition:
+          equals: true
+        min_ratio: 0.02
+        max_ratio: 0.2
+        comparison_scope: COMPLETE_FILE
+    severity: warning
+    dimension: consistency
+    description: |
+      Approximately ten percent of products are tailored; a complete-file ratio outside two to twenty percent should be investigated.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: BPR_EFFECTIVE_TO_NULL_RATIO_MONITORING
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: NULL_RATIO_RANGE
+      parameters:
+        column: effectiveTo
+        min_ratio: 0.55
+        max_ratio: 0.85
+        comparison_scope: COMPLETE_FILE
+    severity: warning
+    dimension: consistency
+    description: |
+      Approximately seventy percent of products have no effectiveTo date.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: BPR_CARD_ART_RATIO_MONITORING
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: POPULATION_RATIO_RANGE
+      parameters:
+        column: cardArt
+        condition: IS_NOT_NULL
+        min_ratio: 0.12
+        max_ratio: 0.38
+        comparison_scope: COMPLETE_FILE
+    severity: warning
+    dimension: consistency
+    description: |
+      Card artwork is populated for approximately twenty-five percent of products.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: BPR_PRODUCT_NAME_CATALOGUE_REVIEW
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: REFERENCE_CATALOGUE_PENDING
+      parameters:
+        column: name
+        documented_count: 11
+        source: GENERATOR_CONFIG
+        status: TBD_FROM_GENERATOR_CONFIG
+    severity: warning
+    dimension: conformity
+    description: |
+      The source documents eleven weighted product names but does not publish the complete list. The exact catalogue must be extracted before approval.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: BPR_NO_GLOBAL_ID
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: COLUMN_MUST_NOT_EXIST
+      parameters:
+        column: global_id
+    severity: error
+    dimension: consistency
+    description: |
+      banking_products is a catalogue and must not contain a customer global_id.
+    customProperties:
+    - property: g3:action
+      value: REJECT_FILE
+  properties:
+  - name: productId
+    logicalType: string
+    physicalType: string
+    required: true
+    primaryKey: true
+    primaryKeyPosition: 1
+    classification: INTERNAL
+    logicalTypeOptions:
+      pattern: ^PROD-\d{3}$
+    examples:
+    - PROD-007
+    quality:
+    - id: BPR_PRODUCT_ID_NOT_NULL
+      type: library
+      metric: nullValues
+      mustBe: 0
+      severity: error
+      dimension: completeness
+      description: productId must always be present.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: BPR_PRODUCT_ID_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^PROD-\d{3}$
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: productId must follow the PROD-000 pattern.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: BPR_PRODUCT_ID_RANGE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: REGEX_NUMERIC_COMPONENT_RANGE
+        parameters:
+          regex: ^PROD-(\d{3})$
+          capture_group: 1
+          min: 0
+          max: 49
+      severity: error
+      dimension: conformity
+      description: |
+        productId must be between PROD-000 and PROD-049 in the fixed catalogue.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: banking_product_identifier
+    - property: g3:accepted
+      value:
+        numeric_suffix_min: 0
+        numeric_suffix_max: 49
+  - name: name
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: PUBLIC
+    examples:
+    - Online Saver
+    quality:
+    - id: BPR_NAME_NOT_NULL
+      type: library
+      metric: nullValues
+      mustBe: 0
+      severity: error
+      dimension: completeness
+      description: name must always be present.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: BPR_NAME_NON_BLANK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: NON_BLANK
+      severity: error
+      dimension: conformity
+      description: name must not be empty or whitespace-only.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: banking_product_name
+    - property: g3:accepted
+      value:
+        documented_weighted_name_count: 11
+        exact_value_catalogue_status: TBD_FROM_GENERATOR_CONFIG
+        documented_examples:
+        - Everyday Transaction
+        - Online Saver
+  - name: description
+    logicalType: string
+    physicalType: string
+    classification: PUBLIC
+    logicalTypeOptions:
+      minLength: 1
+    examples:
+    - A flexible account for everyday banking. Digital access is available.
+    quality:
+    - id: BPR_DESCRIPTION_NON_BLANK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: NON_BLANK_IF_PRESENT
+      severity: warning
+      dimension: completeness
+      description: description must not be blank when supplied.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: CONTENT_SANITISE
+    - property: g3:domainType
+      value: banking_product_description
+    - property: g3:accepted
+      value:
+        generator_style: FAKER_TWO_SENTENCE_PARAGRAPH
+        exact_max_length_status: NOT_DOCUMENTED
+  - name: productCategory
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: PUBLIC
+    examples:
+    - TRANS_AND_SAVINGS_ACCOUNTS
+    quality:
+    - id: BPR_PRODUCT_CATEGORY_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - TRANS_AND_SAVINGS_ACCOUNTS
+        - TERM_DEPOSITS
+        - RESIDENTIAL_MORTGAGES
+        - CRED_AND_CHRG_CARDS
+        - PERS_LOANS
+        - TRAVEL_CARDS
+        - REGULATED_TRUST_ACCOUNTS
+        - MARGIN_LOANS
+        - LEASES
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        productCategory must be one of the nine documented CDR categories.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: cdr_banking_product_category
+    - property: g3:accepted
+      value:
+        values:
+        - TRANS_AND_SAVINGS_ACCOUNTS
+        - TERM_DEPOSITS
+        - RESIDENTIAL_MORTGAGES
+        - CRED_AND_CHRG_CARDS
+        - PERS_LOANS
+        - TRAVEL_CARDS
+        - REGULATED_TRUST_ACCOUNTS
+        - MARGIN_LOANS
+        - LEASES
+  - name: brand
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: PUBLIC
+    examples:
+    - BankCorp
+    quality:
+    - id: BPR_BRAND_CONSTANT
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - BankCorp
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: brand must always equal BankCorp.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: product_brand_code
+    - property: g3:accepted
+      value:
+        values:
+        - BankCorp
+  - name: brandName
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: PUBLIC
+    examples:
+    - BankCorp Australia
+    quality:
+    - id: BPR_BRAND_NAME_CONSTANT
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - BankCorp Australia
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: brandName must always equal BankCorp Australia.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: product_brand_display_name
+    - property: g3:accepted
+      value:
+        values:
+        - BankCorp Australia
+  - name: applicationUri
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: PUBLIC
+    examples:
+    - https://www.bankcorp.com.au/apply/7
+    quality:
+    - id: BPR_APPLICATION_URI_NOT_NULL
+      type: library
+      metric: nullValues
+      mustBe: 0
+      severity: error
+      dimension: completeness
+      description: applicationUri must always be present.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: BPR_APPLICATION_URI_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^https://www\.bankcorp\.com\.au/apply/.+$
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        applicationUri must use HTTPS and the approved BankCorp application path.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: ALLOW_APPROVED_DOMAIN_ONLY
+    - property: g3:domainType
+      value: product_application_uri
+    - property: g3:accepted
+      value:
+        scheme: HTTPS
+        host: www.bankcorp.com.au
+        path_prefix: /apply/
+  - name: isTailored
+    logicalType: boolean
+    physicalType: bool
+    required: true
+    classification: PUBLIC
+    examples:
+    - false
+    quality:
+    - id: BPR_IS_TAILORED_BOOLEAN
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: BOOLEAN
+      severity: error
+      dimension: conformity
+      description: isTailored must be a boolean value.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: tailored_product_flag
+    - property: g3:accepted
+      value:
+        values:
+        - true
+        - false
+  - name: effectiveFrom
+    logicalType: date
+    physicalType: string
+    classification: PUBLIC
+    logicalTypeOptions:
+      format: ISO_8601_DATE
+    examples:
+    - '2023-04-15'
+    quality:
+    - id: BPR_EFFECTIVE_FROM_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DATE_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: effectiveFrom must be parseable as a date when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: BPR_EFFECTIVE_FROM_LOWER_BOUND
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: DATE_RANGE_IF_PRESENT
+        parameters:
+          min_inclusive: '2020-01-01'
+      severity: error
+      dimension: conformity
+      description: |
+        effectiveFrom cannot be earlier than the documented generator start date.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: date
+    - property: g3:accepted
+      value:
+        generated_start_date: '2020-01-01'
+  - name: effectiveTo
+    logicalType: date
+    physicalType: string
+    classification: PUBLIC
+    logicalTypeOptions:
+      format: ISO_8601_DATE
+    examples:
+    - '2027-04-15'
+    quality:
+    - id: BPR_EFFECTIVE_TO_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DATE_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: effectiveTo must be parseable as a date when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: date
+    - property: g3:accepted
+      value:
+        null_ratio_approximate: 0.7
+        offset_from_effective_from_years:
+          min: 2
+          max: 5
+  - name: lastUpdated
+    logicalType: timestamp
+    physicalType: string
+    classification: PUBLIC
+    logicalTypeOptions:
+      format: ISO_8601_TIMESTAMP
+    examples:
+    - '2026-06-30T12:10:00Z'
+    quality:
+    - id: BPR_LAST_UPDATED_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_TIMESTAMP_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: lastUpdated must be parseable as a timestamp when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: timestamp
+  - name: additionalInformation
+    logicalType: string
+    physicalType: string
+    classification: PUBLIC
+    logicalTypeOptions:
+      format: JSON_OBJECT
+    examples:
+    - '{}'
+    quality:
+    - id: BPR_ADDITIONAL_INFORMATION_JSON
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: VALID_JSON_OBJECT_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        additionalInformation must contain a valid JSON object when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: CONTENT_SANITISE
+    - property: g3:domainType
+      value: cdr_banking_product_additional_information_json
+    - property: g3:accepted
+      value:
+        schema_reference: CDR_BankingProductAdditionalInformation
+        exact_schema_status: TBD_FROM_GENERATOR_CONFIG
+  - name: cardArt
+    logicalType: string
+    physicalType: string
+    classification: PUBLIC
+    logicalTypeOptions:
+      format: JSON_OBJECT
+    examples:
+    - '{"imageUri":"https://www.bankcorp.com.au/assets/cards/product.png"}'
+    quality:
+    - id: BPR_CARD_ART_JSON
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: VALID_JSON_OBJECT_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: cardArt must contain a valid JSON object when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: BPR_CARD_ART_URI_REVIEW
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: JSON_URI_APPROVED_DOMAIN_IF_PRESENT
+        parameters:
+          approved_domains:
+          - www.bankcorp.com.au
+          uri_path_status: TBD_FROM_GENERATOR_CONFIG
+      severity: warning
+      dimension: conformity
+      description: |
+        Any card-art image URI should use an approved BankCorp domain. The exact JSON path must be confirmed from the generator schema.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: ALLOW_APPROVED_DOMAIN_ONLY
+    - property: g3:domainType
+      value: cdr_product_card_art_json
+    - property: g3:accepted
+      value:
+        population_ratio_approximate: 0.25
+        contains_image_uri: true
+        exact_schema_status: TBD_FROM_GENERATOR_CONFIG
+  customProperties:
+  - property: g3:schema:expected_column_count
+    value: 13
+  - property: g3:schema:unknown_column_action
+    value: REJECT_FILE
+  - property: g3:schema:missing_column_action
+    value: REJECT_FILE
+  - property: g3:schema:incompatible_type_change_action
+    value: REJECT_FILE
+customProperties:
+- property: g3:source
+  value:
+    category: FILE
+    system_type: PRODUCT_CATALOGUE_EXTRACT
+    authoritative: true
+    authoritative_for: BANKING_PRODUCT_CATALOGUE
+    delivery_mode: PERIODIC_FILE_DROP
+    catalogue: true
+    contains_global_id: false
+    customer_fk_validation_exempt: true
+- property: g3:ingestion
+  value:
+    mechanism: FILE_DROP
+    transport: S3
+    source_drop_zone:
+      path_template: s3://<source-bucket>/<source-prefix>/banking_products/*.csv
+      native_format: CSV
+    landing:
+      path_template: s3://<bucket>/bronze/landing/file/banking_products/*.csv
+      immutable: true
+      copy_mode: BYTE_FOR_BYTE
+    bronze_target: bronze.file_arrivals
+    bronze_reader: AUTO_LOADER_BINARY_FILE
+    bronze_metadata:
+    - file_path
+    - file_bytes
+    - file_size
+    - file_modification_time
+    - ingestion_timestamp
+    - pipeline_run_id
+    - source_reference
+    parsing:
+      stage: SILVER
+      format: CSV
+      encoding: TBD_FROM_EXPORTER_CONFIG
+      delimiter: TBD_FROM_EXPORTER_CONFIG
+      header: TBD_FROM_EXPORTER_CONFIG
+      quote_character: TBD_FROM_EXPORTER_CONFIG
+      escape_character: TBD_FROM_EXPORTER_CONFIG
+      malformed_row_action: QUARANTINE
+- property: g3:lifecycle
+  value:
+    owner: TBD
+    approver: TBD
+    effective_from: null
+    approval_blockers:
+    - CSV_PARSING_PROFILE_NOT_CONFIRMED
+    - FILE_FRESHNESS_SLA_NOT_CONFIRMED
+    - PRODUCT_NAME_CATALOGUE_NOT_EXTRACTED
+    - ADDITIONAL_INFORMATION_SCHEMA_NOT_CONFIRMED
+    - CARD_ART_SCHEMA_NOT_CONFIRMED
+- property: g3:dataset
+  value:
+    expected_rows_scale_1: 50
+    physical_schema_ref: dev-tools/datagen/output/master-schema.json#/banking_products
+    expected_physical_column_count: 13
+- property: g3:relationshipNotes
+  value:
+  - |
+    banking_products is a catalogue and has no global_id.
+  - |
+    The authoritative source schema does not declare a physical foreign key from customer account records to productId.
+  - |
+    Product enrichment must use only an approved mapping defined by the downstream model; category or name similarity must not be treated as an implicit source foreign key.
+- property: g3:manifest
+  value:
+    required: true
+    path_template: s3://<bucket>/bronze/landing/manifests/manifest-<batch_id>.json
+    required_attributes:
+    - batch_id
+    - heartbeat_status
+    - dataset_artifact_path
+    - record_count
+    - sha256
+    - native_format
+    - total_records
+    reconciliation_checks:
+    - rule_id: BPR_FILE_PATH_IN_MANIFEST
+      type: FILE_PATH_MATCH
+      severity: ERROR
+      action: REJECT_FILE
+      description: |
+        The landed banking_products file path must match the artifact path recorded in the delivery manifest.
+    - rule_id: BPR_FILE_SHA256_MATCH
+      type: SHA256_MATCH
+      severity: ERROR
+      action: REJECT_FILE
+      description: |
+        The SHA-256 hash of the landed file must match the manifest hash.
+    - rule_id: BPR_FILE_RECORD_COUNT_MATCH
+      type: RECORD_COUNT_MATCH
+      severity: ERROR
+      action: REJECT_FILE
+      description: |
+        The parsed CSV record count must match the banking_products record count declared in the delivery manifest.
+    - rule_id: BPR_NATIVE_FORMAT_CSV
+      type: MANIFEST_VALUE
+      parameters:
+        field: native_format
+        expected_value: CSV
+      severity: ERROR
+      action: REJECT_FILE
+      description: |
+        The manifest must identify the banking_products artifact as CSV.
+- property: g3:derivedQualityChecks
+  value:
+  - rule_id: BPR_CURRENTLY_EFFECTIVE_DERIVATION
+    type: DERIVED_BOOLEAN
+    expression: |
+      (effectiveFrom IS NULL OR effectiveFrom <= CURRENT_DATE) AND (effectiveTo IS NULL OR effectiveTo > CURRENT_DATE)
+    output_field: is_currently_effective
+    description: |
+      Silver may derive whether the product is currently within its effective date window.
+  - rule_id: BPR_SAFE_PRODUCT_PROJECTION
+    type: APPROVED_CONTEXT_PROJECTION
+    approved_fields:
+    - productId
+    - name
+    - description
+    - productCategory
+    - brand
+    - brandName
+    - applicationUri
+    - isTailored
+    - effectiveFrom
+    - effectiveTo
+    - lastUpdated
+    governed_json_fields:
+    - additionalInformation
+    - cardArt
+    description: |
+      Product knowledge may be exposed after schema validation, content sanitisation, URI allow-list checks, and effective-date derivation.
+  - rule_id: BPR_FILE_LINEAGE_PROJECTION
+    type: LINEAGE_ENRICHMENT
+    output_fields:
+    - source_dataset
+    - source_file_path
+    - source_file_sha256
+    - source_record_id
+    - pipeline_run_id
+    - processed_at
+    - dq_status
+    - content_sanitisation_status
+    - context_version
+    description: |
+      Curated product records must retain enough file and record lineage for answer verification, freshness review, and audit.
+- property: g3:fileQualityRules
+  value:
+  - id: BPR_FILE_NON_EMPTY
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: FILE_SIZE_MIN
+      parameters:
+        min_bytes: 1
+    severity: error
+    dimension: completeness
+    description: The delivered CSV file must not be empty.
+    customProperties:
+    - property: g3:action
+      value: REJECT_FILE
+  - id: BPR_EXACT_COLUMN_COUNT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: EXACT_COLUMN_COUNT
+      parameters:
+        expected: 13
+    severity: error
+    dimension: completeness
+    description: |
+      The parsed CSV file must contain exactly thirteen physical columns.
+    customProperties:
+    - property: g3:action
+      value: REJECT_FILE
+  - id: BPR_DUPLICATE_FILE_HASH
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: DUPLICATE_FILE_HASH
+      parameters:
+        hash_field: sha256
+        scope: banking_products
+    severity: warning
+    dimension: uniqueness
+    description: |
+      A file with an already processed SHA-256 hash should be treated as a duplicate delivery rather than new catalogue data.
+    customProperties:
+    - property: g3:action
+      value: SKIP_DUPLICATE_DELIVERY
+  - id: BPR_FILE_FRESHNESS
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: FILE_MODIFICATION_AGE
+      parameters:
+        modification_time_field: file_modification_time
+        max_age: TBD
+    severity: warning
+    dimension: timeliness
+    description: |
+      The product-catalogue freshness SLA must be agreed before the contract is promoted to APPROVED.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+- property: g3:notes
+  value:
+  - |
+    This contract follows the authoritative physical source schema and includes all thirteen fields defined for banking_products.
+  - |
+    banking_products is one of three catalogue datasets without global_id. It is excluded from customer foreign-key integrity validation.
+  - |
+    The catalogue describes available products, not a customer's held products. Customer holdings must be sourced from governed arrangement datasets.
+  - |
+    The source documents eleven weighted product names but provides only examples. The complete name catalogue must be copied from the generator rather than invented.
+  - |
+    The exact nested schemas for additionalInformation and cardArt must be copied from the generator or approved CDR schema before promotion to APPROVED.
+  - |
+    Product descriptions and nested JSON are public product content but still require sanitisation before AI indexing to prevent malformed or unsafe text and unapproved external links.
+  - The CSV parser profile, file freshness SLA, filename convention, exact product-name catalogue, and nested JSON schemas
+    remain TBD.

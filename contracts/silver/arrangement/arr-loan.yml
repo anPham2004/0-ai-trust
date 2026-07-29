@@ -1,0 +1,416 @@
+kind: DataContract
+apiVersion: v3.1.0
+id: silver.arrangement.arr_loan
+version: 1.0.0
+name: arr_loan
+status: draft
+domain: BANKING
+description:
+  purpose: |
+    Loan account servicing details from CDC. Covers personal and business loans with masked financial amounts.
+servers:
+- server: silver-delta-lake
+  type: databricks
+  description: Silver Delta Lake table for arr_loan
+  environment: prod
+schema:
+- name: arr_loan
+  logicalType: object
+  physicalType: table
+  quality:
+  - id: LOAN_ID_NULL
+    type: sql
+    query: loan_id IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Primary key must exist
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: GLOBAL_ID_NULL
+    type: sql
+    query: global_id IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Customer FK must exist
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: LOAN_TYPE_NULL
+    type: sql
+    query: loan_type IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Loan type required
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: STATUS_NULL
+    type: sql
+    query: status IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Loan status required
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: MATURITY_DATE_ORDER
+    type: sql
+    query: maturity_date IS NULL OR start_date IS NULL OR maturity_date >= start_date
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: Maturity must follow start date
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: LOAN_ID_UUID_FORMAT
+    type: sql
+    query: loan_id IS NULL OR loan_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: loan_id must be valid UUID format when present
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: GLOBAL_ID_UUID_FORMAT
+    type: sql
+    query: global_id IS NULL OR global_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: global_id must be valid UUID format when present
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: ACCOUNT_ID_UUID_FORMAT
+    type: sql
+    query: account_id IS NULL OR account_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: account_id must be valid UUID format when present
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: TERM_MONTHS_RANGE
+    type: sql
+    query: term_months IS NULL OR (term_months > 0 AND term_months <= 600)
+    mustBe: 0
+    severity: warning
+    dimension: conformity
+    description: Loan term within reasonable range
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  properties:
+  - name: global_id
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: loan_id
+    logicalType: string
+    physicalType: STRING
+    required: true
+    primaryKey: true
+    primaryKeyPosition: 1
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: account_id
+    logicalType: string
+    physicalType: STRING
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: loan_type
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+  - name: status
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+  - name: interest_type
+    logicalType: string
+    physicalType: STRING
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+    - property: g3:accepted
+      value:
+        values:
+        - FIXED
+        - VARIABLE
+  - name: repayment_frequency
+    logicalType: string
+    physicalType: STRING
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+  - name: term_months
+    logicalType: integer
+    physicalType: INT
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: counter
+  - name: start_date
+    logicalType: date
+    physicalType: DATE
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: date
+  - name: maturity_date
+    logicalType: date
+    physicalType: DATE
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: date
+  - name: original_amount_masked
+    logicalType: string
+    physicalType: STRING
+    classification: RESTRICTED
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: range_bucket
+    - property: g3:domainType
+      value: amount
+  - name: current_balance_masked
+    logicalType: string
+    physicalType: STRING
+    classification: RESTRICTED
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: range_bucket
+    - property: g3:domainType
+      value: amount
+  - name: pipeline_run_id
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: source_table
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: identifier
+  - name: processed_at
+    logicalType: timestamp
+    physicalType: TIMESTAMP
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: timestamp
+  - name: dq_status
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+    - property: g3:accepted
+      value:
+        values:
+        - PASSED
+        - FAILED
+        - WARNING
+  - name: masking_status
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+    - property: g3:accepted
+      value:
+        values:
+        - MASKED
+        - CLEAN
+slaProperties:
+- property: hardFailureRate
+  value: 0.01
+  description: Max proportion of hard-rule failures before pipeline halts
+- property: freshnessBreachRate
+  value: 0.05
+  description: Max proportion of freshness breaches before alert
+customProperties:
+- property: g3:sources
+  value:
+  - type: DATABASE
+    ingestion_mechanism: DEBEZIUM_CDC
+    bronze_sink: cdc_changes
+    source_dataset: public.loan_accounts
+    fields:
+    - global_id
+    - loanId
+    - accountId
+    - loanType
+    - status
+    - interestRate
+    - repaymentFrequency
+    - termMonths
+    - startDate
+    - maturityDate
+    - originalAmount
+    - currentBalance
+    cdc:
+      supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+      ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+- property: g3:freshnessSla
+  value: 24 hours
+- property: g3:lineage
+  value:
+    l1: |
+      lending-servicing DB -> Debezium -> Kafka CDC topics -> landing-exporter -> S3 bronze/landing/cdc/ -> Auto Loader -> bronze.cdc_changes -> Silver
+    l2_required: true
+- property: g3:knownSourceLimitations
+  value:
+  - CDC eventual consistency — records may arrive out of order within partition
+- property: g3:lifecycle
+  value:
+    owner: banking-domain
+    producer: banking-platform
+    consumers:
+    - banker-assist
+    - lending-operations
+    approver: TBD
+    effective_from: null
+- property: g3:dataset
+  value:
+    canonical_key: loan_id
+    customer_key: global_id
+    critical_data_elements:
+    - loan_id
+    - global_id
+    - loan_type
+    - status
+    lifecycle_stage: Monitor
+- property: g3:qualityDimensions
+  value:
+    completeness:
+    - LOAN_ID_NULL
+    - GLOBAL_ID_NULL
+    - LOAN_TYPE_NULL
+    - STATUS_NULL
+    validity:
+    - MATURITY_DATE_ORDER
+    - LOAN_ID_UUID_FORMAT
+    - GLOBAL_ID_UUID_FORMAT
+    - ACCOUNT_ID_UUID_FORMAT
+    - TERM_MONTHS_RANGE
+- property: g3:aiPolicy
+  value:
+    allowed:
+    - loan_summary
+    - repayment_schedule_overview
+    prohibited:
+    - display_raw_pii
+    - credit_decision
+    - risk_scoring
+    - fraud_assessment
+    - display_exact_balance
+- property: g3:zeroTrust
+  value:
+    quality_status_required: true
+    source_reference_required: true
+    quarantined_excluded: true
+    stale_flagged: true
+- property: g3:parameters
+  value:
+    freshness_days: 30
+    max_term_months: 600
+- property: g3:notes
+  value:
+  - |
+    This contract describes the Silver output table. PII is masked, hashed, or redacted before landing in Silver. Quality rules are executable Spark SQL expressions that can be compiled via F.expr().

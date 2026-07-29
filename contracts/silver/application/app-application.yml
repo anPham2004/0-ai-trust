@@ -1,0 +1,457 @@
+kind: DataContract
+apiVersion: v3.1.0
+id: silver.application.app_application
+version: 1.0.0
+name: app_application
+status: draft
+domain: LENDING
+description:
+  purpose: |
+    Loan application master record from CDC. Covers personal and business applications with masked financial amounts and credit scores.
+servers:
+- server: silver-delta-lake
+  type: databricks
+  description: Silver Delta Lake table for app_application
+  environment: prod
+schema:
+- name: app_application
+  logicalType: object
+  physicalType: table
+  quality:
+  - id: APPLICATION_ID_NULL
+    type: sql
+    query: application_id IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Primary key must exist
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: GLOBAL_ID_NULL
+    type: sql
+    query: global_id IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Customer FK must exist
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: APPLICATION_TYPE_NULL
+    type: sql
+    query: application_type IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Application type required
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: LOAN_GOAL_NULL
+    type: sql
+    query: loan_goal IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Loan goal required
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: SUBMITTED_AT_NULL
+    type: sql
+    query: submitted_at IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Submission timestamp required
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: FINAL_OUTCOME_INVALID
+    type: sql
+    query: final_outcome IS NULL OR final_outcome IN ('APPROVED','REJECTED','PENDING')
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: Must be a known outcome
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: DATE_ORDER_INVALID
+    type: sql
+    query: last_updated_at >= submitted_at
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: Last update must follow submission
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: APPLICATION_ID_UUID_FORMAT
+    type: sql
+    query: application_id IS NULL OR application_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: application_id must be valid UUID format when present
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: GLOBAL_ID_UUID_FORMAT
+    type: sql
+    query: global_id IS NULL OR global_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: global_id must be valid UUID format when present
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: ORGANISATION_ID_UUID_FORMAT
+    type: sql
+    query: organisation_id IS NULL OR organisation_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: organisation_id must be valid UUID format when present
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: LOAN_GOAL_NOT_BLANK
+    type: sql
+    query: loan_goal IS NULL OR length(trim(loan_goal)) > 0
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: loan_goal must not be empty or whitespace-only when present
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: APPLICATION_STALE
+    type: sql
+    query: last_updated_at >= date_sub(current_date(), 30)
+    mustBe: 0
+    severity: warning
+    dimension: conformity
+    description: Application updated within 30 days
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  properties:
+  - name: global_id
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: application_id
+    logicalType: string
+    physicalType: STRING
+    required: true
+    primaryKey: true
+    primaryKeyPosition: 1
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: organisation_id
+    logicalType: string
+    physicalType: STRING
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: is_business_application
+    logicalType: boolean
+    physicalType: BOOLEAN
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: boolean_flag
+  - name: num_offers
+    logicalType: string
+    physicalType: STRING
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: counter
+  - name: loan_goal
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+  - name: application_type
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+  - name: final_outcome
+    logicalType: string
+    physicalType: STRING
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+    - property: g3:accepted
+      value:
+        values:
+        - APPROVED
+        - REJECTED
+        - PENDING
+  - name: submitted_at
+    logicalType: timestamp
+    physicalType: TIMESTAMP
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: timestamp
+  - name: last_updated_at
+    logicalType: timestamp
+    physicalType: TIMESTAMP
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: timestamp
+  - name: requested_amount_masked
+    logicalType: string
+    physicalType: STRING
+    classification: RESTRICTED
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: range_bucket
+    - property: g3:domainType
+      value: amount
+  - name: credit_score
+    logicalType: integer
+    physicalType: INT
+    classification: RESTRICTED
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: redact
+    - property: g3:domainType
+      value: amount
+  - name: pipeline_run_id
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: source_table
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: identifier
+  - name: processed_at
+    logicalType: timestamp
+    physicalType: TIMESTAMP
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: timestamp
+  - name: dq_status
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+    - property: g3:accepted
+      value:
+        values:
+        - PASSED
+        - FAILED
+        - WARNING
+  - name: masking_status
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+    - property: g3:accepted
+      value:
+        values:
+        - MASKED
+        - CLEAN
+slaProperties:
+- property: hardFailureRate
+  value: 0.01
+  description: Max proportion of hard-rule failures before pipeline halts
+- property: freshnessBreachRate
+  value: 0.05
+  description: Max proportion of freshness breaches before alert
+customProperties:
+- property: g3:sources
+  value:
+  - type: DATABASE
+    ingestion_mechanism: DEBEZIUM_CDC
+    bronze_sink: cdc_changes
+    source_dataset: public.loan_applications
+    fields:
+    - global_id
+    - applicationId
+    - organisationId
+    - numOffers
+    - loanGoal
+    - applicationType
+    - finalOutcome
+    - submittedAt
+    - lastUpdatedAt
+    - requestedAmount
+    - creditScore
+    cdc:
+      supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+      ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+- property: g3:freshnessSla
+  value: 24 hours
+- property: g3:lineage
+  value:
+    l1: |
+      loan-origination DB -> Debezium -> Kafka CDC topics -> landing-exporter -> S3 bronze/landing/cdc/ -> Auto Loader -> bronze.cdc_changes -> Silver
+    l2_required: true
+- property: g3:knownSourceLimitations
+  value:
+  - CDC eventual consistency — records may arrive out of order within partition
+- property: g3:lifecycle
+  value:
+    owner: lending-domain
+    producer: loan-origination-platform
+    consumers:
+    - banker-assist
+    - lending-operations
+    approver: TBD
+    effective_from: null
+- property: g3:dataset
+  value:
+    canonical_key: application_id
+    customer_key: global_id
+    critical_data_elements:
+    - application_id
+    - global_id
+    - application_type
+    - final_outcome
+    lifecycle_stage: Monitor
+- property: g3:qualityDimensions
+  value:
+    completeness:
+    - APPLICATION_ID_NULL
+    - GLOBAL_ID_NULL
+    - APPLICATION_TYPE_NULL
+    - LOAN_GOAL_NULL
+    - SUBMITTED_AT_NULL
+    - LOAN_GOAL_NOT_BLANK
+    validity:
+    - FINAL_OUTCOME_INVALID
+    - DATE_ORDER_INVALID
+    - APPLICATION_ID_UUID_FORMAT
+    - GLOBAL_ID_UUID_FORMAT
+    - ORGANISATION_ID_UUID_FORMAT
+    timeliness:
+    - APPLICATION_STALE
+- property: g3:aiPolicy
+  value:
+    allowed:
+    - status_summary
+    - next_step_guidance
+    prohibited:
+    - display_raw_pii
+    - credit_decision
+    - risk_scoring
+    - fraud_assessment
+    - display_credit_score
+    - display_exact_amount
+- property: g3:zeroTrust
+  value:
+    quality_status_required: true
+    source_reference_required: true
+    quarantined_excluded: true
+    stale_flagged: true
+- property: g3:parameters
+  value:
+    allowed_final_outcomes:
+    - APPROVED
+    - REJECTED
+    - PENDING
+    freshness_days: 30
+- property: g3:notes
+  value:
+  - |
+    This contract describes the Silver output table. PII is masked, hashed, or redacted before landing in Silver. Quality rules are executable Spark SQL expressions that can be compiled via F.expr().

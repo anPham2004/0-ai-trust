@@ -1,0 +1,358 @@
+kind: DataContract
+apiVersion: v3.1.0
+id: silver.application.app_lifecycle_event
+version: 1.0.0
+name: app_lifecycle_event
+status: draft
+domain: LENDING
+description:
+  purpose: |
+    Loan application lifecycle events from Kafka. Records process events such as submissions, approvals, and system transitions.
+servers:
+- server: silver-delta-lake
+  type: databricks
+  description: Silver Delta Lake table for app_lifecycle_event
+  environment: prod
+schema:
+- name: app_lifecycle_event
+  logicalType: object
+  physicalType: table
+  quality:
+  - id: EVENT_ID_NULL
+    type: sql
+    query: event_id IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Primary key must exist
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: APPLICATION_ID_NULL
+    type: sql
+    query: application_id IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Application FK must exist
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: GLOBAL_ID_NULL
+    type: sql
+    query: global_id IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Customer FK must exist
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: LIFECYCLE_TRANSITION_NULL
+    type: sql
+    query: lifecycle_transition IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Transition type required
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: EVENT_TIMESTAMP_NULL
+    type: sql
+    query: event_timestamp IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Event timestamp required
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: EVENT_ID_UUID_FORMAT
+    type: sql
+    query: event_id IS NULL OR event_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: event_id must be valid UUID format when present
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: APPLICATION_ID_UUID_FORMAT
+    type: sql
+    query: application_id IS NULL OR application_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: application_id must be valid UUID format when present
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: GLOBAL_ID_UUID_FORMAT
+    type: sql
+    query: global_id IS NULL OR global_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: global_id must be valid UUID format when present
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: EVENT_ORIGIN_INVALID
+    type: sql
+    query: event_origin IS NULL OR event_origin IN ('SYSTEM','CUSTOMER','BANKER')
+    mustBe: 0
+    severity: warning
+    dimension: conformity
+    description: Must be a known event origin
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  properties:
+  - name: event_id
+    logicalType: string
+    physicalType: STRING
+    required: true
+    primaryKey: true
+    primaryKeyPosition: 1
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: application_id
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: global_id
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: concept_name
+    logicalType: string
+    physicalType: STRING
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: description
+  - name: lifecycle_transition
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+  - name: event_timestamp
+    logicalType: timestamp
+    physicalType: TIMESTAMP
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: timestamp
+  - name: event_origin
+    logicalType: string
+    physicalType: STRING
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+    - property: g3:accepted
+      value:
+        values:
+        - SYSTEM
+        - CUSTOMER
+        - BANKER
+  - name: action
+    logicalType: string
+    physicalType: STRING
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: description
+  - name: pipeline_run_id
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: source_table
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: identifier
+  - name: processed_at
+    logicalType: timestamp
+    physicalType: TIMESTAMP
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: timestamp
+  - name: dq_status
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+    - property: g3:accepted
+      value:
+        values:
+        - PASSED
+        - FAILED
+        - WARNING
+  - name: masking_status
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+    - property: g3:accepted
+      value:
+        values:
+        - MASKED
+        - CLEAN
+slaProperties:
+- property: hardFailureRate
+  value: 0.01
+  description: Max proportion of hard-rule failures before pipeline halts
+- property: freshnessBreachRate
+  value: 0.05
+  description: Max proportion of freshness breaches before alert
+customProperties:
+- property: g3:sources
+  value:
+  - type: EVENT
+    ingestion_mechanism: APACHE_KAFKA
+    bronze_sink: kafka_events
+    source_dataset: loan_application_events
+    fields:
+    - eventId
+    - applicationId
+    - global_id
+    - conceptName
+    - lifecycleTransition
+    - timestamp
+    - eventOrigin
+    - action
+- property: g3:freshnessSla
+  value: 24 hours
+- property: g3:lineage
+  value:
+    l1: |
+      loan-origination events -> Kafka -> landing-exporter -> S3 bronze/landing/event/ -> Auto Loader -> bronze.kafka_events -> Silver
+    l2_required: true
+- property: g3:lifecycle
+  value:
+    owner: lending-domain
+    producer: loan-origination-platform
+    consumers:
+    - banker-assist
+    - lending-operations
+    approver: TBD
+    effective_from: null
+- property: g3:dataset
+  value:
+    canonical_key: event_id
+    customer_key: global_id
+    critical_data_elements:
+    - event_id
+    - application_id
+    - lifecycle_transition
+    - event_timestamp
+    lifecycle_stage: Monitor
+- property: g3:qualityDimensions
+  value:
+    completeness:
+    - EVENT_ID_NULL
+    - APPLICATION_ID_NULL
+    - GLOBAL_ID_NULL
+    - LIFECYCLE_TRANSITION_NULL
+    - EVENT_TIMESTAMP_NULL
+    validity:
+    - EVENT_ID_UUID_FORMAT
+    - APPLICATION_ID_UUID_FORMAT
+    - GLOBAL_ID_UUID_FORMAT
+    - EVENT_ORIGIN_INVALID
+- property: g3:aiPolicy
+  value:
+    allowed:
+    - lifecycle_summary
+    - event_timeline
+    prohibited:
+    - display_raw_pii
+    - credit_decision
+    - risk_scoring
+    - fraud_assessment
+- property: g3:zeroTrust
+  value:
+    quality_status_required: true
+    source_reference_required: true
+    quarantined_excluded: true
+    stale_flagged: true
+- property: g3:parameters
+  value:
+    allowed_event_origins:
+    - SYSTEM
+    - CUSTOMER
+    - BANKER
+- property: g3:notes
+  value:
+  - |
+    This contract describes the Silver output table. PII is masked, hashed, or redacted before landing in Silver. Quality rules are executable Spark SQL expressions that can be compiled via F.expr().

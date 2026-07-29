@@ -1,0 +1,326 @@
+kind: DataContract
+apiVersion: v3.1.0
+id: silver.event.evt_support_interaction
+version: 1.0.0
+name: evt_support_interaction
+status: draft
+domain: SERVICE
+description:
+  purpose: |
+    Support interaction events from Kafka. Records customer interactions across channels with topic and resolution.
+servers:
+- server: silver-delta-lake
+  type: databricks
+  description: Silver Delta Lake table for evt_support_interaction
+  environment: prod
+schema:
+- name: evt_support_interaction
+  logicalType: object
+  physicalType: table
+  quality:
+  - id: INTERACTION_ID_NULL
+    type: sql
+    query: interaction_id IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Primary key must exist
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: GLOBAL_ID_NULL
+    type: sql
+    query: global_id IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Customer FK must exist
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: CHANNEL_NULL
+    type: sql
+    query: channel IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Interaction channel required
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: INTERACTION_TIMESTAMP_NULL
+    type: sql
+    query: interaction_timestamp IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Interaction timestamp required
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: INTERACTION_ID_UUID_FORMAT
+    type: sql
+    query: interaction_id IS NULL OR interaction_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: interaction_id must be valid UUID format when present
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: GLOBAL_ID_UUID_FORMAT
+    type: sql
+    query: global_id IS NULL OR global_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: global_id must be valid UUID format when present
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: CHANNEL_NOT_BLANK
+    type: sql
+    query: channel IS NULL OR length(trim(channel)) > 0
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: channel must not be empty or whitespace-only when present
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: DURATION_RANGE
+    type: sql
+    query: duration_minutes IS NULL OR (duration_minutes >= 0 AND duration_minutes <= 480)
+    mustBe: 0
+    severity: warning
+    dimension: conformity
+    description: Duration within reasonable range
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  properties:
+  - name: interaction_id
+    logicalType: string
+    physicalType: STRING
+    required: true
+    primaryKey: true
+    primaryKeyPosition: 1
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: global_id
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: channel
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+  - name: interaction_timestamp
+    logicalType: timestamp
+    physicalType: TIMESTAMP
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: timestamp
+  - name: topic
+    logicalType: string
+    physicalType: STRING
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: description
+  - name: resolution
+    logicalType: string
+    physicalType: STRING
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: description
+  - name: duration_minutes
+    logicalType: integer
+    physicalType: INT
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: counter
+  - name: pipeline_run_id
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: source_table
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: identifier
+  - name: processed_at
+    logicalType: timestamp
+    physicalType: TIMESTAMP
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: timestamp
+  - name: dq_status
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+    - property: g3:accepted
+      value:
+        values:
+        - PASSED
+        - FAILED
+        - WARNING
+  - name: masking_status
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+    - property: g3:accepted
+      value:
+        values:
+        - MASKED
+        - CLEAN
+slaProperties:
+- property: hardFailureRate
+  value: 0.01
+  description: Max proportion of hard-rule failures before pipeline halts
+- property: freshnessBreachRate
+  value: 0.05
+  description: Max proportion of freshness breaches before alert
+customProperties:
+- property: g3:sources
+  value:
+  - type: EVENT
+    ingestion_mechanism: APACHE_KAFKA
+    bronze_sink: kafka_events
+    source_dataset: support_interactions
+    fields:
+    - interactionId
+    - global_id
+    - channel
+    - timestamp
+    - topic
+    - resolution
+    - durationMinutes
+- property: g3:freshnessSla
+  value: 24 hours
+- property: g3:lineage
+  value:
+    l1: |
+      customer-service events -> Kafka -> landing-exporter -> S3 bronze/landing/event/ -> Auto Loader -> bronze.kafka_events -> Silver
+    l2_required: true
+- property: g3:lifecycle
+  value:
+    owner: service-domain
+    producer: customer-service-platform
+    consumers:
+    - banker-assist
+    - lending-operations
+    approver: TBD
+    effective_from: null
+- property: g3:dataset
+  value:
+    canonical_key: interaction_id
+    customer_key: global_id
+    critical_data_elements:
+    - interaction_id
+    - global_id
+    - channel
+    - interaction_timestamp
+    lifecycle_stage: Monitor
+- property: g3:qualityDimensions
+  value:
+    completeness:
+    - INTERACTION_ID_NULL
+    - GLOBAL_ID_NULL
+    - CHANNEL_NULL
+    - INTERACTION_TIMESTAMP_NULL
+    - CHANNEL_NOT_BLANK
+    validity:
+    - INTERACTION_ID_UUID_FORMAT
+    - GLOBAL_ID_UUID_FORMAT
+    - DURATION_RANGE
+- property: g3:aiPolicy
+  value:
+    allowed:
+    - interaction_summary
+    - channel_analysis
+    prohibited:
+    - display_raw_pii
+    - credit_decision
+    - risk_scoring
+    - fraud_assessment
+- property: g3:zeroTrust
+  value:
+    quality_status_required: true
+    source_reference_required: true
+    quarantined_excluded: true
+    stale_flagged: true
+- property: g3:parameters
+  value:
+    max_duration_minutes: 480
+- property: g3:notes
+  value:
+  - |
+    This contract describes the Silver output table. PII is masked, hashed, or redacted before landing in Silver. Quality rules are executable Spark SQL expressions that can be compiled via F.expr().

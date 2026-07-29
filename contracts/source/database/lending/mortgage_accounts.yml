@@ -1,0 +1,846 @@
+kind: DataContract
+apiVersion: v3.1.0
+id: source.database.mortgage_accounts
+version: 1.0.0
+name: mortgage_accounts
+status: draft
+domain: LENDING
+description:
+  purpose: |
+    Source dataset containing Australian residential mortgage arrangements. Each record is linked to a banking account and includes property value, loan amount, interest configuration, term, repayment information, optional offset account, start date, and calculated loan-to-value ratio.
+servers:
+- server: source-postgresql
+  type: postgresql
+  description: PostgreSQL CDC source via Debezium for mortgage_accounts
+  environment: prod
+schema:
+- name: mortgage_accounts
+  logicalType: object
+  physicalType: table
+  physicalName: public.mortgage_accounts
+  relationships:
+  - type: foreignKey
+    from:
+    - mortgage_accounts.global_id
+    to:
+    - customers.global_id
+    customProperties:
+    - property: g3:nullable
+      value: true
+  - type: foreignKey
+    from:
+    - mortgage_accounts.accountId
+    to:
+    - banking_accounts.accountId
+    customProperties:
+    - property: g3:nullable
+      value: true
+  - type: foreignKey
+    from:
+    - mortgage_accounts.offsetAccountId
+    to:
+    - banking_accounts.accountId
+    customProperties:
+    - property: g3:nullable
+      value: true
+  quality:
+  - id: MTG_ID_UNIQUE
+    type: library
+    metric: duplicateValues
+    mustBe: 0
+    severity: error
+    dimension: uniqueness
+    description: mortgageId must be unique across the dataset.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+    - property: g3:columns
+      value:
+      - mortgageId
+  - id: MTG_ACCOUNT_LINK_PRESENT
+    type: library
+    metric: nullValues
+    mustBe: 0
+    severity: warning
+    dimension: completeness
+    description: |
+      A mortgage should identify its banking account. The physical schema currently permits accountId to be null.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+    - property: g3:columns
+      value:
+      - accountId
+  - id: MTG_CUSTOMER_LINK_PRESENT
+    type: library
+    metric: nullValues
+    mustBe: 0
+    severity: warning
+    dimension: completeness
+    description: |
+      A mortgage should identify its customer. The physical schema currently permits global_id to be null.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+    - property: g3:columns
+      value:
+      - global_id
+  - id: MTG_ACCOUNT_CUSTOMER_CONSISTENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: REFERENCE_PAIR_CONSISTENT
+      parameters:
+        reference_dataset: banking_accounts
+        source_columns:
+        - accountId
+        - global_id
+        reference_columns:
+        - accountId
+        - global_id
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      accountId and global_id must refer to the same banking account record.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: MTG_ACCOUNT_PRODUCT_CATEGORY
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: REFERENCE_CONDITION
+      parameters:
+        reference_dataset: banking_accounts
+        source_key:
+          accountId: accountId
+        expected_condition:
+          column: productCategory
+          equals: RESIDENTIAL_MORTGAGES
+        ignore_missing_reference: false
+    severity: error
+    dimension: consistency
+    description: |
+      A mortgage record must reference a banking account classified as RESIDENTIAL_MORTGAGES.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: MTG_LOAN_NOT_ABOVE_PROPERTY_VALUE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: NUMERIC_COLUMN_COMPARISON
+      parameters:
+        left_column: loanAmount
+        operator: LESS_THAN_OR_EQUAL
+        right_column: propertyValue
+        parse_as: DECIMAL
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: loanAmount cannot exceed propertyValue.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: MTG_LVR_FORMULA
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: NUMERIC_FORMULA_MATCH
+      parameters:
+        target_column: lvrPercent
+        formula: (loanAmount / propertyValue) * 100
+        parse_as: DECIMAL
+        tolerance: 0.01
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      lvrPercent must equal loanAmount divided by propertyValue multiplied by 100.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: MTG_REPAYMENT_FORMULA_CONSISTENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: AMORTISATION_PAYMENT_MATCH
+      parameters:
+        principal_column: loanAmount
+        annual_interest_rate_column: interestRate
+        term_years_column: loanTerm
+        repayment_frequency_column: repaymentFrequency
+        target_column: repaymentAmount
+        tolerance_ratio: 0.02
+        ignore_nulls: true
+    severity: warning
+    dimension: consistency
+    description: |
+      repaymentAmount should be consistent with the standard amortisation formula after accounting for repayment frequency and rounding.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: MTG_OFFSET_ACCOUNT_DIFFERENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: COLUMN_COMPARISON
+      parameters:
+        left_column: offsetAccountId
+        operator: NOT_EQUAL
+        right_column: accountId
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      offsetAccountId must not be the same as the mortgage accountId.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: MTG_OFFSET_ACCOUNT_CUSTOMER_CONSISTENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: REFERENCE_PAIR_CONSISTENT
+      parameters:
+        reference_dataset: banking_accounts
+        source_columns:
+        - offsetAccountId
+        - global_id
+        reference_columns:
+        - accountId
+        - global_id
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      The offset account must belong to the same customer as the mortgage.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: MTG_START_DATE_NOT_IN_FUTURE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: DATE_NOT_IN_FUTURE
+      columns:
+      - startDate
+    severity: error
+    dimension: timeliness
+    description: startDate cannot be later than the processing date.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: MTG_START_DATE_WITHIN_GENERATOR_WINDOW
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: DATE_AGE_MAX
+      parameters:
+        column: startDate
+        max_years: 10
+        reference: PROCESSING_DATE
+        ignore_nulls: true
+    severity: warning
+    dimension: consistency
+    description: |
+      The source generator creates mortgage start dates within the previous ten years; older values should be investigated.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: MTG_CORE_FINANCIAL_VALUES_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: ALL_NOT_NULL
+      columns:
+      - propertyValue
+      - loanAmount
+      - interestRate
+      - repaymentAmount
+      - lvrPercent
+    severity: warning
+    dimension: completeness
+    description: |
+      A mortgage arrangement should contain its core valuation, pricing, and repayment values. The physical schema currently permits null values.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  properties:
+  - name: global_id
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - 65df84b8-4274-4dbd-9667-6c9967ae6538
+    quality:
+    - id: MTG_GLOBAL_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: global_id must be a valid UUID when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: MTG_GLOBAL_ID_CUSTOMER_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: customers
+          reference_column: global_id
+      severity: error
+      dimension: consistency
+      description: |
+        global_id must exist in customers.global_id when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: person_identifier
+  - name: accountId
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - a5ef7c5b-04b6-49fa-8a0a-6b6a86be900f
+    quality:
+    - id: MTG_ACCOUNT_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: accountId must be a valid UUID when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: MTG_ACCOUNT_ID_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: banking_accounts
+          reference_column: accountId
+      severity: error
+      dimension: consistency
+      description: |
+        accountId must exist in banking_accounts.accountId when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: account_identifier
+  - name: mortgageId
+    logicalType: string
+    physicalType: string
+    required: true
+    primaryKey: true
+    primaryKeyPosition: 1
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - 9df1d3c0-dd5c-43c1-a68a-a0d83535c18f
+    quality:
+    - id: MTG_ID_NOT_NULL
+      type: library
+      metric: nullValues
+      mustBe: 0
+      severity: error
+      dimension: completeness
+      description: mortgageId must always be present.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: MTG_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: mortgageId must be a valid UUID.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: mortgage_identifier
+  - name: propertyValue
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    examples:
+    - '680000.00'
+    quality:
+    - id: MTG_PROPERTY_VALUE_DECIMAL
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DECIMAL_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        propertyValue must be parseable as a decimal amount when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: MTG_PROPERTY_VALUE_POSITIVE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: RANGE_IF_PRESENT
+        parameters:
+          min_exclusive: 0
+      severity: error
+      dimension: conformity
+      description: propertyValue must be greater than zero when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_AND_PROPERTY_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+    - property: g3:domainType
+      value: decimal_amount
+    - property: g3:accepted
+      value:
+        currency: AUD
+        min_exclusive: 0
+  - name: loanAmount
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    examples:
+    - '544000.00'
+    quality:
+    - id: MTG_LOAN_AMOUNT_DECIMAL
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DECIMAL_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        loanAmount must be parseable as a decimal amount when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: MTG_LOAN_AMOUNT_POSITIVE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: RANGE_IF_PRESENT
+        parameters:
+          min_exclusive: 0
+      severity: error
+      dimension: conformity
+      description: loanAmount must be greater than zero when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+    - property: g3:domainType
+      value: decimal_amount
+    - property: g3:accepted
+      value:
+        currency: AUD
+        min_exclusive: 0
+  - name: interestRate
+    logicalType: string
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      minimum: 2.0
+    examples:
+    - '6.15'
+    quality:
+    - id: MTG_INTEREST_RATE_DECIMAL
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DECIMAL_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        interestRate must be parseable as a decimal percentage when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: MTG_INTEREST_RATE_MINIMUM
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: RANGE_IF_PRESENT
+        parameters:
+          min: 2.0
+      severity: error
+      dimension: conformity
+      description: |
+        interestRate must be at least 2.0 percent in the current source model.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: BANKER_ONLY_OR_RESTRICT
+    - property: g3:domainType
+      value: annual_percentage_rate
+  - name: interestType
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: INTERNAL
+    examples:
+    - VARIABLE
+    quality:
+    - id: MTG_INTEREST_TYPE_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - FIXED
+        - VARIABLE
+        - SPLIT
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: interestType must be a supported source value.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: mortgage_interest_type
+    - property: g3:accepted
+      value:
+        values:
+        - FIXED
+        - VARIABLE
+        - SPLIT
+  - name: loanTerm
+    logicalType: integer
+    physicalType: int32
+    required: true
+    classification: INTERNAL
+    examples:
+    - 30
+    quality:
+    - id: MTG_LOAN_TERM_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - 15
+        - 20
+        - 25
+        - 30
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: loanTerm must be one of the supported term lengths.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: term_years
+    - property: g3:accepted
+      value:
+        values:
+        - 15
+        - 20
+        - 25
+        - 30
+  - name: repaymentAmount
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    examples:
+    - '3314.52'
+    quality:
+    - id: MTG_REPAYMENT_AMOUNT_DECIMAL
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DECIMAL_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        repaymentAmount must be parseable as a decimal amount when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: MTG_REPAYMENT_AMOUNT_POSITIVE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: RANGE_IF_PRESENT
+        parameters:
+          min_exclusive: 0
+      severity: error
+      dimension: conformity
+      description: |
+        repaymentAmount must be greater than zero when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+    - property: g3:domainType
+      value: decimal_amount
+    - property: g3:accepted
+      value:
+        currency: AUD
+        min_exclusive: 0
+  - name: repaymentFrequency
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: INTERNAL
+    examples:
+    - MONTHLY
+    quality:
+    - id: MTG_REPAYMENT_FREQUENCY_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - MONTHLY
+        - FORTNIGHTLY
+        - WEEKLY
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        repaymentFrequency must be one of the supported source values.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: repayment_frequency
+    - property: g3:accepted
+      value:
+        values:
+        - MONTHLY
+        - FORTNIGHTLY
+        - WEEKLY
+  - name: offsetAccountId
+    logicalType: string
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - 827e7356-a506-44cf-bfcb-4e11aadf5e9e
+    quality:
+    - id: MTG_OFFSET_ACCOUNT_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        offsetAccountId must be a valid UUID when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: MTG_OFFSET_ACCOUNT_ID_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: banking_accounts
+          reference_column: accountId
+      severity: error
+      dimension: consistency
+      description: |
+        offsetAccountId must exist in banking_accounts.accountId when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: offset_account_identifier
+  - name: startDate
+    logicalType: date
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      format: ISO_8601_DATE
+    examples:
+    - '2021-04-19'
+    quality:
+    - id: MTG_START_DATE_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DATE_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: startDate must be parseable as a date when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: date
+  - name: lvrPercent
+    logicalType: string
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      minimum: 60.0
+      maximum: 95.0
+    examples:
+    - '80.00'
+    quality:
+    - id: MTG_LVR_DECIMAL
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DECIMAL_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        lvrPercent must be parseable as a decimal percentage when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: MTG_LVR_RANGE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: RANGE_IF_PRESENT
+        parameters:
+          min: 60.0
+          max: 95.0
+      severity: error
+      dimension: conformity
+      description: |
+        lvrPercent must be between 60.0 and 95.0 in the current source model.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: CREDIT_AND_PROPERTY_RISK_INFORMATION
+        handling: BANKER_ONLY_OR_RESTRICT
+    - property: g3:domainType
+      value: loan_to_value_percentage
+customProperties:
+- property: g3:source
+  value:
+    category: DATABASE
+    system_type: POSTGRESQL
+    source_object: public.mortgage_accounts
+    authoritative: true
+- property: g3:ingestion
+  value:
+    mechanism: DEBEZIUM_CDC
+    transport: APACHE_KAFKA
+    landing:
+      format: JSONL
+      path_template: s3://<bucket>/bronze/landing/cdc/mortgage_accounts/
+      immutable: true
+    bronze_target: bronze.cdc_changes
+    cdc:
+      supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+      ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+- property: g3:lifecycle
+  value:
+    owner: TBD
+    approver: TBD
+    effective_from: null
+- property: g3:dataset
+  value:
+    expected_rows_scale_1: 525
+    physical_schema_ref: dev-tools/datagen/output/master-schema.json#/mortgage_accounts
+- property: g3:notes
+  value:
+  - |
+    This contract follows the authoritative physical source schema and includes all thirteen fields defined for mortgage_accounts.
+  - |
+    The source mortgage_accounts dataset does not contain organisationId. Business or personal context must be derived by joining accountId to banking_accounts and reading banking_accounts.organisationId.
+  - |
+    propertyValue, loanAmount, and repaymentAmount must be converted to approved range buckets or removed before AI consumption.
+  - |
+    lvrPercent is sensitive credit and property risk information and should be available only to approved banker-facing consumers.
+  - The amortisation rule is a warning because exact repayment calculations can vary with compounding, repayment timing, and
+    rounding conventions.

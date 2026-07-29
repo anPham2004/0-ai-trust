@@ -1,0 +1,331 @@
+kind: DataContract
+apiVersion: v3.1.0
+id: silver.event.evt_case_event
+version: 1.0.0
+name: evt_case_event
+status: draft
+domain: SERVICE
+description:
+  purpose: |
+    Service case lifecycle events from Kafka. Records case activities such as notes, status changes, escalations, and document attachments.
+servers:
+- server: silver-delta-lake
+  type: databricks
+  description: Silver Delta Lake table for evt_case_event
+  environment: prod
+schema:
+- name: evt_case_event
+  logicalType: object
+  physicalType: table
+  quality:
+  - id: EVENT_ID_NULL
+    type: sql
+    query: event_id IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Primary key must exist
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: CASE_ID_NULL
+    type: sql
+    query: case_id IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Case FK must exist
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: GLOBAL_ID_NULL
+    type: sql
+    query: global_id IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Customer FK must exist
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: EVENT_TYPE_INVALID
+    type: sql
+    query: event_type IN ('NOTE_ADDED','STATUS_CHANGED','ASSIGNED','ESCALATED','DOCUMENT_ATTACHED','CUSTOMER_CONTACTED')
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: Must be a known event type
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: EVENT_TIMESTAMP_NULL
+    type: sql
+    query: event_timestamp IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Event timestamp required
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: EVENT_ID_UUID_FORMAT
+    type: sql
+    query: event_id IS NULL OR event_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: event_id must be valid UUID format when present
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: CASE_ID_UUID_FORMAT
+    type: sql
+    query: case_id IS NULL OR case_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: case_id must be valid UUID format when present
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: GLOBAL_ID_UUID_FORMAT
+    type: sql
+    query: global_id IS NULL OR global_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: global_id must be valid UUID format when present
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  properties:
+  - name: event_id
+    logicalType: string
+    physicalType: STRING
+    required: true
+    primaryKey: true
+    primaryKeyPosition: 1
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: case_id
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: global_id
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: event_type
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+    - property: g3:accepted
+      value:
+        values:
+        - NOTE_ADDED
+        - STATUS_CHANGED
+        - ASSIGNED
+        - ESCALATED
+        - DOCUMENT_ATTACHED
+        - CUSTOMER_CONTACTED
+  - name: event_timestamp
+    logicalType: timestamp
+    physicalType: TIMESTAMP
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: timestamp
+  - name: description
+    logicalType: string
+    physicalType: STRING
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: description
+  - name: pipeline_run_id
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: source_table
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: identifier
+  - name: processed_at
+    logicalType: timestamp
+    physicalType: TIMESTAMP
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: timestamp
+  - name: dq_status
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+    - property: g3:accepted
+      value:
+        values:
+        - PASSED
+        - FAILED
+        - WARNING
+  - name: masking_status
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+    - property: g3:accepted
+      value:
+        values:
+        - MASKED
+        - CLEAN
+slaProperties:
+- property: hardFailureRate
+  value: 0.01
+  description: Max proportion of hard-rule failures before pipeline halts
+- property: freshnessBreachRate
+  value: 0.05
+  description: Max proportion of freshness breaches before alert
+customProperties:
+- property: g3:sources
+  value:
+  - type: EVENT
+    ingestion_mechanism: APACHE_KAFKA
+    bronze_sink: kafka_events
+    source_dataset: service_case_events
+    fields:
+    - eventId
+    - caseId
+    - global_id
+    - eventType
+    - eventTimestamp
+    - description
+- property: g3:freshnessSla
+  value: 24 hours
+- property: g3:lineage
+  value:
+    l1: |
+      customer-service events -> Kafka -> landing-exporter -> S3 bronze/landing/event/ -> Auto Loader -> bronze.kafka_events -> Silver
+    l2_required: true
+- property: g3:lifecycle
+  value:
+    owner: service-domain
+    producer: customer-service-platform
+    consumers:
+    - banker-assist
+    - lending-operations
+    approver: TBD
+    effective_from: null
+- property: g3:dataset
+  value:
+    canonical_key: event_id
+    customer_key: global_id
+    critical_data_elements:
+    - event_id
+    - case_id
+    - event_type
+    - event_timestamp
+    lifecycle_stage: Monitor
+- property: g3:qualityDimensions
+  value:
+    completeness:
+    - EVENT_ID_NULL
+    - CASE_ID_NULL
+    - GLOBAL_ID_NULL
+    - EVENT_TIMESTAMP_NULL
+    validity:
+    - EVENT_TYPE_INVALID
+    - EVENT_ID_UUID_FORMAT
+    - CASE_ID_UUID_FORMAT
+    - GLOBAL_ID_UUID_FORMAT
+- property: g3:aiPolicy
+  value:
+    allowed:
+    - case_event_timeline
+    - activity_summary
+    prohibited:
+    - display_raw_pii
+    - credit_decision
+    - risk_scoring
+    - fraud_assessment
+- property: g3:zeroTrust
+  value:
+    quality_status_required: true
+    source_reference_required: true
+    quarantined_excluded: true
+    stale_flagged: true
+- property: g3:parameters
+  value:
+    allowed_event_types:
+    - NOTE_ADDED
+    - STATUS_CHANGED
+    - ASSIGNED
+    - ESCALATED
+    - DOCUMENT_ATTACHED
+    - CUSTOMER_CONTACTED
+- property: g3:notes
+  value:
+  - |
+    This contract describes the Silver output table. PII is masked, hashed, or redacted before landing in Silver. Quality rules are executable Spark SQL expressions that can be compiled via F.expr().

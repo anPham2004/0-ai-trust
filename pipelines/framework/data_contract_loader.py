@@ -8,7 +8,7 @@ import yaml
 
 
 CONTRACT_ROOT = Path("/Workspace/Shared/0-ai-trust/contracts")
-ACTIVE_STATUSES = {"APPROVED", "ACTIVE"}
+ACTIVE_STATUSES = {"approved", "active"}  # DCS v3.1.0 uses lowercase status
 
 
 class DataContractError(ValueError):
@@ -22,7 +22,7 @@ def load_data_contract(relative_path: str, require_active: bool = True) -> dict:
     contract = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(contract, dict):
         raise DataContractError(f"Contract must be a mapping: {relative_path}")
-    if require_active and contract.get("contract_status") not in ACTIVE_STATUSES:
+    if require_active and contract.get("status") not in ACTIVE_STATUSES:
         raise DataContractError(f"Contract is not approved for runtime use: {relative_path}")
     return contract
 

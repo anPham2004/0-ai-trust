@@ -1,0 +1,777 @@
+kind: DataContract
+apiVersion: v3.1.0
+id: source.database.customers
+version: 1.0.0
+name: customers
+status: draft
+domain: CUSTOMER
+description:
+  purpose: |
+    Master source dataset for individual customers, people representing business customers and sole traders. The global_id generated here is the universal person identifier used by most other mock datasets.
+servers:
+- server: source-postgresql
+  type: postgresql
+  description: PostgreSQL CDC source via Debezium for customers
+  environment: prod
+schema:
+- name: customers
+  logicalType: object
+  physicalType: table
+  physicalName: public.customers
+  quality:
+  - id: CUS_GLOBAL_ID_UNIQUE
+    type: library
+    metric: duplicateValues
+    mustBe: 0
+    severity: error
+    dimension: uniqueness
+    description: global_id must be unique across the customers dataset.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+    - property: g3:columns
+      value:
+      - global_id
+  - id: CUS_CUSTOMER_ID_UNIQUE
+    type: library
+    metric: duplicateValues
+    mustBe: 0
+    severity: error
+    dimension: uniqueness
+    description: customerId must be unique across the customers dataset.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+    - property: g3:columns
+      value:
+      - customerId
+  - id: CUS_LAST_UPDATE_AFTER_CREATE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: COLUMN_COMPARISON
+      parameters:
+        left_column: lastUpdateTime
+        operator: GREATER_THAN_OR_EQUAL
+        right_column: createdAt
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: lastUpdateTime cannot be earlier than createdAt.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: CUS_CONTACT_METHOD_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: ANY_PRESENT
+      columns:
+      - email
+      - phoneNumber
+      - emailAddresses
+      - phoneNumbers
+    severity: warning
+    dimension: completeness
+    description: At least one contact method should be available.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  properties:
+  - name: global_id
+    logicalType: string
+    physicalType: string
+    required: true
+    primaryKey: true
+    primaryKeyPosition: 1
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - 65df84b8-4274-4dbd-9667-6c9967ae6538
+    quality:
+    - id: CUS_GLOBAL_ID_NOT_NULL
+      type: library
+      metric: nullValues
+      mustBe: 0
+      severity: error
+      dimension: completeness
+      description: global_id must always be present.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: CUS_GLOBAL_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: global_id must be a valid UUID.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: uuid
+  - name: customerId
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: INTERNAL
+    logicalTypeOptions:
+      pattern: ^CUST-\d{5}$
+    examples:
+    - CUST-00042
+    quality:
+    - id: CUS_CUSTOMER_ID_NOT_NULL
+      type: library
+      metric: nullValues
+      mustBe: 0
+      severity: error
+      dimension: completeness
+      description: customerId must always be present.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: CUS_CUSTOMER_ID_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^CUST-\d{5}$
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: customerId must follow the CUST-00000 pattern.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: customer_identifier
+  - name: firstName
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    logicalTypeOptions:
+      minLength: 1
+      maxLength: 100
+    examples:
+    - Olivia
+    quality:
+    - id: CUS_FIRST_NAME_NON_BLANK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: NON_BLANK_IF_PRESENT
+      severity: warning
+      dimension: completeness
+      description: firstName must not be blank when supplied.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: DIRECT_IDENTIFIER
+        handling: HASH_OR_REDACT
+    - property: g3:domainType
+      value: person_name
+  - name: lastName
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    logicalTypeOptions:
+      minLength: 1
+      maxLength: 100
+    examples:
+    - Nguyen
+    quality:
+    - id: CUS_LAST_NAME_NON_BLANK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: NON_BLANK_IF_PRESENT
+      severity: warning
+      dimension: completeness
+      description: lastName must not be blank when supplied.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: DIRECT_IDENTIFIER
+        handling: HASH_OR_REDACT
+    - property: g3:domainType
+      value: person_name
+  - name: email
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    logicalTypeOptions:
+      pattern: ^[^@\s]+@[^@\s]+\.[^@\s]+$
+    examples:
+    - olivia.nguyen@example.com
+    quality:
+    - id: CUS_EMAIL_FORMAT
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^[^@\s]+@[^@\s]+\.[^@\s]+$
+      mustBe: 0
+      severity: warning
+      dimension: conformity
+      description: email must have a valid structure when supplied.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: CONTACT_INFORMATION
+        handling: MASK
+    - property: g3:domainType
+      value: email_address
+  - name: phoneNumber
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    examples:
+    - 0412 345 678
+    quality:
+    - id: CUS_PHONE_NON_BLANK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: NON_BLANK_IF_PRESENT
+      severity: warning
+      dimension: completeness
+      description: phoneNumber must not be blank when supplied.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: CONTACT_INFORMATION
+        handling: MASK
+    - property: g3:domainType
+      value: phone_number
+    - property: g3:accepted
+      value:
+        description: Australian mock phone number generated by Faker en_AU.
+  - name: gender
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: CONFIDENTIAL
+    examples:
+    - Female
+    quality:
+    - id: CUS_GENDER_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - Male
+        - Female
+        - Non_binary
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: gender must be one of the supported source values.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: DEMOGRAPHIC_INFORMATION
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: category
+    - property: g3:accepted
+      value:
+        values:
+        - Male
+        - Female
+        - Non_binary
+  - name: age
+    logicalType: integer
+    physicalType: int32
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      minimum: 18
+      maximum: 80
+    examples:
+    - 42
+    quality:
+    - id: CUS_AGE_RANGE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: RANGE_IF_PRESENT
+        parameters:
+          min: 18
+          max: 80
+      severity: error
+      dimension: conformity
+      description: age must be between 18 and 80 when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: DEMOGRAPHIC_INFORMATION
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: integer
+  - name: state
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: INTERNAL
+    examples:
+    - VIC
+    quality:
+    - id: CUS_STATE_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - NSW
+        - VIC
+        - QLD
+        - WA
+        - SA
+        - TAS
+        - ACT
+        - NT
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: state must be a supported Australian state or territory code.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: australian_state_code
+    - property: g3:accepted
+      value:
+        values:
+        - NSW
+        - VIC
+        - QLD
+        - WA
+        - SA
+        - TAS
+        - ACT
+        - NT
+  - name: createdAt
+    logicalType: timestamp
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: ISO_8601_TIMESTAMP
+    examples:
+    - '2026-01-15T09:30:00Z'
+    quality:
+    - id: CUS_CREATED_AT_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_TIMESTAMP_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: createdAt must be parseable as a timestamp.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: timestamp
+  - name: lastUpdateTime
+    logicalType: timestamp
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: ISO_8601_TIMESTAMP
+    examples:
+    - '2026-06-30T14:15:00Z'
+    quality:
+    - id: CUS_LAST_UPDATE_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_TIMESTAMP_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: lastUpdateTime must be parseable as a timestamp.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: timestamp
+  - name: middleNames
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    logicalTypeOptions:
+      maxLength: 200
+    examples:
+    - Anh
+    quality:
+    - id: CUS_MIDDLE_NAMES_LENGTH
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: MAX_LENGTH_IF_PRESENT
+        parameters:
+          max_length: 200
+      severity: warning
+      dimension: conformity
+      description: middleNames must not exceed 200 characters.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: DIRECT_IDENTIFIER
+        handling: REDACT
+    - property: g3:domainType
+      value: person_name
+  - name: prefix
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: HIGHLY_CONFIDENTIAL
+    examples:
+    - Ms.
+    quality:
+    - id: CUS_PREFIX_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - Mr.
+        - Mrs.
+        - Ms.
+        - Miss
+        - Dr.
+        - Mx.
+      mustBe: 0
+      severity: warning
+      dimension: conformity
+      description: prefix should belong to the supported source vocabulary.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: DIRECT_IDENTIFIER
+        handling: REDACT
+    - property: g3:domainType
+      value: name_prefix
+    - property: g3:accepted
+      value:
+        values:
+        - Mr.
+        - Mrs.
+        - Ms.
+        - Miss
+        - Dr.
+        - Mx.
+  - name: suffix
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    examples:
+    - PhD
+    quality:
+    - id: CUS_SUFFIX_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - Jr.
+        - Sr.
+        - PhD
+        - II
+        - III
+      mustBe: 0
+      severity: warning
+      dimension: conformity
+      description: suffix should belong to the supported source vocabulary.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: DIRECT_IDENTIFIER
+        handling: REDACT
+    - property: g3:domainType
+      value: name_suffix
+    - property: g3:accepted
+      value:
+        values:
+        - Jr.
+        - Sr.
+        - PhD
+        - II
+        - III
+  - name: occupationCode
+    logicalType: string
+    physicalType: string
+    classification: CONFIDENTIAL
+    quality:
+    - id: CUS_OCCUPATION_CODE_REFERENCE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: REFERENCE_SET_IF_PRESENT
+        parameters:
+          reference_set: ANZSCO
+      severity: warning
+      dimension: consistency
+      description: occupationCode should exist in the approved ANZSCO reference set.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: EMPLOYMENT_INFORMATION
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: reference_code
+    - property: g3:accepted
+      value:
+        reference_set: ANZSCO
+        exact_values_status: TBD_FROM_GENERATOR_CONFIG
+  - name: occupationCodeVersion
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: INTERNAL
+    examples:
+    - V1.3
+    quality:
+    - id: CUS_OCCUPATION_VERSION_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - V1.0
+        - V1.1
+        - V1.2
+        - V1.3
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: occupationCodeVersion must be a supported version.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: reference_version
+    - property: g3:accepted
+      value:
+        values:
+        - V1.0
+        - V1.1
+        - V1.2
+        - V1.3
+  - name: phoneNumbers
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    logicalTypeOptions:
+      format: JSON_ARRAY
+    examples:
+    - '[{"purpose":"MOBILE","number":"0412 345 678"}]'
+    quality:
+    - id: CUS_PHONE_NUMBERS_JSON
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: VALID_JSON_ARRAY_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: phoneNumbers must be a valid JSON array.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: CONTACT_INFORMATION
+        handling: MASK
+    - property: g3:domainType
+      value: array_of_phone_objects
+    - property: g3:accepted
+      value:
+        item_purpose_values:
+        - MOBILE
+        - HOME
+        - WORK
+        - UNSPECIFIED
+  - name: emailAddresses
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    logicalTypeOptions:
+      format: JSON_ARRAY
+    examples:
+    - '[{"purpose":"HOME","address":"olivia.nguyen@example.com"}]'
+    quality:
+    - id: CUS_EMAIL_ADDRESSES_JSON
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: VALID_JSON_ARRAY_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: emailAddresses must be a valid JSON array.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: CONTACT_INFORMATION
+        handling: MASK
+    - property: g3:domainType
+      value: array_of_email_objects
+    - property: g3:accepted
+      value:
+        item_purpose_values:
+        - HOME
+        - WORK
+        - OTHER
+  - name: customerType
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: INTERNAL
+    examples:
+    - BUSINESS
+    quality:
+    - id: CUS_CUSTOMER_TYPE_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - INDIVIDUAL
+        - BUSINESS
+        - SOLE_TRADER
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: customerType must be a supported onboarding category.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: category
+    - property: g3:accepted
+      value:
+        values:
+        - INDIVIDUAL
+        - BUSINESS
+        - SOLE_TRADER
+customProperties:
+- property: g3:source
+  value:
+    category: DATABASE
+    system_type: POSTGRESQL
+    source_object: public.customers
+    authoritative: true
+- property: g3:ingestion
+  value:
+    mechanism: DEBEZIUM_CDC
+    transport: APACHE_KAFKA
+    landing:
+      format: JSONL
+      path_template: s3://<bucket>/bronze/landing/cdc/customers/
+      immutable: true
+    bronze_target: bronze.cdc_changes
+    cdc:
+      supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+      ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+- property: g3:lifecycle
+  value:
+    owner: TBD
+    approver: TBD
+    effective_from: null
+- property: g3:dataset
+  value:
+    expected_rows_scale_1: 1000
+    physical_schema_ref: dev-tools/datagen/output/master-schema.json#/customers
+- property: g3:alternateKeys
+  value:
+  - customerId
+- property: g3:notes
+  value:
+  - |
+    This contract describes the raw source dataset. Raw PII is not yet safe to be exposed directly to AI workloads.
+  - |
+    Masking, hashing, redaction, canonical renaming and type conversion are  performed during Silver entity modeling.
+  - The exact list of occupationCode must be retrieved from the generator config prior to moving the contract to the APPROVED
+    state.

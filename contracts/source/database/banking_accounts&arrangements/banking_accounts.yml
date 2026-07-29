@@ -1,0 +1,914 @@
+kind: DataContract
+apiVersion: v3.1.0
+id: source.database.banking_accounts
+version: 1.0.0
+name: banking_accounts
+status: draft
+domain: BANKING
+description:
+  purpose: |
+    Core source dataset containing customer banking accounts. Each account is linked to a person through global_id and may also be linked to an organisation when the account represents a business arrangement.
+servers:
+- server: source-postgresql
+  type: postgresql
+  description: PostgreSQL CDC source via Debezium for banking_accounts
+  environment: prod
+schema:
+- name: banking_accounts
+  logicalType: object
+  physicalType: table
+  physicalName: public.banking_accounts
+  relationships:
+  - type: foreignKey
+    from:
+    - banking_accounts.global_id
+    to:
+    - customers.global_id
+    customProperties:
+    - property: g3:nullable
+      value: true
+  - type: foreignKey
+    from:
+    - banking_accounts.customerId
+    to:
+    - customers.customerId
+    customProperties:
+    - property: g3:nullable
+      value: true
+  - type: foreignKey
+    from:
+    - banking_accounts.organisationId
+    to:
+    - organisations.organisationId
+    customProperties:
+    - property: g3:nullable
+      value: true
+  quality:
+  - id: BAC_ACCOUNT_ID_UNIQUE
+    type: library
+    metric: duplicateValues
+    mustBe: 0
+    severity: error
+    dimension: uniqueness
+    description: accountId must be unique across the dataset.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+    - property: g3:columns
+      value:
+      - accountId
+  - id: BAC_ACCOUNT_NUMBER_UNIQUE_IF_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: UNIQUE_IF_PRESENT
+      columns:
+      - accountNumber
+    severity: error
+    dimension: consistency
+    description: |
+      A populated accountNumber must not be shared by multiple accounts.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: BAC_CUSTOMER_LINK_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: ALL_NOT_NULL
+      columns:
+      - global_id
+      - customerId
+    severity: warning
+    dimension: completeness
+    description: |
+      An account should identify its customer using both global_id and customerId. The physical schema currently permits null values.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: BAC_CUSTOMER_IDENTIFIERS_CONSISTENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: REFERENCE_PAIR_CONSISTENT
+      parameters:
+        reference_dataset: customers
+        source_columns:
+        - global_id
+        - customerId
+        reference_columns:
+        - global_id
+        - customerId
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      global_id and customerId must refer to the same row in customers.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: BAC_OPEN_STATUS_MATCHES_ACTIVE_FLAG
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_VALUE_MAP
+      parameters:
+        source_column: isActive
+        mappings:
+          true: OPEN
+          false: CLOSED
+        target_column: openStatus
+    severity: error
+    dimension: consistency
+    description: |
+      openStatus must be OPEN when isActive is true and CLOSED when isActive is false.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: BAC_OWNERSHIP_FLAGS_MATCH
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: COLUMN_EQUALITY
+      columns:
+      - isOwner
+      - isOwned
+    severity: error
+    dimension: consistency
+    description: isOwned must equal isOwner in the current source model.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: BAC_CREATION_DATE_MATCHES_OPEN_DATE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: COLUMN_EQUALITY
+      columns:
+      - creationDate
+      - openDate
+    severity: warning
+    dimension: consistency
+    description: |
+      creationDate should equal openDate because the source generator derives creationDate from openDate.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: BAC_OPEN_DATE_NOT_IN_FUTURE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: TIMESTAMP_NOT_IN_FUTURE
+      columns:
+      - openDate
+    severity: warning
+    dimension: timeliness
+    description: |
+      openDate should not be later than the pipeline processing timestamp.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: BAC_MASKED_NUMBER_MATCHES_ACCOUNT_NUMBER
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: MASKED_SUFFIX_MATCH
+      parameters:
+        clear_column: accountNumber
+        masked_column: maskedNumber
+        visible_suffix_length: 4
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      The visible four-digit suffix in maskedNumber must match accountNumber.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: BAC_PRODUCT_CATEGORY_MATCHES_ACCOUNT_TYPE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_ACCEPTED_VALUES
+      parameters:
+        source_column: accountType
+        mappings:
+          savings:
+          - TRANS_AND_SAVINGS_ACCOUNTS
+          transaction:
+          - TRANS_AND_SAVINGS_ACCOUNTS
+          loan:
+          - RESIDENTIAL_MORTGAGES
+          - PERS_LOANS
+          - CRED_AND_CHRG_CARDS
+        target_column: productCategory
+    severity: error
+    dimension: consistency
+    description: |
+      productCategory must be consistent with accountType.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  properties:
+  - name: global_id
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - 65df84b8-4274-4dbd-9667-6c9967ae6538
+    quality:
+    - id: BAC_GLOBAL_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: global_id must be a valid UUID when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: BAC_GLOBAL_ID_CUSTOMER_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: customers
+          reference_column: global_id
+      severity: error
+      dimension: consistency
+      description: |
+        global_id must exist in customers.global_id when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: person_identifier
+  - name: accountId
+    logicalType: string
+    physicalType: string
+    required: true
+    primaryKey: true
+    primaryKeyPosition: 1
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - a5ef7c5b-04b6-49fa-8a0a-6b6a86be900f
+    quality:
+    - id: BAC_ACCOUNT_ID_NOT_NULL
+      type: library
+      metric: nullValues
+      mustBe: 0
+      severity: error
+      dimension: completeness
+      description: accountId must always be present.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: BAC_ACCOUNT_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: accountId must be a valid UUID.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: account_identifier
+  - name: customerId
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      pattern: ^CUST-\d{5}$
+    examples:
+    - CUST-00042
+    quality:
+    - id: BAC_CUSTOMER_ID_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^CUST-\d{5}$
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        customerId must follow the CUST-00000 pattern when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: BAC_CUSTOMER_ID_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: customers
+          reference_column: customerId
+      severity: error
+      dimension: consistency
+      description: |
+        customerId must exist in customers.customerId when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: customer_identifier
+  - name: organisationId
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      pattern: ^ORG-\d{5}$
+    examples:
+    - ORG-00042
+    quality:
+    - id: BAC_ORGANISATION_ID_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^ORG-\d{5}$
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        organisationId must follow the ORG-00000 pattern when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: BAC_ORGANISATION_ID_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: organisations
+          reference_column: organisationId
+      severity: error
+      dimension: consistency
+      description: |
+        organisationId must exist in organisations.organisationId when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: organisation_identifier
+  - name: accountType
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: INTERNAL
+    examples:
+    - savings
+    quality:
+    - id: BAC_ACCOUNT_TYPE_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - savings
+        - transaction
+        - loan
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: accountType must be a supported source value.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: account_type
+    - property: g3:accepted
+      value:
+        values:
+        - savings
+        - transaction
+        - loan
+  - name: balance
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    logicalTypeOptions:
+      minimum: 0
+    examples:
+    - '18450.75'
+    quality:
+    - id: BAC_BALANCE_DECIMAL
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DECIMAL_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: balance must be parseable as a decimal amount.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: BAC_BALANCE_NON_NEGATIVE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: RANGE_IF_PRESENT
+        parameters:
+          min: 0
+      severity: warning
+      dimension: conformity
+      description: |
+        balance should not be negative in the current mock-data model.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+    - property: g3:domainType
+      value: decimal_amount
+    - property: g3:accepted
+      value:
+        currency: AUD
+  - name: isOwner
+    logicalType: boolean
+    physicalType: bool
+    required: true
+    classification: CONFIDENTIAL
+    examples:
+    - true
+    quality:
+    - id: BAC_IS_OWNER_BOOLEAN
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: BOOLEAN
+      severity: error
+      dimension: conformity
+      description: isOwner must be a boolean value.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: ownership_flag
+    - property: g3:accepted
+      value:
+        values:
+        - true
+        - false
+  - name: openDate
+    logicalType: timestamp
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      format: ISO_8601_TIMESTAMP
+    examples:
+    - '2022-08-14T10:30:00Z'
+    quality:
+    - id: BAC_OPEN_DATE_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_TIMESTAMP_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: openDate must be parseable as a timestamp.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: timestamp
+  - name: isActive
+    logicalType: boolean
+    physicalType: bool
+    required: true
+    classification: INTERNAL
+    examples:
+    - true
+    quality:
+    - id: BAC_IS_ACTIVE_BOOLEAN
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: BOOLEAN
+      severity: error
+      dimension: conformity
+      description: isActive must be a boolean value.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: active_account_flag
+    - property: g3:accepted
+      value:
+        values:
+        - true
+        - false
+  - name: displayName
+    logicalType: string
+    physicalType: string
+    classification: CONFIDENTIAL
+    examples:
+    - Account-SAVINGS-A7F2
+    quality:
+    - id: BAC_DISPLAY_NAME_NON_BLANK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: NON_BLANK_IF_PRESENT
+      severity: warning
+      dimension: completeness
+      description: displayName must not be blank when supplied.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: account_display_name
+    - property: g3:accepted
+      value:
+        description: Generated in the Account-{TYPE}-{HASH} style.
+  - name: nickname
+    logicalType: string
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      maxLength: 120
+    examples:
+    - My Savings
+    quality:
+    - id: BAC_NICKNAME_NON_BLANK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: NON_BLANK_IF_PRESENT
+      severity: warning
+      dimension: completeness
+      description: nickname must not be blank when supplied.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: CUSTOMER_PROVIDED_LABEL
+        handling: RESTRICT_OR_REDACT
+    - property: g3:domainType
+      value: customer_account_nickname
+  - name: maskedNumber
+    logicalType: string
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      pattern: ^x{5}\d{4}$
+    examples:
+    - xxxxx4821
+    quality:
+    - id: BAC_MASKED_NUMBER_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^x{5}\d{4}$
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        maskedNumber must contain five masking characters followed by four digits.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_IDENTIFIER
+        handling: PRESERVE_MASKED_VALUE_ONLY
+    - property: g3:domainType
+      value: masked_account_number
+  - name: accountNumber
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    logicalTypeOptions:
+      pattern: ^\d{8}$
+    examples:
+    - '00123456'
+    quality:
+    - id: BAC_ACCOUNT_NUMBER_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^\d{8}$
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        accountNumber must contain exactly eight digits when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_IDENTIFIER
+        handling: TOKENISE_OR_REMOVE
+    - property: g3:domainType
+      value: account_number
+  - name: productCategory
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: INTERNAL
+    examples:
+    - TRANS_AND_SAVINGS_ACCOUNTS
+    quality:
+    - id: BAC_PRODUCT_CATEGORY_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - TRANS_AND_SAVINGS_ACCOUNTS
+        - RESIDENTIAL_MORTGAGES
+        - PERS_LOANS
+        - CRED_AND_CHRG_CARDS
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: productCategory must be a supported source value.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: banking_product_category
+    - property: g3:accepted
+      value:
+        values:
+        - TRANS_AND_SAVINGS_ACCOUNTS
+        - RESIDENTIAL_MORTGAGES
+        - PERS_LOANS
+        - CRED_AND_CHRG_CARDS
+  - name: productName
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      minLength: 1
+      maxLength: 200
+    examples:
+    - Online Saver
+    quality:
+    - id: BAC_PRODUCT_NAME_NON_BLANK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: NON_BLANK_IF_PRESENT
+      severity: warning
+      dimension: completeness
+      description: productName must not be blank when supplied.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: product_name
+  - name: accountOwnership
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: CONFIDENTIAL
+    examples:
+    - ONE_PARTY
+    quality:
+    - id: BAC_ACCOUNT_OWNERSHIP_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - ONE_PARTY
+        - TWO_PARTY
+        - MANY_PARTY
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: accountOwnership must be a supported source value.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: account_ownership_type
+    - property: g3:accepted
+      value:
+        values:
+        - ONE_PARTY
+        - TWO_PARTY
+        - MANY_PARTY
+  - name: openStatus
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: INTERNAL
+    examples:
+    - OPEN
+    quality:
+    - id: BAC_OPEN_STATUS_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - OPEN
+        - CLOSED
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: openStatus must be OPEN or CLOSED.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: account_open_status
+    - property: g3:accepted
+      value:
+        values:
+        - OPEN
+        - CLOSED
+  - name: isOwned
+    logicalType: boolean
+    physicalType: bool
+    required: true
+    classification: CONFIDENTIAL
+    examples:
+    - true
+    quality:
+    - id: BAC_IS_OWNED_BOOLEAN
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: BOOLEAN
+      severity: error
+      dimension: conformity
+      description: isOwned must be a boolean value.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: owned_account_flag
+    - property: g3:accepted
+      value:
+        values:
+        - true
+        - false
+  - name: creationDate
+    logicalType: timestamp
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      format: ISO_8601_TIMESTAMP
+    examples:
+    - '2022-08-14T10:30:00Z'
+    quality:
+    - id: BAC_CREATION_DATE_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_TIMESTAMP_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: creationDate must be parseable as a timestamp.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: timestamp
+customProperties:
+- property: g3:source
+  value:
+    category: DATABASE
+    system_type: POSTGRESQL
+    source_object: public.banking_accounts
+    authoritative: true
+- property: g3:ingestion
+  value:
+    mechanism: DEBEZIUM_CDC
+    transport: APACHE_KAFKA
+    landing:
+      format: JSONL
+      path_template: s3://<bucket>/bronze/landing/cdc/banking_accounts/
+      immutable: true
+    bronze_target: bronze.cdc_changes
+    cdc:
+      supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+      ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+- property: g3:lifecycle
+  value:
+    owner: TBD
+    approver: TBD
+    effective_from: null
+- property: g3:dataset
+  value:
+    expected_rows_scale_1: 1500
+    physical_schema_ref: dev-tools/datagen/output/master-schema.json#/banking_accounts
+- property: g3:alternateKeys
+  value:
+  - accountNumber
+- property: g3:notes
+  value:
+  - |
+    This contract describes the raw banking account source. Exact balance and accountNumber values must not be exposed directly to AI-ready outputs.
+  - |
+    The Silver layer should use banking_balances as the approved balance source and convert exact values into masked range buckets.
+  - |
+    organisationId identifies business arrangements. A null organisationId represents a personal account in the current source model.
+  - |
+    balance is physically stored as a string and must be parsed before numeric quality checks are applied.
+  - displayName and nickname validation rules are intentionally lightweight because the source schema does not define strict
+    patterns or lengths.

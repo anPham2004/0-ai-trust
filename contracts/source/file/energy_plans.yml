@@ -1,0 +1,834 @@
+kind: DataContract
+apiVersion: v3.1.0
+id: source.file.energy_plans
+version: 1.0.0
+name: energy_plans
+status: draft
+domain: PRODUCT_CATALOGUE
+description:
+  purpose: |
+    Fixed EnergyAus retail energy-plan catalogue containing thirty records. Each record defines plan identity, EnergyAus branding, display name, fuel type, plan type, customer segment, effective date, and update timestamp.
+servers:
+- server: source-s3
+  type: s3
+  description: S3 file drop for energy_plans
+  environment: prod
+schema:
+- name: energy_plans
+  logicalType: object
+  physicalType: table
+  physicalName: energy_plans
+  quality:
+  - id: EPL_PLAN_ID_UNIQUE
+    type: library
+    metric: duplicateValues
+    mustBe: 0
+    severity: error
+    dimension: uniqueness
+    description: planId must be unique within the catalogue file.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+    - property: g3:columns
+      value:
+      - planId
+  - id: EPL_FIXED_RECORD_COUNT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: RECORD_COUNT_EXACT
+      parameters:
+        expected: 30
+    severity: error
+    dimension: consistency
+    description: |
+      The fixed energy-plan catalogue must contain exactly thirty records.
+    customProperties:
+    - property: g3:action
+      value: REJECT_FILE
+  - id: EPL_PLAN_ID_COMPLETE_SEQUENCE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: IDENTIFIER_SEQUENCE_COMPLETE
+      parameters:
+        column: planId
+        regex: ^EPLAN-(\d{3})$
+        capture_group: 1
+        expected_min: 0
+        expected_max: 29
+        comparison_scope: COMPLETE_FILE
+    severity: error
+    dimension: consistency
+    description: |
+      The catalogue must contain every plan identifier from EPLAN-000 through EPLAN-029 exactly once.
+    customProperties:
+    - property: g3:action
+      value: REJECT_FILE
+  - id: EPL_EFFECTIVE_FROM_NOT_IN_FUTURE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: DATE_NOT_IN_FUTURE
+      columns:
+      - effectiveFrom
+    severity: warning
+    dimension: timeliness
+    description: |
+      effectiveFrom should not be later than the file processing date.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: EPL_LAST_UPDATED_NOT_IN_FUTURE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: TIMESTAMP_NOT_IN_FUTURE
+      columns:
+      - lastUpdated
+    severity: warning
+    dimension: timeliness
+    description: |
+      lastUpdated should not be later than the file processing timestamp.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: EPL_LAST_UPDATED_NOT_BEFORE_EFFECTIVE_FROM
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: TIMESTAMP_NOT_BEFORE_DATE
+      parameters:
+        timestamp_column: lastUpdated
+        date_column: effectiveFrom
+        ignore_nulls: true
+    severity: warning
+    dimension: consistency
+    description: |
+      lastUpdated should not normally be earlier than effectiveFrom.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: EPL_FUEL_TYPE_DISTRIBUTION
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CATEGORICAL_DISTRIBUTION_TOLERANCE
+      parameters:
+        column: fuelType
+        expected_ratios:
+          ELECTRICITY: 0.5
+          GAS: 0.3
+          DUAL: 0.2
+        absolute_tolerance: 0.12
+        comparison_scope: COMPLETE_FILE
+    severity: warning
+    dimension: consistency
+    description: |
+      Fuel-type proportions should remain reasonably close to the configured fixed-catalogue distribution.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: EPL_PLAN_TYPE_DISTRIBUTION
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CATEGORICAL_DISTRIBUTION_TOLERANCE
+      parameters:
+        column: type
+        expected_ratios:
+          STANDING: 0.3
+          MARKET: 0.5
+          REGULATED: 0.2
+        absolute_tolerance: 0.12
+        comparison_scope: COMPLETE_FILE
+    severity: warning
+    dimension: consistency
+    description: |
+      Plan-type proportions should remain reasonably close to the configured fixed-catalogue distribution.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: EPL_CUSTOMER_TYPE_DISTRIBUTION
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CATEGORICAL_DISTRIBUTION_TOLERANCE
+      parameters:
+        column: customerType
+        expected_ratios:
+          RESIDENTIAL: 0.7
+          BUSINESS: 0.3
+        absolute_tolerance: 0.12
+        comparison_scope: COMPLETE_FILE
+    severity: warning
+    dimension: consistency
+    description: |
+      Customer-segment proportions should remain reasonably close to the configured fixed-catalogue distribution.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: EPL_DISPLAY_NAME_CATALOGUE_REVIEW
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: REFERENCE_CATALOGUE_PENDING
+      parameters:
+        column: displayName
+        documented_count: 10
+        source: GENERATOR_CONFIG
+        status: TBD_FROM_GENERATOR_CONFIG
+    severity: warning
+    dimension: conformity
+    description: |
+      The source documents ten plan display-name types but does not publish the complete list. The exact catalogue must be extracted before approval.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: EPL_NO_GLOBAL_ID
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: COLUMN_MUST_NOT_EXIST
+      parameters:
+        column: global_id
+    severity: error
+    dimension: consistency
+    description: |
+      energy_plans is a catalogue and must not contain a customer global_id.
+    customProperties:
+    - property: g3:action
+      value: REJECT_FILE
+  - id: EPL_CHILD_REFERENCE_INTEGRITY
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CHILD_FOREIGN_KEY_INTEGRITY
+      parameters:
+        child_dataset: energy_accounts
+        child_column: planId
+        parent_column: planId
+        ignore_nulls: true
+        comparison_scope: COMPLETE_SNAPSHOT
+    severity: error
+    dimension: consistency
+    description: |
+      Every populated energy_accounts.planId must exist in the energy_plans catalogue.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE_CHILD_RECORD
+  - id: EPL_PLAN_USAGE_MONITORING
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: PARENT_REFERENCE_USAGE
+      parameters:
+        child_dataset: energy_accounts
+        child_column: planId
+        parent_column: planId
+        comparison_scope: COMPLETE_SNAPSHOT
+        allow_unreferenced_parent_records: true
+    severity: warning
+    dimension: consistency
+    description: |
+      Plan usage may be monitored across energy accounts. Unreferenced catalogue plans remain valid and must not be quarantined solely because no account currently uses them.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  properties:
+  - name: planId
+    logicalType: string
+    physicalType: string
+    required: true
+    primaryKey: true
+    primaryKeyPosition: 1
+    classification: INTERNAL
+    logicalTypeOptions:
+      pattern: ^EPLAN-\d{3}$
+    examples:
+    - EPLAN-007
+    quality:
+    - id: EPL_PLAN_ID_NOT_NULL
+      type: library
+      metric: nullValues
+      mustBe: 0
+      severity: error
+      dimension: completeness
+      description: planId must always be present.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: EPL_PLAN_ID_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^EPLAN-\d{3}$
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: planId must follow the EPLAN-000 pattern.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: EPL_PLAN_ID_RANGE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: REGEX_NUMERIC_COMPONENT_RANGE
+        parameters:
+          regex: ^EPLAN-(\d{3})$
+          capture_group: 1
+          min: 0
+          max: 29
+      severity: error
+      dimension: conformity
+      description: |
+        planId must be between EPLAN-000 and EPLAN-029 in the fixed catalogue.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: energy_plan_identifier
+    - property: g3:accepted
+      value:
+        numeric_suffix_min: 0
+        numeric_suffix_max: 29
+  - name: brand
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: PUBLIC
+    examples:
+    - EnergyAus
+    quality:
+    - id: EPL_BRAND_CONSTANT
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - EnergyAus
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: brand must always equal EnergyAus.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: energy_retail_brand_code
+    - property: g3:accepted
+      value:
+        values:
+        - EnergyAus
+  - name: brandName
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: PUBLIC
+    examples:
+    - EnergyAus Australia
+    quality:
+    - id: EPL_BRAND_NAME_CONSTANT
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - EnergyAus Australia
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: brandName must always equal EnergyAus Australia.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: energy_retail_brand_display_name
+    - property: g3:accepted
+      value:
+        values:
+        - EnergyAus Australia
+  - name: displayName
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: PUBLIC
+    examples:
+    - Solar Saver
+    quality:
+    - id: EPL_DISPLAY_NAME_NOT_NULL
+      type: library
+      metric: nullValues
+      mustBe: 0
+      severity: error
+      dimension: completeness
+      description: displayName must always be present.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: EPL_DISPLAY_NAME_NON_BLANK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: NON_BLANK
+      severity: error
+      dimension: conformity
+      description: displayName must not be empty or whitespace-only.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: CONTENT_SANITISE
+    - property: g3:domainType
+      value: energy_plan_display_name
+    - property: g3:accepted
+      value:
+        documented_plan_type_count: 10
+        exact_value_catalogue_status: TBD_FROM_GENERATOR_CONFIG
+        documented_examples:
+        - Basic Electricity
+        - Solar Saver
+        - Gas Essential
+  - name: fuelType
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: PUBLIC
+    examples:
+    - ELECTRICITY
+    quality:
+    - id: EPL_FUEL_TYPE_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - ELECTRICITY
+        - GAS
+        - DUAL
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        fuelType must be ELECTRICITY, GAS, or DUAL.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: energy_fuel_type
+    - property: g3:accepted
+      value:
+        values:
+        - ELECTRICITY
+        - GAS
+        - DUAL
+  - name: type
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: PUBLIC
+    examples:
+    - MARKET
+    quality:
+    - id: EPL_PLAN_TYPE_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - STANDING
+        - MARKET
+        - REGULATED
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        type must be STANDING, MARKET, or REGULATED.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: energy_plan_type
+    - property: g3:accepted
+      value:
+        values:
+        - STANDING
+        - MARKET
+        - REGULATED
+  - name: customerType
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: PUBLIC
+    examples:
+    - RESIDENTIAL
+    quality:
+    - id: EPL_CUSTOMER_TYPE_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - RESIDENTIAL
+        - BUSINESS
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        customerType must be RESIDENTIAL or BUSINESS.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: energy_plan_customer_segment
+    - property: g3:accepted
+      value:
+        values:
+        - RESIDENTIAL
+        - BUSINESS
+  - name: effectiveFrom
+    logicalType: date
+    physicalType: string
+    classification: PUBLIC
+    logicalTypeOptions:
+      format: ISO_8601_DATE
+    examples:
+    - '2024-07-15'
+    quality:
+    - id: EPL_EFFECTIVE_FROM_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DATE_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        effectiveFrom must be parseable as a date when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: EPL_EFFECTIVE_FROM_LOWER_BOUND
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: DATE_RANGE_IF_PRESENT
+        parameters:
+          min_inclusive: '2022-01-01'
+      severity: error
+      dimension: conformity
+      description: |
+        effectiveFrom cannot be earlier than the documented generator start date.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: date
+    - property: g3:accepted
+      value:
+        generated_start_date: '2022-01-01'
+        generated_offset_years_approximate: 3.3
+  - name: lastUpdated
+    logicalType: timestamp
+    physicalType: string
+    classification: PUBLIC
+    logicalTypeOptions:
+      format: ISO_8601_TIMESTAMP
+    examples:
+    - '2026-06-30T12:10:00Z'
+    quality:
+    - id: EPL_LAST_UPDATED_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_TIMESTAMP_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        lastUpdated must be parseable as a timestamp when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: timestamp
+    - property: g3:accepted
+      value:
+        source_timezone_status: TBD
+  customProperties:
+  - property: g3:schema:expected_column_count
+    value: 9
+  - property: g3:schema:unknown_column_action
+    value: REJECT_FILE
+  - property: g3:schema:missing_column_action
+    value: REJECT_FILE
+  - property: g3:schema:incompatible_type_change_action
+    value: REJECT_FILE
+customProperties:
+- property: g3:source
+  value:
+    category: FILE
+    system_type: PRODUCT_CATALOGUE_EXTRACT
+    authoritative: true
+    authoritative_for: ENERGY_RETAIL_PLAN_CATALOGUE
+    delivery_mode: PERIODIC_FILE_DROP
+    catalogue: true
+    contains_global_id: false
+    customer_fk_validation_exempt: true
+- property: g3:ingestion
+  value:
+    mechanism: FILE_DROP
+    transport: S3
+    source_drop_zone:
+      path_template: s3://<source-bucket>/<source-prefix>/energy_plans/*.csv
+      native_format: CSV
+    landing:
+      path_template: s3://<bucket>/bronze/landing/file/energy_plans/*.csv
+      immutable: true
+      copy_mode: BYTE_FOR_BYTE
+    bronze_target: bronze.file_arrivals
+    bronze_reader: AUTO_LOADER_BINARY_FILE
+    bronze_metadata:
+    - file_path
+    - file_bytes
+    - file_size
+    - file_modification_time
+    - ingestion_timestamp
+    - pipeline_run_id
+    - source_reference
+    parsing:
+      stage: SILVER
+      format: CSV
+      encoding: TBD_FROM_EXPORTER_CONFIG
+      delimiter: TBD_FROM_EXPORTER_CONFIG
+      header: TBD_FROM_EXPORTER_CONFIG
+      quote_character: TBD_FROM_EXPORTER_CONFIG
+      escape_character: TBD_FROM_EXPORTER_CONFIG
+      malformed_row_action: QUARANTINE
+- property: g3:lifecycle
+  value:
+    owner: TBD
+    approver: TBD
+    effective_from: null
+    approval_blockers:
+    - CSV_PARSING_PROFILE_NOT_CONFIRMED
+    - FILE_FRESHNESS_SLA_NOT_CONFIRMED
+    - DISPLAY_NAME_CATALOGUE_NOT_EXTRACTED
+    - SOURCE_TIMEZONE_NOT_CONFIRMED
+- property: g3:dataset
+  value:
+    expected_rows_scale_1: 30
+    physical_schema_ref: dev-tools/datagen/output/master-schema.json#/energy_plans
+    expected_physical_column_count: 9
+- property: g3:relationshipNotes
+  value:
+  - |
+    energy_plans is a catalogue and has no global_id.
+  - |
+    energy_accounts.planId is the governed physical reference to this catalogue.
+  - |
+    Plan display names or categories must not be used as replacement join keys.
+- property: g3:manifest
+  value:
+    required: true
+    path_template: s3://<bucket>/bronze/landing/manifests/manifest-<batch_id>.json
+    required_attributes:
+    - batch_id
+    - heartbeat_status
+    - dataset_artifact_path
+    - record_count
+    - sha256
+    - native_format
+    - total_records
+    reconciliation_checks:
+    - rule_id: EPL_FILE_PATH_IN_MANIFEST
+      type: FILE_PATH_MATCH
+      severity: ERROR
+      action: REJECT_FILE
+      description: |
+        The landed energy_plans file path must match the artifact path recorded in the delivery manifest.
+    - rule_id: EPL_FILE_SHA256_MATCH
+      type: SHA256_MATCH
+      severity: ERROR
+      action: REJECT_FILE
+      description: |
+        The SHA-256 hash of the landed file must match the manifest hash.
+    - rule_id: EPL_FILE_RECORD_COUNT_MATCH
+      type: RECORD_COUNT_MATCH
+      severity: ERROR
+      action: REJECT_FILE
+      description: |
+        The parsed CSV record count must match the energy_plans record count declared in the delivery manifest.
+    - rule_id: EPL_NATIVE_FORMAT_CSV
+      type: MANIFEST_VALUE
+      parameters:
+        field: native_format
+        expected_value: CSV
+      severity: ERROR
+      action: REJECT_FILE
+      description: |
+        The manifest must identify the energy_plans artifact as CSV.
+- property: g3:derivedQualityChecks
+  value:
+  - rule_id: EPL_CURRENTLY_EFFECTIVE_DERIVATION
+    type: DERIVED_BOOLEAN
+    expression: effectiveFrom IS NULL OR effectiveFrom <= CURRENT_DATE
+    output_field: is_currently_effective
+    description: |
+      Silver may derive whether the plan has reached its effective date. The source does not contain effectiveTo, so expiry cannot be determined.
+  - rule_id: EPL_SAFE_PLAN_PROJECTION
+    type: APPROVED_CONTEXT_PROJECTION
+    approved_fields:
+    - planId
+    - brand
+    - brandName
+    - displayName
+    - fuelType
+    - type
+    - customerType
+    - effectiveFrom
+    - lastUpdated
+    - is_currently_effective
+    description: |
+      Validated plan attributes may be exposed as governed catalogue context after content sanitisation and freshness review.
+  - rule_id: EPL_ENERGY_ACCOUNT_ENRICHMENT
+    type: APPROVED_REFERENCE_ENRICHMENT
+    child_dataset: energy_accounts
+    join:
+      child_column: planId
+      reference_column: planId
+    approved_reference_fields:
+    - brand
+    - brandName
+    - displayName
+    - fuelType
+    - type
+    - customerType
+    description: |
+      Silver may enrich an energy account with approved plan context only after its planId foreign key has passed validation.
+  - rule_id: EPL_FILE_LINEAGE_PROJECTION
+    type: LINEAGE_ENRICHMENT
+    output_fields:
+    - source_dataset
+    - source_file_path
+    - source_file_sha256
+    - source_record_id
+    - pipeline_run_id
+    - processed_at
+    - dq_status
+    - content_sanitisation_status
+    - context_version
+    description: |
+      Curated plan records must retain enough file and record lineage for answer verification, freshness review, and audit.
+- property: g3:fileQualityRules
+  value:
+  - id: EPL_FILE_NON_EMPTY
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: FILE_SIZE_MIN
+      parameters:
+        min_bytes: 1
+    severity: error
+    dimension: completeness
+    description: The delivered CSV file must not be empty.
+    customProperties:
+    - property: g3:action
+      value: REJECT_FILE
+  - id: EPL_EXACT_COLUMN_COUNT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: EXACT_COLUMN_COUNT
+      parameters:
+        expected: 9
+    severity: error
+    dimension: completeness
+    description: |
+      The parsed CSV file must contain exactly nine physical columns.
+    customProperties:
+    - property: g3:action
+      value: REJECT_FILE
+  - id: EPL_DUPLICATE_FILE_HASH
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: DUPLICATE_FILE_HASH
+      parameters:
+        hash_field: sha256
+        scope: energy_plans
+    severity: warning
+    dimension: uniqueness
+    description: |
+      A file with an already processed SHA-256 hash should be treated as a duplicate delivery rather than new catalogue data.
+    customProperties:
+    - property: g3:action
+      value: SKIP_DUPLICATE_DELIVERY
+  - id: EPL_FILE_FRESHNESS
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: FILE_MODIFICATION_AGE
+      parameters:
+        modification_time_field: file_modification_time
+        max_age: TBD
+    severity: warning
+    dimension: timeliness
+    description: |
+      The energy-plan catalogue freshness SLA must be agreed before the contract is promoted to APPROVED.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+- property: g3:notes
+  value:
+  - |
+    This contract follows the authoritative physical source schema and includes all nine fields defined for energy_plans.
+  - |
+    energy_plans is one of three catalogue datasets without global_id. It is excluded from customer foreign-key integrity validation.
+  - |
+    energy_accounts.planId is the governed physical reference to this catalogue. Display names, brand names, and categories must not be used as replacement join keys.
+  - |
+    The source documents ten plan display-name types but provides only examples. The complete display-name catalogue must be copied from the generator rather than invented.
+  - |
+    effectiveFrom is generated from 2022-01-01 with an offset of up to approximately 3.3 years. The exact upper-bound date depends on the generator implementation and is therefore not enforced as a hard rule.
+  - |
+    The source contains no effectiveTo date, pricing amount, tariff structure, discounts, incentives, fees, terms, or contract-length fields. This contract must not imply that those details are available.
+  - The CSV parser profile, file freshness SLA, filename convention, source timezone, and complete display-name catalogue
+    remain TBD.

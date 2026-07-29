@@ -1,0 +1,686 @@
+kind: DataContract
+apiVersion: v3.1.0
+id: source.database.organisations
+version: 1.0.0
+name: organisations
+status: draft
+domain: ORGANISATION
+description:
+  purpose: |
+    Master source dataset for Australian business entities. Each organisation has an organisationId and may be linked through global_id to a person in the customers dataset who acts as the organisation's agent.
+servers:
+- server: source-postgresql
+  type: postgresql
+  description: PostgreSQL CDC source via Debezium for organisations
+  environment: prod
+schema:
+- name: organisations
+  logicalType: object
+  physicalType: table
+  physicalName: public.organisations
+  relationships:
+  - type: foreignKey
+    from:
+    - organisations.global_id
+    to:
+    - customers.global_id
+    customProperties:
+    - property: g3:nullable
+      value: true
+  quality:
+  - id: ORG_ID_UNIQUE
+    type: library
+    metric: duplicateValues
+    mustBe: 0
+    severity: error
+    dimension: uniqueness
+    description: organisationId must be unique across the organisations dataset.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+    - property: g3:columns
+      value:
+      - organisationId
+  - id: ORG_ABN_UNIQUE_IF_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: UNIQUE_IF_PRESENT
+      columns:
+      - abn
+    severity: warning
+    dimension: consistency
+    description: A populated ABN should not be shared by multiple organisations.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: ORG_ACN_UNIQUE_IF_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: UNIQUE_IF_PRESENT
+      columns:
+      - acn
+    severity: warning
+    dimension: consistency
+    description: A populated ACN should not be shared by multiple organisations.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: ORG_ESTABLISHMENT_NOT_IN_FUTURE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: DATE_NOT_IN_FUTURE
+      columns:
+      - establishmentDate
+    severity: error
+    dimension: timeliness
+    description: establishmentDate cannot be later than the processing date.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: ORG_AGENT_LINK_PRESENT
+    type: library
+    metric: nullValues
+    mustBe: 0
+    severity: warning
+    dimension: completeness
+    description: |
+      The physical schema permits a null global_id, but the business description expects each organisation to have an agent.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+    - property: g3:columns
+      value:
+      - global_id
+  properties:
+  - name: global_id
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - 65df84b8-4274-4dbd-9667-6c9967ae6538
+    quality:
+    - id: ORG_GLOBAL_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: global_id must be a valid UUID when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: ORG_GLOBAL_ID_CUSTOMER_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: customers
+          reference_column: global_id
+      severity: error
+      dimension: consistency
+      description: global_id must exist in customers.global_id when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: person_identifier
+  - name: organisationId
+    logicalType: string
+    physicalType: string
+    required: true
+    primaryKey: true
+    primaryKeyPosition: 1
+    classification: INTERNAL
+    logicalTypeOptions:
+      pattern: ^ORG-\d{5}$
+    examples:
+    - ORG-00042
+    quality:
+    - id: ORG_ID_NOT_NULL
+      type: library
+      metric: nullValues
+      mustBe: 0
+      severity: error
+      dimension: completeness
+      description: organisationId must always be present.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: ORG_ID_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^ORG-\d{5}$
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: organisationId must follow the ORG-00000 pattern.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: organisation_identifier
+  - name: abn
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    logicalTypeOptions:
+      pattern: ^\d{2}\s\d{3}\s\d{3}\s\d{3}$
+    examples:
+    - 12 345 678 901
+    quality:
+    - id: ORG_ABN_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^\d{2}\s\d{3}\s\d{3}\s\d{3}$
+      mustBe: 0
+      severity: warning
+      dimension: conformity
+      description: abn should follow the expected Australian Business Number format.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: MASK_LAST_3_VISIBLE
+    - property: g3:domainType
+      value: australian_business_number
+  - name: acn
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    logicalTypeOptions:
+      pattern: ^\d{3}\s\d{3}\s\d{3}$
+    examples:
+    - 123 456 789
+    quality:
+    - id: ORG_ACN_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^\d{3}\s\d{3}\s\d{3}$
+      mustBe: 0
+      severity: warning
+      dimension: conformity
+      description: acn should follow the expected Australian Company Number format.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: MASK_LAST_3_VISIBLE
+    - property: g3:domainType
+      value: australian_company_number
+  - name: businessName
+    logicalType: string
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      minLength: 1
+      maxLength: 200
+    examples:
+    - Harbour Trading
+    quality:
+    - id: ORG_BUSINESS_NAME_NON_BLANK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: NON_BLANK_IF_PRESENT
+      severity: warning
+      dimension: completeness
+      description: businessName must not be blank when supplied.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: organisation_name
+  - name: legalName
+    logicalType: string
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      minLength: 1
+      maxLength: 250
+    examples:
+    - Harbour Trading Pty Ltd
+    quality:
+    - id: ORG_LEGAL_NAME_NON_BLANK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: NON_BLANK_IF_PRESENT
+      severity: warning
+      dimension: completeness
+      description: legalName must not be blank when supplied.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: legal_organisation_name
+  - name: shortName
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      minLength: 1
+      maxLength: 100
+    examples:
+    - Harbour Trading
+    quality:
+    - id: ORG_SHORT_NAME_NON_BLANK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: NON_BLANK_IF_PRESENT
+      severity: warning
+      dimension: completeness
+      description: shortName must not be blank when supplied.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: organisation_short_name
+  - name: organisationType
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: INTERNAL
+    examples:
+    - COMPANY
+    quality:
+    - id: ORG_TYPE_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - COMPANY
+        - TRUST
+        - PARTNERSHIP
+        - SOLE_TRADER
+        - OTHER
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: organisationType must be one of the supported source values.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: organisation_category
+    - property: g3:accepted
+      value:
+        values:
+        - COMPANY
+        - TRUST
+        - PARTNERSHIP
+        - SOLE_TRADER
+        - OTHER
+  - name: industryCode
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      pattern: ^\d{4}$
+    examples:
+    - '4511'
+    quality:
+    - id: ORG_INDUSTRY_CODE_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^\d{4}$
+      mustBe: 0
+      severity: warning
+      dimension: conformity
+      description: industryCode should contain four digits when supplied.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: anzsic_industry_code
+    - property: g3:accepted
+      value:
+        reference_set: ANZSIC
+  - name: industryCodeVersion
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: INTERNAL
+    examples:
+    - ANZSIC_2006
+    quality:
+    - id: ORG_INDUSTRY_VERSION_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - ANZSIC_2006
+        - ANZSIC_1993
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: industryCodeVersion must be a supported ANZSIC version.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: industry_reference_version
+    - property: g3:accepted
+      value:
+        values:
+        - ANZSIC_2006
+        - ANZSIC_1993
+  - name: establishmentDate
+    logicalType: date
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: ISO_8601_DATE
+    examples:
+    - '2008-04-21'
+    quality:
+    - id: ORG_ESTABLISHMENT_DATE_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DATE_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: establishmentDate must be parseable as a date.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: date
+  - name: lastUpdateTime
+    logicalType: timestamp
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: ISO_8601_TIMESTAMP
+    examples:
+    - '2026-06-30T14:15:00Z'
+    quality:
+    - id: ORG_LAST_UPDATE_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_TIMESTAMP_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: lastUpdateTime must be parseable as a timestamp.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: timestamp
+  - name: registeredCountry
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: INTERNAL
+    examples:
+    - AUS
+    quality:
+    - id: ORG_REGISTERED_COUNTRY
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - AUS
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: registeredCountry must be AUS in the current mock-data scope.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: country_code
+    - property: g3:accepted
+      value:
+        values:
+        - AUS
+  - name: isACNCRegistered
+    logicalType: boolean
+    physicalType: bool
+    required: true
+    classification: INTERNAL
+    examples:
+    - false
+    quality:
+    - id: ORG_ACNC_BOOLEAN
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: BOOLEAN
+      severity: error
+      dimension: conformity
+      description: isACNCRegistered must be a boolean value.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: boolean
+    - property: g3:accepted
+      value:
+        values:
+        - true
+        - false
+  - name: agentFirstName
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    logicalTypeOptions:
+      minLength: 1
+      maxLength: 100
+    examples:
+    - Mia
+    quality:
+    - id: ORG_AGENT_FIRST_NAME_NON_BLANK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: NON_BLANK_IF_PRESENT
+      severity: warning
+      dimension: completeness
+      description: agentFirstName must not be blank when supplied.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: DIRECT_IDENTIFIER
+        handling: HASH_OR_REDACT
+    - property: g3:domainType
+      value: person_name
+  - name: agentLastName
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    logicalTypeOptions:
+      minLength: 1
+      maxLength: 100
+    examples:
+    - Wilson
+    quality:
+    - id: ORG_AGENT_LAST_NAME_NON_BLANK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: NON_BLANK_IF_PRESENT
+      severity: warning
+      dimension: completeness
+      description: agentLastName must not be blank when supplied.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: DIRECT_IDENTIFIER
+        handling: HASH_OR_REDACT
+    - property: g3:domainType
+      value: person_name
+  - name: agentRole
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: INTERNAL
+    examples:
+    - DIRECTOR
+    quality:
+    - id: ORG_AGENT_ROLE_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - PRINCIPAL
+        - DIRECTOR
+        - OWNER
+        - PARTNER
+        - OTHER
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: agentRole must be one of the supported source values.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: organisation_agent_role
+    - property: g3:accepted
+      value:
+        values:
+        - PRINCIPAL
+        - DIRECTOR
+        - OWNER
+        - PARTNER
+        - OTHER
+customProperties:
+- property: g3:source
+  value:
+    category: DATABASE
+    system_type: POSTGRESQL
+    source_object: public.organisations
+    authoritative: true
+- property: g3:ingestion
+  value:
+    mechanism: DEBEZIUM_CDC
+    transport: APACHE_KAFKA
+    landing:
+      format: JSONL
+      path_template: s3://<bucket>/bronze/landing/cdc/organisations/
+      immutable: true
+    bronze_target: bronze.cdc_changes
+    cdc:
+      supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+      ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+- property: g3:lifecycle
+  value:
+    owner: TBD
+    approver: TBD
+    effective_from: null
+- property: g3:dataset
+  value:
+    expected_rows_scale_1: 500
+    physical_schema_ref: dev-tools/datagen/output/master-schema.json#/organisations
+- property: g3:alternateKeys
+  value:
+  - abn
+  - acn
+- property: g3:notes
+  value:
+  - This contract describes the raw organisations source.
+  - ABN and ACN must be masked before approved AI use.
+  - agentFirstName and agentLastName must be hashed or redacted in Silver.
+  - The proposed name-length limits should be confirmed by the team because the source schema does not define exact maximum
+    lengths.

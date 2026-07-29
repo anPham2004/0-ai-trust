@@ -1,0 +1,834 @@
+kind: DataContract
+apiVersion: v3.1.0
+id: source.database.loan_accounts
+version: 1.0.0
+name: loan_accounts
+status: draft
+domain: LENDING
+description:
+  purpose: |
+    Source dataset containing personal, car, education, and other loan arrangements linked to banking accounts. Each record includes the original amount, current balance, interest rate, term, repayment information, lifecycle status, start date, and calculated maturity date.
+servers:
+- server: source-postgresql
+  type: postgresql
+  description: PostgreSQL CDC source via Debezium for loan_accounts
+  environment: prod
+schema:
+- name: loan_accounts
+  logicalType: object
+  physicalType: table
+  physicalName: public.loan_accounts
+  relationships:
+  - type: foreignKey
+    from:
+    - loan_accounts.global_id
+    to:
+    - customers.global_id
+    customProperties:
+    - property: g3:nullable
+      value: true
+  - type: foreignKey
+    from:
+    - loan_accounts.accountId
+    to:
+    - banking_accounts.accountId
+    customProperties:
+    - property: g3:nullable
+      value: true
+  quality:
+  - id: LNA_ID_UNIQUE
+    type: library
+    metric: duplicateValues
+    mustBe: 0
+    severity: error
+    dimension: uniqueness
+    description: loanId must be unique across the dataset.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+    - property: g3:columns
+      value:
+      - loanId
+  - id: LNA_ACCOUNT_LINK_PRESENT
+    type: library
+    metric: nullValues
+    mustBe: 0
+    severity: warning
+    dimension: completeness
+    description: |
+      A loan should identify its banking account. The physical schema currently permits accountId to be null.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+    - property: g3:columns
+      value:
+      - accountId
+  - id: LNA_CUSTOMER_LINK_PRESENT
+    type: library
+    metric: nullValues
+    mustBe: 0
+    severity: warning
+    dimension: completeness
+    description: |
+      A loan should identify its customer. The physical schema currently permits global_id to be null.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+    - property: g3:columns
+      value:
+      - global_id
+  - id: LNA_ACCOUNT_CUSTOMER_CONSISTENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: REFERENCE_PAIR_CONSISTENT
+      parameters:
+        reference_dataset: banking_accounts
+        source_columns:
+        - accountId
+        - global_id
+        reference_columns:
+        - accountId
+        - global_id
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      accountId and global_id must refer to the same banking account record.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: LNA_ACCOUNT_TYPE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: REFERENCE_CONDITION
+      parameters:
+        reference_dataset: banking_accounts
+        source_key:
+          accountId: accountId
+        expected_condition:
+          column: accountType
+          equals: loan
+        ignore_missing_reference: false
+    severity: error
+    dimension: consistency
+    description: |
+      A loan_accounts record must reference a banking account with accountType equal to loan.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: LNA_ACCOUNT_PRODUCT_CATEGORY
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: REFERENCE_CONDITION
+      parameters:
+        reference_dataset: banking_accounts
+        source_key:
+          accountId: accountId
+        expected_condition:
+          column: productCategory
+          equals: PERS_LOANS
+        ignore_missing_reference: false
+    severity: error
+    dimension: consistency
+    description: |
+      A loan_accounts record must reference a banking account classified as PERS_LOANS.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: LNA_CURRENT_BALANCE_NOT_ABOVE_ORIGINAL
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: NUMERIC_COLUMN_COMPARISON
+      parameters:
+        left_column: currentBalance
+        operator: LESS_THAN_OR_EQUAL
+        right_column: originalAmount
+        parse_as: DECIMAL
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      currentBalance cannot exceed originalAmount in the current source model.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: LNA_CURRENT_BALANCE_RATIO
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: NUMERIC_COLUMN_RATIO_RANGE
+      parameters:
+        numerator_column: currentBalance
+        denominator_column: originalAmount
+        min: 0.1
+        max: 0.95
+        parse_as: DECIMAL
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      currentBalance must be between ten and ninety-five percent of originalAmount in the current source model.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: LNA_REPAYMENT_FORMULA_CONSISTENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: AMORTISATION_PAYMENT_MATCH
+      parameters:
+        principal_column: originalAmount
+        annual_interest_rate_column: interestRate
+        term_months_column: termMonths
+        repayment_frequency_column: repaymentFrequency
+        target_column: repaymentAmount
+        tolerance_ratio: 0.02
+        ignore_nulls: true
+    severity: warning
+    dimension: consistency
+    description: |
+      repaymentAmount should be consistent with the standard amortisation formula after accounting for repayment frequency and rounding.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: LNA_MATURITY_DATE_FORMULA
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: DATE_ADD_MONTHS_MATCH
+      parameters:
+        start_date_column: startDate
+        months_column: termMonths
+        target_date_column: maturityDate
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      maturityDate must equal startDate plus termMonths.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: LNA_DATE_ORDER
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: DATE_COLUMN_COMPARISON
+      parameters:
+        left_column: maturityDate
+        operator: GREATER_THAN
+        right_column: startDate
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: maturityDate must be later than startDate.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: LNA_START_DATE_NOT_IN_FUTURE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: DATE_NOT_IN_FUTURE
+      columns:
+      - startDate
+    severity: error
+    dimension: timeliness
+    description: startDate cannot be later than the processing date.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: LNA_START_DATE_WITHIN_GENERATOR_WINDOW
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: DATE_AGE_MAX
+      parameters:
+        column: startDate
+        max_years: 5
+        reference: PROCESSING_DATE
+        ignore_nulls: true
+    severity: warning
+    dimension: consistency
+    description: |
+      The source generator creates loan start dates within the previous five years; older values should be investigated.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: LNA_CORE_FINANCIAL_VALUES_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: ALL_NOT_NULL
+      columns:
+      - originalAmount
+      - currentBalance
+      - interestRate
+      - repaymentAmount
+    severity: warning
+    dimension: completeness
+    description: |
+      A loan arrangement should contain its core amount, balance, pricing, and repayment values. The physical schema currently permits null values.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  properties:
+  - name: global_id
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - 65df84b8-4274-4dbd-9667-6c9967ae6538
+    quality:
+    - id: LNA_GLOBAL_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: global_id must be a valid UUID when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: LNA_GLOBAL_ID_CUSTOMER_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: customers
+          reference_column: global_id
+      severity: error
+      dimension: consistency
+      description: |
+        global_id must exist in customers.global_id when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: person_identifier
+  - name: accountId
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - a5ef7c5b-04b6-49fa-8a0a-6b6a86be900f
+    quality:
+    - id: LNA_ACCOUNT_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: accountId must be a valid UUID when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: LNA_ACCOUNT_ID_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: banking_accounts
+          reference_column: accountId
+      severity: error
+      dimension: consistency
+      description: |
+        accountId must exist in banking_accounts.accountId when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: account_identifier
+  - name: loanId
+    logicalType: string
+    physicalType: string
+    required: true
+    primaryKey: true
+    primaryKeyPosition: 1
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - a7aa02af-3ddd-4da3-8c95-cb97d32bbd39
+    quality:
+    - id: LNA_ID_NOT_NULL
+      type: library
+      metric: nullValues
+      mustBe: 0
+      severity: error
+      dimension: completeness
+      description: loanId must always be present.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: LNA_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: loanId must be a valid UUID.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: loan_identifier
+  - name: loanType
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: CONFIDENTIAL
+    examples:
+    - PERSONAL
+    quality:
+    - id: LNA_LOAN_TYPE_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - PERSONAL
+        - CAR
+        - EDUCATION
+        - OTHER
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: loanType must be one of the supported source values.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: loan_type
+    - property: g3:accepted
+      value:
+        values:
+        - PERSONAL
+        - CAR
+        - EDUCATION
+        - OTHER
+  - name: originalAmount
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    examples:
+    - '24000.00'
+    quality:
+    - id: LNA_ORIGINAL_AMOUNT_DECIMAL
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DECIMAL_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        originalAmount must be parseable as a decimal amount when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: LNA_ORIGINAL_AMOUNT_POSITIVE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: RANGE_IF_PRESENT
+        parameters:
+          min_exclusive: 0
+      severity: error
+      dimension: conformity
+      description: originalAmount must be greater than zero when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+    - property: g3:domainType
+      value: decimal_amount
+    - property: g3:accepted
+      value:
+        currency: AUD
+        min_exclusive: 0
+  - name: currentBalance
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    examples:
+    - '14880.00'
+    quality:
+    - id: LNA_CURRENT_BALANCE_DECIMAL
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DECIMAL_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        currentBalance must be parseable as a decimal amount when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: LNA_CURRENT_BALANCE_POSITIVE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: RANGE_IF_PRESENT
+        parameters:
+          min_exclusive: 0
+      severity: error
+      dimension: conformity
+      description: |
+        currentBalance must be greater than zero in the current source model.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+    - property: g3:domainType
+      value: decimal_amount
+    - property: g3:accepted
+      value:
+        currency: AUD
+        min_exclusive: 0
+  - name: interestRate
+    logicalType: string
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      minimum: 3.0
+    examples:
+    - '8.50'
+    quality:
+    - id: LNA_INTEREST_RATE_DECIMAL
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DECIMAL_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        interestRate must be parseable as a decimal percentage when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: LNA_INTEREST_RATE_MINIMUM
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: RANGE_IF_PRESENT
+        parameters:
+          min: 3.0
+      severity: error
+      dimension: conformity
+      description: |
+        interestRate must be at least 3.0 percent in the current source model.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: BANKER_ONLY_OR_RESTRICT
+    - property: g3:domainType
+      value: annual_percentage_rate
+  - name: termMonths
+    logicalType: integer
+    physicalType: int32
+    required: true
+    classification: INTERNAL
+    examples:
+    - 36
+    quality:
+    - id: LNA_TERM_MONTHS_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - 12
+        - 24
+        - 36
+        - 48
+        - 60
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: termMonths must be one of the supported term lengths.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: term_months
+    - property: g3:accepted
+      value:
+        values:
+        - 12
+        - 24
+        - 36
+        - 48
+        - 60
+  - name: repaymentAmount
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    examples:
+    - '757.47'
+    quality:
+    - id: LNA_REPAYMENT_AMOUNT_DECIMAL
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DECIMAL_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        repaymentAmount must be parseable as a decimal amount when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: LNA_REPAYMENT_AMOUNT_POSITIVE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: RANGE_IF_PRESENT
+        parameters:
+          min_exclusive: 0
+      severity: error
+      dimension: conformity
+      description: |
+        repaymentAmount must be greater than zero when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+    - property: g3:domainType
+      value: decimal_amount
+    - property: g3:accepted
+      value:
+        currency: AUD
+        min_exclusive: 0
+  - name: repaymentFrequency
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: INTERNAL
+    examples:
+    - MONTHLY
+    quality:
+    - id: LNA_REPAYMENT_FREQUENCY_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - MONTHLY
+        - FORTNIGHTLY
+        - WEEKLY
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        repaymentFrequency must be one of the supported source values.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: repayment_frequency
+    - property: g3:accepted
+      value:
+        values:
+        - MONTHLY
+        - FORTNIGHTLY
+        - WEEKLY
+  - name: status
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: CONFIDENTIAL
+    examples:
+    - ACTIVE
+    quality:
+    - id: LNA_STATUS_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - ACTIVE
+        - CLOSED
+        - DEFAULT
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: status must be one of the supported source values.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: CREDIT_STATUS_INFORMATION
+        handling: BANKER_ONLY_OR_RESTRICT
+    - property: g3:domainType
+      value: loan_status
+    - property: g3:accepted
+      value:
+        values:
+        - ACTIVE
+        - CLOSED
+        - DEFAULT
+  - name: startDate
+    logicalType: date
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      format: ISO_8601_DATE
+    examples:
+    - '2024-03-12'
+    quality:
+    - id: LNA_START_DATE_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DATE_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: startDate must be parseable as a date when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: date
+  - name: maturityDate
+    logicalType: date
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      format: ISO_8601_DATE
+    examples:
+    - '2027-03-12'
+    quality:
+    - id: LNA_MATURITY_DATE_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DATE_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: maturityDate must be parseable as a date when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: date
+customProperties:
+- property: g3:source
+  value:
+    category: DATABASE
+    system_type: POSTGRESQL
+    source_object: public.loan_accounts
+    authoritative: true
+- property: g3:ingestion
+  value:
+    mechanism: DEBEZIUM_CDC
+    transport: APACHE_KAFKA
+    landing:
+      format: JSONL
+      path_template: s3://<bucket>/bronze/landing/cdc/loan_accounts/
+      immutable: true
+    bronze_target: bronze.cdc_changes
+    cdc:
+      supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+      ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+- property: g3:lifecycle
+  value:
+    owner: TBD
+    approver: TBD
+    effective_from: null
+- property: g3:dataset
+  value:
+    expected_rows_scale_1: 375
+    physical_schema_ref: dev-tools/datagen/output/master-schema.json#/loan_accounts
+- property: g3:notes
+  value:
+  - |
+    This contract follows the authoritative physical source schema and includes all thirteen fields defined for loan_accounts.
+  - |
+    The physical loan_accounts dataset does not contain organisationId. Business or personal context must be derived by joining accountId to banking_accounts and reading banking_accounts.organisationId.
+  - |
+    originalAmount, currentBalance, and repaymentAmount must be converted to approved range buckets or removed before AI consumption.
+  - |
+    status is sensitive credit servicing information. DEFAULT status should be restricted to approved banker-facing consumers.
+  - The amortisation rule is a warning because exact repayment calculations can vary with compounding, repayment timing, and
+    rounding conventions.

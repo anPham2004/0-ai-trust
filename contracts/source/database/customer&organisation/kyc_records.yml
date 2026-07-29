@@ -1,0 +1,830 @@
+kind: DataContract
+apiVersion: v3.1.0
+id: source.database.kyc_records
+version: 1.0.0
+name: kyc_records
+status: draft
+domain: CUSTOMER_AND_ORGANISATION
+description:
+  purpose: |
+    One-to-one source dataset containing customer identity verification information. When organisationId is populated, the record also includes Know Your Business checks for the linked organisation.
+servers:
+- server: source-postgresql
+  type: postgresql
+  description: PostgreSQL CDC source via Debezium for kyc_records
+  environment: prod
+schema:
+- name: kyc_records
+  logicalType: object
+  physicalType: table
+  physicalName: public.kyc_records
+  relationships:
+  - type: foreignKey
+    from:
+    - kyc_records.global_id
+    to:
+    - customers.global_id
+    customProperties:
+    - property: g3:nullable
+      value: true
+  - type: foreignKey
+    from:
+    - kyc_records.customerId
+    to:
+    - customers.customerId
+    customProperties:
+    - property: g3:nullable
+      value: true
+  - type: foreignKey
+    from:
+    - kyc_records.organisationId
+    to:
+    - organisations.organisationId
+    customProperties:
+    - property: g3:nullable
+      value: true
+  quality:
+  - id: KYC_ID_UNIQUE
+    type: library
+    metric: duplicateValues
+    mustBe: 0
+    severity: error
+    dimension: uniqueness
+    description: kycId must be unique across the dataset.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+    - property: g3:columns
+      value:
+      - kycId
+  - id: KYC_GLOBAL_ID_UNIQUE_IF_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: UNIQUE_IF_PRESENT
+      columns:
+      - global_id
+    severity: error
+    dimension: consistency
+    description: |
+      The source is generated as one KYC record per customer, so a populated global_id must not appear in multiple KYC records.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: KYC_CUSTOMER_ID_UNIQUE_IF_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: UNIQUE_IF_PRESENT
+      columns:
+      - customerId
+    severity: error
+    dimension: consistency
+    description: |
+      The source is generated as one KYC record per customer, so a populated customerId must not appear in multiple KYC records.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: KYC_CUSTOMER_LINK_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: ALL_NOT_NULL
+      columns:
+      - global_id
+      - customerId
+    severity: warning
+    dimension: completeness
+    description: |
+      A KYC record should identify its customer using both global_id and customerId. The physical schema currently permits null values.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: KYC_VERIFIED_DATE_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_NOT_NULL
+      parameters:
+        when:
+          column: verificationStatus
+          equals: VERIFIED
+        target_column: verificationDate
+    severity: warning
+    dimension: consistency
+    description: |
+      A VERIFIED record should include the date on which verification occurred.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: KYC_LAST_REVIEW_NOT_BEFORE_VERIFICATION
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: COLUMN_COMPARISON
+      parameters:
+        left_column: lastReviewDate
+        operator: GREATER_THAN_OR_EQUAL
+        right_column: verificationDate
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      lastReviewDate cannot be earlier than verificationDate.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: KYC_NEXT_REVIEW_AFTER_LAST_REVIEW
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: COLUMN_COMPARISON
+      parameters:
+        left_column: nextReviewDate
+        operator: GREATER_THAN
+        right_column: lastReviewDate
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      nextReviewDate must be later than lastReviewDate.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: KYC_KYB_FIELDS_PRESENT_FOR_ORGANISATION
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_ALL_NOT_NULL
+      parameters:
+        when:
+          column: organisationId
+          operator: IS_NOT_NULL
+        target_columns:
+        - abnVerified
+        - asicCheckStatus
+        - beneficialOwnershipVerified
+    severity: error
+    dimension: consistency
+    description: |
+      When organisationId is present, all three KYB verification fields must also be present.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: KYC_KYB_FIELDS_NULL_WITHOUT_ORGANISATION
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_ALL_NULL
+      parameters:
+        when:
+          column: organisationId
+          operator: IS_NULL
+        target_columns:
+        - abnVerified
+        - asicCheckStatus
+        - beneficialOwnershipVerified
+    severity: warning
+    dimension: consistency
+    description: |
+      When organisationId is absent, the organisation-specific KYB fields should normally be null.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  properties:
+  - name: global_id
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - 65df84b8-4274-4dbd-9667-6c9967ae6538
+    quality:
+    - id: KYC_GLOBAL_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: global_id must be a valid UUID when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: KYC_GLOBAL_ID_CUSTOMER_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: customers
+          reference_column: global_id
+      severity: error
+      dimension: consistency
+      description: |
+        global_id must exist in customers.global_id when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: person_identifier
+  - name: customerId
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      pattern: ^CUST-\d{5}$
+    examples:
+    - CUST-00042
+    quality:
+    - id: KYC_CUSTOMER_ID_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^CUST-\d{5}$
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        customerId must follow the CUST-00000 pattern when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: KYC_CUSTOMER_ID_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: customers
+          reference_column: customerId
+      severity: error
+      dimension: consistency
+      description: |
+        customerId must exist in customers.customerId when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: customer_identifier
+  - name: kycId
+    logicalType: string
+    physicalType: string
+    required: true
+    primaryKey: true
+    primaryKeyPosition: 1
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - 3f4c9d89-1eb9-4a49-b3ab-017c58d95cc1
+    quality:
+    - id: KYC_ID_NOT_NULL
+      type: library
+      metric: nullValues
+      mustBe: 0
+      severity: error
+      dimension: completeness
+      description: kycId must always be present.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: KYC_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: kycId must be a valid UUID.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: kyc_record_identifier
+  - name: verificationStatus
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: CONFIDENTIAL
+    examples:
+    - VERIFIED
+    quality:
+    - id: KYC_VERIFICATION_STATUS_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - VERIFIED
+        - PENDING
+        - FAILED
+        - EXPIRED
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        verificationStatus must be one of the supported source values.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: verification_status
+    - property: g3:accepted
+      value:
+        values:
+        - VERIFIED
+        - PENDING
+        - FAILED
+        - EXPIRED
+  - name: verificationDate
+    logicalType: date
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      format: ISO_8601_DATE
+    examples:
+    - '2025-03-12'
+    quality:
+    - id: KYC_VERIFICATION_DATE_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DATE_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: verificationDate must be parseable as a date.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: date
+  - name: verificationMethod
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: CONFIDENTIAL
+    examples:
+    - ELECTRONIC
+    quality:
+    - id: KYC_VERIFICATION_METHOD_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - DOCUMENT
+        - ELECTRONIC
+        - IN_PERSON
+        - VIDEO
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        verificationMethod must be one of the supported source values.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: verification_method
+    - property: g3:accepted
+      value:
+        values:
+        - DOCUMENT
+        - ELECTRONIC
+        - IN_PERSON
+        - VIDEO
+  - name: riskRating
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: HIGHLY_CONFIDENTIAL
+    examples:
+    - LOW
+    quality:
+    - id: KYC_RISK_RATING_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - LOW
+        - MEDIUM
+        - HIGH
+        - VERY_HIGH
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: riskRating must be one of the supported source values.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: RISK_AND_COMPLIANCE_INFORMATION
+        handling: REDACT_OR_BANKER_ONLY
+    - property: g3:domainType
+      value: customer_risk_rating
+    - property: g3:accepted
+      value:
+        values:
+        - LOW
+        - MEDIUM
+        - HIGH
+        - VERY_HIGH
+  - name: pepStatus
+    logicalType: boolean
+    physicalType: bool
+    required: true
+    classification: HIGHLY_CONFIDENTIAL
+    examples:
+    - false
+    quality:
+    - id: KYC_PEP_STATUS_BOOLEAN
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: BOOLEAN
+      severity: error
+      dimension: conformity
+      description: pepStatus must be a boolean value.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: RISK_AND_COMPLIANCE_INFORMATION
+        handling: REDACT_OR_BANKER_ONLY
+    - property: g3:domainType
+      value: politically_exposed_person_flag
+    - property: g3:accepted
+      value:
+        values:
+        - true
+        - false
+  - name: sanctionsCheck
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: HIGHLY_CONFIDENTIAL
+    examples:
+    - CLEAR
+    quality:
+    - id: KYC_SANCTIONS_CHECK_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - CLEAR
+        - MATCH
+        - PENDING
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        sanctionsCheck must be one of the supported source values.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: RISK_AND_COMPLIANCE_INFORMATION
+        handling: REDACT_OR_BANKER_ONLY
+    - property: g3:domainType
+      value: sanctions_check_status
+    - property: g3:accepted
+      value:
+        values:
+        - CLEAR
+        - MATCH
+        - PENDING
+  - name: lastReviewDate
+    logicalType: date
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      format: ISO_8601_DATE
+    examples:
+    - '2025-06-10'
+    quality:
+    - id: KYC_LAST_REVIEW_DATE_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DATE_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: lastReviewDate must be parseable as a date.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: date
+  - name: nextReviewDate
+    logicalType: date
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      format: ISO_8601_DATE
+    examples:
+    - '2026-06-10'
+    quality:
+    - id: KYC_NEXT_REVIEW_DATE_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DATE_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: nextReviewDate must be parseable as a date.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: date
+  - name: documentTypes
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    examples:
+    - passport,drivers_licence,utility_bill
+    quality:
+    - id: KYC_DOCUMENT_TYPES_LIST
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: DELIMITED_ACCEPTED_VALUES_IF_PRESENT
+        parameters:
+          delimiter: ','
+          minimum_items: 2
+          maximum_items: 4
+          values:
+          - passport
+          - drivers_licence
+          - medicare_card
+          - utility_bill
+          - bank_statement
+          - birth_certificate
+      severity: warning
+      dimension: conformity
+      description: |
+        documentTypes should contain two to four supported document types.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: IDENTITY_DOCUMENT_INFORMATION
+        handling: REDACT_OR_BANKER_ONLY
+    - property: g3:domainType
+      value: comma_separated_document_type_list
+    - property: g3:accepted
+      value:
+        delimiter: ','
+        minimum_items: 2
+        maximum_items: 4
+        item_values:
+        - passport
+        - drivers_licence
+        - medicare_card
+        - utility_bill
+        - bank_statement
+        - birth_certificate
+  - name: organisationId
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      pattern: ^ORG-\d{5}$
+    examples:
+    - ORG-00042
+    quality:
+    - id: KYC_ORGANISATION_ID_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^ORG-\d{5}$
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        organisationId must follow the ORG-00000 pattern when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: KYC_ORGANISATION_ID_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: organisations
+          reference_column: organisationId
+      severity: error
+      dimension: consistency
+      description: |
+        organisationId must exist in organisations.organisationId when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: organisation_identifier
+  - name: abnVerified
+    logicalType: boolean
+    physicalType: bool
+    classification: CONFIDENTIAL
+    examples:
+    - true
+    quality:
+    - id: KYC_ABN_VERIFIED_BOOLEAN
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: BOOLEAN_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: abnVerified must be a boolean value when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: abn_verification_flag
+    - property: g3:accepted
+      value:
+        values:
+        - true
+        - false
+  - name: asicCheckStatus
+    logicalType: string
+    physicalType: string
+    classification: CONFIDENTIAL
+    examples:
+    - CURRENT
+    quality:
+    - id: KYC_ASIC_CHECK_STATUS_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - CURRENT
+        - PENDING
+        - DEREGISTERED
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        asicCheckStatus must be one of the supported source values when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: asic_check_status
+    - property: g3:accepted
+      value:
+        values:
+        - CURRENT
+        - PENDING
+        - DEREGISTERED
+  - name: beneficialOwnershipVerified
+    logicalType: boolean
+    physicalType: bool
+    classification: CONFIDENTIAL
+    examples:
+    - true
+    quality:
+    - id: KYC_BENEFICIAL_OWNERSHIP_BOOLEAN
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: BOOLEAN_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        beneficialOwnershipVerified must be a boolean value when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: beneficial_ownership_verification_flag
+    - property: g3:accepted
+      value:
+        values:
+        - true
+        - false
+customProperties:
+- property: g3:source
+  value:
+    category: DATABASE
+    system_type: POSTGRESQL
+    source_object: public.kyc_records
+    authoritative: true
+- property: g3:ingestion
+  value:
+    mechanism: DEBEZIUM_CDC
+    transport: APACHE_KAFKA
+    landing:
+      format: JSONL
+      path_template: s3://<bucket>/bronze/landing/cdc/kyc_records/
+      immutable: true
+    bronze_target: bronze.cdc_changes
+    cdc:
+      supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+      ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+- property: g3:lifecycle
+  value:
+    owner: TBD
+    approver: TBD
+    effective_from: null
+- property: g3:dataset
+  value:
+    expected_rows_scale_1: 1000
+    physical_schema_ref: dev-tools/datagen/output/master-schema.json#/kyc_records
+- property: g3:alternateKeys
+  value:
+  - global_id
+  - customerId
+- property: g3:notes
+  value:
+  - |
+    This contract describes the raw source fields. Silver may derive a record_type value of KYC or KYB from the presence of organisationId.
+  - |
+    riskRating, pepStatus, sanctionsCheck, and documentTypes are highly sensitive compliance information and must not be exposed to Customer.AI.
+  - |
+    The source schema states that abnVerified, asicCheckStatus, and beneficialOwnershipVerified are populated only when organisationId is present.
+  - Customer-link completeness is currently a warning because global_id and customerId are physically nullable, even though
+    the dataset is described as one-to-one with customers.

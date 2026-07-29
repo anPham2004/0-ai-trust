@@ -1,0 +1,702 @@
+kind: DataContract
+apiVersion: v3.1.0
+id: source.database.banking_scheduled_payments
+version: 1.0.0
+name: banking_scheduled_payments
+status: draft
+domain: BANKING
+description:
+  purpose: |
+    Source dataset containing recurring and scheduled payment arrangements associated with banking accounts. Each record includes payment status, customer references, amount, recurrence frequency, next payment date, and CDR structured JSON fields.
+servers:
+- server: source-postgresql
+  type: postgresql
+  description: PostgreSQL CDC source via Debezium for banking_scheduled_payments
+  environment: prod
+schema:
+- name: banking_scheduled_payments
+  logicalType: object
+  physicalType: table
+  physicalName: public.banking_scheduled_payments
+  relationships:
+  - type: foreignKey
+    from:
+    - banking_scheduled_payments.global_id
+    to:
+    - customers.global_id
+    customProperties:
+    - property: g3:nullable
+      value: true
+  - type: foreignKey
+    from:
+    - banking_scheduled_payments.accountId
+    to:
+    - banking_accounts.accountId
+    customProperties:
+    - property: g3:nullable
+      value: true
+  quality:
+  - id: SCH_PAYMENT_ID_UNIQUE
+    type: library
+    metric: duplicateValues
+    mustBe: 0
+    severity: error
+    dimension: uniqueness
+    description: |
+      scheduledPaymentId must be unique across the dataset.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+    - property: g3:columns
+      value:
+      - scheduledPaymentId
+  - id: SCH_ACCOUNT_LINK_PRESENT
+    type: library
+    metric: nullValues
+    mustBe: 0
+    severity: warning
+    dimension: completeness
+    description: |
+      A scheduled payment should identify its banking account. The physical schema currently permits accountId to be null.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+    - property: g3:columns
+      value:
+      - accountId
+  - id: SCH_CUSTOMER_LINK_PRESENT
+    type: library
+    metric: nullValues
+    mustBe: 0
+    severity: warning
+    dimension: completeness
+    description: |
+      A scheduled payment should identify its customer. The physical schema currently permits global_id to be null.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+    - property: g3:columns
+      value:
+      - global_id
+  - id: SCH_ACCOUNT_CUSTOMER_CONSISTENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: REFERENCE_PAIR_CONSISTENT
+      parameters:
+        reference_dataset: banking_accounts
+        source_columns:
+        - accountId
+        - global_id
+        reference_columns:
+        - accountId
+        - global_id
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      accountId and global_id must refer to the same banking account record.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: SCH_ACTIVE_NEXT_DATE_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_NOT_NULL
+      parameters:
+        when:
+          column: status
+          equals: ACTIVE
+        target_column: nextPaymentDate
+    severity: warning
+    dimension: consistency
+    description: |
+      An ACTIVE scheduled payment should include its next payment date.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: SCH_ACTIVE_RECURRENCE_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_NOT_NULL
+      parameters:
+        when:
+          column: status
+          equals: ACTIVE
+        target_column: recurrence
+    severity: warning
+    dimension: consistency
+    description: |
+      An ACTIVE scheduled payment should include recurrence information.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: SCH_PAYMENT_DETAIL_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: ANY_NOT_NULL
+      columns:
+      - amount
+      - paymentSet
+    severity: error
+    dimension: consistency
+    description: |
+      At least one of amount or paymentSet must be present to describe the scheduled payment value.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: SCH_NEXT_DATE_WITHIN_GENERATOR_WINDOW
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: DATE_OFFSET_RANGE
+      parameters:
+        column: nextPaymentDate
+        reference: PROCESSING_DATE
+        min_days: 0
+        max_days: 90
+        ignore_nulls: true
+    severity: warning
+    dimension: consistency
+    description: |
+      The source generator creates nextPaymentDate from the current date up to ninety days ahead; values outside that window should be investigated.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: SCH_ACTIVE_ACCOUNT_EXPECTED
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: REFERENCE_CONDITION
+      parameters:
+        reference_dataset: banking_accounts
+        source_key:
+          accountId: accountId
+        expected_condition:
+          column: isActive
+          equals: true
+        ignore_missing_reference: false
+    severity: warning
+    dimension: consistency
+    description: |
+      ACTIVE scheduled payments are normally expected to belong to active banking accounts.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  properties:
+  - name: global_id
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - 65df84b8-4274-4dbd-9667-6c9967ae6538
+    quality:
+    - id: SCH_GLOBAL_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: global_id must be a valid UUID when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: SCH_GLOBAL_ID_CUSTOMER_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: customers
+          reference_column: global_id
+      severity: error
+      dimension: consistency
+      description: |
+        global_id must exist in customers.global_id when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: person_identifier
+  - name: accountId
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - a5ef7c5b-04b6-49fa-8a0a-6b6a86be900f
+    quality:
+    - id: SCH_ACCOUNT_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: accountId must be a valid UUID when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: SCH_ACCOUNT_ID_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: banking_accounts
+          reference_column: accountId
+      severity: error
+      dimension: consistency
+      description: |
+        accountId must exist in banking_accounts.accountId when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: account_identifier
+  - name: scheduledPaymentId
+    logicalType: string
+    physicalType: string
+    required: true
+    primaryKey: true
+    primaryKeyPosition: 1
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - d8e90fce-bbd7-4935-8ea5-32c51ff0a807
+    quality:
+    - id: SCH_PAYMENT_ID_NOT_NULL
+      type: library
+      metric: nullValues
+      mustBe: 0
+      severity: error
+      dimension: completeness
+      description: scheduledPaymentId must always be present.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: SCH_PAYMENT_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: scheduledPaymentId must be a valid UUID.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: scheduled_payment_identifier
+  - name: nickname
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    logicalTypeOptions:
+      minLength: 1
+      maxLength: 200
+    examples:
+    - Monthly rent payment
+    quality:
+    - id: SCH_NICKNAME_NON_BLANK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: NON_BLANK_IF_PRESENT
+      severity: warning
+      dimension: completeness
+      description: nickname must not be blank when supplied.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: CUSTOMER_FINANCIAL_RELATIONSHIP_INFORMATION
+        handling: REDACT_OR_RESTRICT
+    - property: g3:domainType
+      value: scheduled_payment_nickname
+  - name: status
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: CONFIDENTIAL
+    examples:
+    - ACTIVE
+    quality:
+    - id: SCH_STATUS_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - ACTIVE
+        - SKIP
+        - INACTIVE
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: status must be one of the supported source values.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: scheduled_payment_status
+    - property: g3:accepted
+      value:
+        values:
+        - ACTIVE
+        - SKIP
+        - INACTIVE
+  - name: payerReference
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    examples:
+    - REF-ABCD-1234
+    quality:
+    - id: SCH_PAYER_REFERENCE_PATTERN
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: SOURCE_PATTERN_IF_PRESENT
+        parameters:
+          pattern: REF-????-####
+      severity: warning
+      dimension: conformity
+      description: |
+        payerReference should follow the source generator pattern REF-????-#### when supplied.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_REFERENCE_INFORMATION
+        handling: TOKENISE_OR_REDACT
+    - property: g3:domainType
+      value: payer_reference
+    - property: g3:accepted
+      value:
+        source_pattern: REF-????-####
+  - name: payeeReference
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    examples:
+    - PAY-WXYZ-5678
+    quality:
+    - id: SCH_PAYEE_REFERENCE_PATTERN
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: SOURCE_PATTERN_IF_PRESENT
+        parameters:
+          pattern: PAY-????-####
+      severity: warning
+      dimension: conformity
+      description: |
+        payeeReference should follow the source generator pattern PAY-????-#### when supplied.
+      customProperties:
+      - property: g3:action
+        value: ALLOW_WITH_WARNING
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_REFERENCE_INFORMATION
+        handling: TOKENISE_OR_REDACT
+    - property: g3:domainType
+      value: payee_reference
+    - property: g3:accepted
+      value:
+        source_pattern: PAY-????-####
+  - name: amount
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    examples:
+    - '490.00'
+    quality:
+    - id: SCH_AMOUNT_DECIMAL
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DECIMAL_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: amount must be parseable as a decimal when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: SCH_AMOUNT_POSITIVE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: RANGE_IF_PRESENT
+        parameters:
+          min_exclusive: 0
+      severity: error
+      dimension: conformity
+      description: amount must be greater than zero when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+    - property: g3:domainType
+      value: decimal_amount
+    - property: g3:accepted
+      value:
+        currency: AUD
+        min_exclusive: 0
+  - name: frequency
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: CONFIDENTIAL
+    examples:
+    - MONTHLY
+    quality:
+    - id: SCH_FREQUENCY_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - WEEKLY
+        - FORTNIGHTLY
+        - MONTHLY
+        - QUARTERLY
+        - ANNUALLY
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: frequency must be one of the supported source values.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: payment_frequency
+    - property: g3:accepted
+      value:
+        values:
+        - WEEKLY
+        - FORTNIGHTLY
+        - MONTHLY
+        - QUARTERLY
+        - ANNUALLY
+  - name: nextPaymentDate
+    logicalType: date
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      format: ISO_8601_DATE
+    examples:
+    - '2026-08-15'
+    quality:
+    - id: SCH_NEXT_PAYMENT_DATE_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DATE_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        nextPaymentDate must be parseable as a date when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_ACTIVITY_METADATA
+        handling: RESTRICT_OR_GENERALISE
+    - property: g3:domainType
+      value: date
+  - name: from
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    logicalTypeOptions:
+      format: JSON_OBJECT
+    examples:
+    - '{}'
+    quality:
+    - id: SCH_FROM_JSON
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: VALID_JSON_OBJECT_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        from must contain a valid JSON object when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_ACCOUNT_INFORMATION
+        handling: REDACT_OR_RESTRICT
+    - property: g3:domainType
+      value: cdr_scheduled_payment_from_json
+    - property: g3:accepted
+      value:
+        schema_reference: CDR_BankingScheduledPaymentFrom
+        exact_schema_status: TBD_FROM_GENERATOR_CONFIG
+  - name: paymentSet
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    logicalTypeOptions:
+      format: JSON_ARRAY
+    examples:
+    - '[]'
+    quality:
+    - id: SCH_PAYMENT_SET_JSON
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: VALID_JSON_ARRAY_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        paymentSet must contain a valid JSON array when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_PAYMENT_DESTINATION_INFORMATION
+        handling: REDACT_OR_RESTRICT
+    - property: g3:domainType
+      value: cdr_scheduled_payment_set_json
+    - property: g3:accepted
+      value:
+        schema_reference: CDR_BankingScheduledPaymentSet
+        exact_schema_status: TBD_FROM_GENERATOR_CONFIG
+  - name: recurrence
+    logicalType: string
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      format: JSON_OBJECT
+    examples:
+    - '{}'
+    quality:
+    - id: SCH_RECURRENCE_JSON
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: VALID_JSON_OBJECT_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        recurrence must contain a valid JSON object when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: cdr_scheduled_payment_recurrence_json
+    - property: g3:accepted
+      value:
+        schema_reference: CDR_BankingScheduledPaymentRecurrence
+        exact_schema_status: TBD_FROM_GENERATOR_CONFIG
+customProperties:
+- property: g3:source
+  value:
+    category: DATABASE
+    system_type: POSTGRESQL
+    source_object: public.banking_scheduled_payments
+    authoritative: true
+- property: g3:ingestion
+  value:
+    mechanism: DEBEZIUM_CDC
+    transport: APACHE_KAFKA
+    landing:
+      format: JSONL
+      path_template: s3://<bucket>/bronze/landing/cdc/banking_scheduled_payments/
+      immutable: true
+    bronze_target: bronze.cdc_changes
+    cdc:
+      supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+      ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+- property: g3:lifecycle
+  value:
+    owner: TBD
+    approver: TBD
+    effective_from: null
+- property: g3:dataset
+  value:
+    expected_rows_scale_1: 1200
+    physical_schema_ref: dev-tools/datagen/output/master-schema.json#/banking_scheduled_payments
+- property: g3:notes
+  value:
+  - |
+    This contract follows the latest master schema, which contains thirteen physical fields including payerReference, payeeReference, from, paymentSet, and recurrence.
+  - |
+    amount, payerReference, payeeReference, from, and paymentSet contain sensitive financial information and must not be exposed directly to AI-ready outputs.
+  - |
+    The exact nested schemas of from, paymentSet, and recurrence must be copied from the data generator or the approved CDR schema before this contract is promoted to APPROVED.
+  - |
+    The reference patterns are preserved exactly as documented by the source. This contract does not assume whether each question-mark placeholder accepts only letters or a broader character set.
+  - Account-link and customer-link completeness remain warnings because the physical schema marks accountId and global_id
+    as nullable.
