@@ -11,6 +11,10 @@ description:
 servers:
 - server: source-postgresql
   type: postgresql
+  host: postgres
+  port: 5432
+  database: g3_sources
+  schema: public
   description: PostgreSQL CDC source via Debezium for service_cases
   environment: prod
 schema:
@@ -832,7 +836,7 @@ customProperties:
       format: JSONL
       path_template: s3://<bucket>/bronze/landing/cdc/service_cases/
       immutable: true
-    bronze_target: bronze.cdc_changes
+    bronze_target: bronze.cdc_service_cases
     cdc:
       supported_operations:
       - SNAPSHOT

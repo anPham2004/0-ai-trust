@@ -11,6 +11,9 @@ description:
 servers:
 - server: source-kafka
   type: kafka
+  host: kafka:9092
+  topic: nab.application.events
+  format: json
   description: Kafka event stream for application_stage_history
   environment: prod
 schema:
@@ -807,7 +810,7 @@ customProperties:
       format: JSONL
       path_template: s3://<bucket>/bronze/landing/event/application_stage_history/
       immutable: true
-    bronze_target: bronze.kafka_events
+    bronze_target: bronze.event_application_stage_history
     deduplicated_bronze_target: bronze.kafka_events_deduplicated
     event_envelope:
       retained_metadata:

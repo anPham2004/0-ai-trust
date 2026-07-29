@@ -6,12 +6,12 @@ USING (
     target_org_id,
     relationship_type,
     is_active,
-    relationship_start_date AS start_date,
+    start_date,
     pipeline_run_id,
     current_timestamp() AS processed_at,
-    dq_status
-  FROM `0-ai-trust`.silver.ip_organisation_relationship
-  WHERE dq_status IN ('PASSED', 'WARNING')
+    'PASSED' AS dq_status
+  FROM `0-ai-trust`.silver.ip_org_relationship
+  WHERE `__END_AT` IS NULL
     AND masking_status IN ('MASKED', 'CLEAN')
 ) AS source
 ON target.org_rel_key = source.org_rel_key

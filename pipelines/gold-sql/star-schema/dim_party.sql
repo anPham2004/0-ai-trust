@@ -26,9 +26,9 @@ USING (
     CAST(NULL AS STRING) AS abn_masked,
     i.pipeline_run_id,
     current_timestamp() AS processed_at,
-    i.dq_status
+    'PASSED' AS dq_status
   FROM `0-ai-trust`.silver.ip_individual AS i
-  WHERE i.dq_status IN ('PASSED', 'WARNING')
+  WHERE i.`__END_AT` IS NULL
     AND i.masking_status IN ('MASKED', 'CLEAN')
 
   UNION ALL
@@ -59,13 +59,13 @@ USING (
     o.abn_masked,
     o.pipeline_run_id,
     current_timestamp() AS processed_at,
-    o.dq_status
+    'PASSED' AS dq_status
   FROM `0-ai-trust`.silver.ip_organisation AS o
   LEFT JOIN `0-ai-trust`.silver.ip_individual AS i
     ON i.global_id = o.global_id
-   AND i.dq_status IN ('PASSED', 'WARNING')
+   AND i.`__END_AT` IS NULL
    AND i.masking_status IN ('MASKED', 'CLEAN')
-  WHERE o.dq_status IN ('PASSED', 'WARNING')
+  WHERE o.`__END_AT` IS NULL
     AND o.masking_status IN ('MASKED', 'CLEAN')
 ) AS source
 ON target.party_key = source.party_key

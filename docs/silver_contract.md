@@ -2,7 +2,7 @@
 
 Silver contracts define the validated, schema-enforced, PII-classified output of the Silver layer. Each contract governs one curated product derived from Bronze landing tables, with executable quality rules, masking strategies, and Zero Trust AI policy.
 
-**Format**: DCS v3.1.0 (`kind: DataContract`, `apiVersion: v3.1.0`)
+**Format**: ODCS v3.1.0 (`kind: DataContract`, `apiVersion: v3.1.0`)
 
 ## Contract Inventory
 
@@ -74,14 +74,15 @@ schema:
   logicalType: object
   physicalType: table
 
-  # Quality rules — executable Spark SQL, compiled via F.expr()
+  # Row rules — an ODCS custom extension compiled to Lakeflow expectations
   quality:
   - id: {RULE_ID}
-    type: sql
-    query: "{spark_sql_expression}"
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: "{spark_sql_boolean_expression}"
     severity: error          # error → QUARANTINE | warning → ALLOW_WITH_WARNING
-    dimension: completeness  # completeness | validity | timeliness
+    dimension: completeness  # completeness | conformity | timeliness
     description: "{description}"
     customProperties:
     - property: g3:action
@@ -119,7 +120,7 @@ customProperties:
   value:
   - type: DATABASE              # DATABASE | EVENT | FILE
     ingestion_mechanism: DEBEZIUM_CDC
-    bronze_sink: cdc_changes    # cdc_changes | kafka_events | file_arrivals
+    bronze_sink: cdc_{dataset}  # event_{dataset} / file_{dataset}
     source_dataset: public.{table}
     fields: [{camelCase source fields}]
     cdc:
@@ -204,18 +205,20 @@ customProperties:
 
 | Source Type | `bronze_sink` |
 |---|---|
-| DATABASE | cdc_changes |
-| EVENT | kafka_events |
-| FILE | file_arrivals |
+| DATABASE | `cdc_<dataset>` |
+| EVENT | `event_<dataset>` |
+| FILE | `file_<dataset>` |
 
-**Pipeline metadata columns**: Every contract includes 5 pipeline-injected fields with `required: true`, `classification: INTERNAL`:
-`pipeline_run_id` · `source_table` · `processed_at` · `dq_status` (PASSED/FAILED/WARNING) · `masking_status` (MASKED/CLEAN)
+**Pipeline metadata columns**: Every contract includes four pipeline-injected fields:
+`pipeline_run_id` · `source_table` · `processed_at` · `masking_status`.
+Row-level DQ status is not published in canonical Silver; evidence is retained in
+the pipeline event log and the protected `quarantine` schema.
 
 **Quality rules**: Two severity levels:
 - `severity: error` + `g3:action: QUARANTINE` → hard failures, route to quarantine
 - `severity: warning` + `g3:action: ALLOW_WITH_WARNING` → soft failures, retain with flag
 
-Every rule is classified in `g3:qualityDimensions` under `completeness`, `validity`, or `timeliness`.
+Every rule is classified in `g3:qualityDimensions` under the ODCS dimensions used by this project, including `completeness`, `conformity`, and `timeliness`.
 
 ## Source Coverage
 
@@ -245,9 +248,10 @@ Every rule is classified in `g3:qualityDimensions` under `completeness`, `validi
 
 | File | Reads from Contract | Notes |
 |---|---|---|
-| `data_contract_loader.py` | `status`, full DCS YAML | Loads from `/Workspace/Shared/0-ai-trust/contracts/`. Rejects non-APPROVED/ACTIVE when `require_active=True`. All 19 are `draft` — load with `require_active=False` until approved. |
-| `data_quality_validator.py` | `schema[0].quality[]` with `id`, `query`, `severity` | Compiles `query` to `F.expr()`. Rule severity maps to QUARANTINE / WARNING / PASSED. |
-| `pipeline_metadata_builder.py` | `name`, `version`, `g3:knownSourceLimitations` | Writes `contract_name`, `contract_version`, `known_limitations`, `quality_evaluated_at`. |
+| `data_contract_loader.py` | `status`, full ODCS YAML | Resolves nested contracts by ODCS `name`. Dev accepts `draft`; production accepts only `approved`/`active`. |
+| `data_quality_validator.py` | `schema[0].quality[]` | Compiles `databricks-lakeflow` Boolean expressions into expectations. |
+| `quarantine.py` | contract identity and failed rules | Routes pre/post-transform failures to `quarantine.record_failures`. |
+| `dependency_validator.py` | `g3:dependencies` | Publishes unresolved FK and application-lifecycle violations after the configured grace period. |
 
 ## Known Dependencies
 
@@ -255,10 +259,11 @@ Every rule is classified in `g3:qualityDimensions` under `completeness`, `validi
 |---|---|
 | `contracts/gold/cde_registry.yml` | References old product names. Needs update to subject-area prefixed names. |
 | `contracts/gold/scope_registry.yml` | Same. |
-| `data_quality_validator.py` | Needs update to read from DCS `schema[0].quality[]` (was `quality_rules.hard[]`/`warn[]`) and `id` (was `rule_id`). |
+| `data_quality_validator.py` | Reads ODCS `schema[0].quality[]` and compiles the Databricks-specific custom extension. |
 
-## Unresolved Questions
+## Runtime Decisions
 
-1. **arr-loan and arr-mortgage**: Should `organisation_id` / `is_business_arrangement` be added via a JOIN with `banking_accounts` at Silver, or is business/personal segmentation Gold-layer only?
-2. **Gold contract update**: When should `cde_registry.yml` and `scope_registry.yml` be updated to reference new contract IDs?
-3. **Contract approval**: All 19 are `status: draft`. What approval process moves them to `approved`?
+- Contract names are authoritative for Silver table names.
+- Loan and mortgage ownership enrichment is deferred to Gold.
+- Canonical Silver excludes invalid rows and row-level DQ columns.
+- Draft contracts are executable only in dev; promotion changes status to `approved`.

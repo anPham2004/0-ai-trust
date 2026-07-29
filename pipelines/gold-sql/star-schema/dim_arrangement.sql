@@ -20,32 +20,36 @@ USING (
     CAST(NULL AS STRING) AS reward_program,
     pipeline_run_id,
     current_timestamp() AS processed_at,
-    dq_status
+    'PASSED' AS dq_status
   FROM `0-ai-trust`.silver.arr_banking_arrangement
-  WHERE dq_status IN ('PASSED', 'WARNING') AND masking_status IN ('MASKED', 'CLEAN')
+  WHERE `__END_AT` IS NULL AND masking_status IN ('MASKED', 'CLEAN')
 
   UNION ALL
 
   SELECT
-    CONCAT('LOAN:', loan_id), global_id, organisation_id, 'LOAN',
-    CAST(NULL AS STRING), loan_type, CAST(NULL AS STRING), interest_type,
-    status, UPPER(status) = 'ACTIVE', is_business_arrangement,
-    maturity_date BETWEEN current_date() AND date_add(current_date(), 90),
-    CAST(NULL AS DATE), loan_start_date, maturity_date, repayment_frequency,
-    CAST(NULL AS STRING), pipeline_run_id, current_timestamp(), dq_status
-  FROM `0-ai-trust`.silver.arr_loan_arrangement
-  WHERE dq_status IN ('PASSED', 'WARNING') AND masking_status IN ('MASKED', 'CLEAN')
+    CONCAT('LOAN:', l.loan_id), l.global_id, b.organisation_id, 'LOAN',
+    CAST(NULL AS STRING), l.loan_type, CAST(NULL AS STRING), l.interest_type,
+    l.status, UPPER(l.status) = 'ACTIVE', coalesce(b.is_business_arrangement, false),
+    l.maturity_date BETWEEN current_date() AND date_add(current_date(), 90),
+    CAST(NULL AS DATE), l.start_date, l.maturity_date, l.repayment_frequency,
+    CAST(NULL AS STRING), l.pipeline_run_id, current_timestamp(), 'PASSED'
+  FROM `0-ai-trust`.silver.arr_loan l
+  LEFT JOIN `0-ai-trust`.silver.arr_banking_arrangement b
+    ON b.account_id = l.account_id AND b.`__END_AT` IS NULL
+  WHERE l.`__END_AT` IS NULL AND l.masking_status IN ('MASKED', 'CLEAN')
 
   UNION ALL
 
   SELECT
-    CONCAT('MORTGAGE:', mortgage_id), global_id, organisation_id, 'MORTGAGE',
-    CAST(NULL AS STRING), 'MORTGAGE', CAST(NULL AS STRING), interest_type,
-    'ACTIVE', true, is_business_arrangement, false,
-    CAST(NULL AS DATE), mortgage_start_date, CAST(NULL AS DATE), repayment_frequency,
-    CAST(NULL AS STRING), pipeline_run_id, current_timestamp(), dq_status
-  FROM `0-ai-trust`.silver.arr_mortgage_arrangement
-  WHERE dq_status IN ('PASSED', 'WARNING') AND masking_status IN ('MASKED', 'CLEAN')
+    CONCAT('MORTGAGE:', m.mortgage_id), m.global_id, b.organisation_id, 'MORTGAGE',
+    CAST(NULL AS STRING), 'MORTGAGE', CAST(NULL AS STRING), m.interest_type,
+    'ACTIVE', true, coalesce(b.is_business_arrangement, false), false,
+    CAST(NULL AS DATE), m.start_date, CAST(NULL AS DATE), m.repayment_frequency,
+    CAST(NULL AS STRING), m.pipeline_run_id, current_timestamp(), 'PASSED'
+  FROM `0-ai-trust`.silver.arr_mortgage m
+  LEFT JOIN `0-ai-trust`.silver.arr_banking_arrangement b
+    ON b.account_id = m.account_id AND b.`__END_AT` IS NULL
+  WHERE m.`__END_AT` IS NULL AND m.masking_status IN ('MASKED', 'CLEAN')
 
   UNION ALL
 
@@ -54,9 +58,9 @@ USING (
     CAST(NULL AS STRING), CAST(NULL AS STRING), card_type, CAST(NULL AS STRING),
     status, UPPER(status) = 'ACTIVE', is_business_arrangement, false,
     issued_date, CAST(NULL AS DATE), CAST(NULL AS DATE), CAST(NULL AS STRING), reward_program,
-    pipeline_run_id, current_timestamp(), dq_status
-  FROM `0-ai-trust`.silver.arr_credit_card_arrangement
-  WHERE dq_status IN ('PASSED', 'WARNING') AND masking_status IN ('MASKED', 'CLEAN')
+    pipeline_run_id, current_timestamp(), 'PASSED'
+  FROM `0-ai-trust`.silver.arr_credit_card
+  WHERE `__END_AT` IS NULL AND masking_status IN ('MASKED', 'CLEAN')
 ) AS source
 ON target.arrangement_key = source.arrangement_key
 WHEN MATCHED THEN UPDATE SET *

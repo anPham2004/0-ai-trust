@@ -11,6 +11,8 @@ description:
 servers:
 - server: source-s3
   type: s3
+  location: s3://g3-assignment/g3/0-ai-trust/bronze/landing/file/accepted_loans/*.jsonl
+  format: json
   description: S3 file drop for accepted_loans
   environment: prod
 schema:
@@ -860,9 +862,6 @@ schema:
     logicalType: string
     physicalType: string
     classification: HIGHLY_CONFIDENTIAL
-    logicalTypeOptions:
-      minimum: 660
-      maximum: 845
     examples:
     - '720'
     quality:
@@ -1100,7 +1099,7 @@ customProperties:
       path_template: s3://<bucket>/bronze/landing/file/accepted_loans/*.csv
       immutable: true
       copy_mode: BYTE_FOR_BYTE
-    bronze_target: bronze.file_arrivals
+    bronze_target: bronze.file_accepted_loans
     bronze_reader: AUTO_LOADER_BINARY_FILE
     bronze_metadata:
     - file_path

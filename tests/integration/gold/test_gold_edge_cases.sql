@@ -16,15 +16,15 @@ SELECT assert_true(
   (SELECT COUNT(*) FROM `0-ai-trust`.gold.fact_application_stage) =
   (SELECT COUNT(*) FROM (
      SELECT CONCAT('STAGE:', history_id) AS event_key
-     FROM `0-ai-trust`.silver.app_application_stage_history
+     FROM `0-ai-trust`.silver.app_stage_history
      WHERE dq_status IN ('PASSED', 'WARNING') AND masking_status IN ('MASKED', 'CLEAN')
      UNION
      SELECT CONCAT('STATUS:', change_id)
-     FROM `0-ai-trust`.silver.app_status_change_history
+     FROM `0-ai-trust`.silver.app_status_change
      WHERE dq_status IN ('PASSED', 'WARNING') AND masking_status IN ('MASKED', 'CLEAN')
      UNION
      SELECT CONCAT('APP_EVENT:', event_id)
-     FROM `0-ai-trust`.silver.app_application_event
+     FROM `0-ai-trust`.silver.app_lifecycle_event
      WHERE dq_status IN ('PASSED', 'WARNING') AND masking_status IN ('MASKED', 'CLEAN')
    )),
   'Late or out-of-order application history was lost'

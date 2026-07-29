@@ -11,6 +11,8 @@ description:
 servers:
 - server: source-s3
   type: s3
+  location: s3://g3-assignment/g3/0-ai-trust/bronze/landing/file/banking_products/*.jsonl
+  format: json
   description: S3 file drop for banking_products
   environment: prod
 schema:
@@ -744,7 +746,7 @@ customProperties:
       path_template: s3://<bucket>/bronze/landing/file/banking_products/*.csv
       immutable: true
       copy_mode: BYTE_FOR_BYTE
-    bronze_target: bronze.file_arrivals
+    bronze_target: bronze.file_banking_products
     bronze_reader: AUTO_LOADER_BINARY_FILE
     bronze_metadata:
     - file_path

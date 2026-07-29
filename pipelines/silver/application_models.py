@@ -12,6 +12,7 @@ from framework.silver_model import (
     trimmed,
     with_audit_columns,
 )
+from framework.dependency_validator import register_dependency_validation
 
 
 def _with_single_source_audit(dataframe, source_table, masking_status="CLEAN"):
@@ -47,7 +48,7 @@ def build_app_application():
     return _with_single_source_audit(selected, "cdc_loan_applications", "MASKED")
 
 
-def build_app_application_stage_history():
+def build_app_stage_history():
     source = event_change_stream("application_stage_history")
     selected = source.select(
         F.col("historyId").cast("string").alias("history_id"),
@@ -71,7 +72,7 @@ def build_app_application_stage_history():
     return _with_single_source_audit(selected, "event_application_stage_history")
 
 
-def build_app_status_change_history():
+def build_app_status_change():
     source = event_change_stream("status_change_history")
     selected = source.select(
         F.col("changeId").cast("string").alias("change_id"),
@@ -87,7 +88,7 @@ def build_app_status_change_history():
     return _with_single_source_audit(selected, "event_status_change_history")
 
 
-def build_app_document():
+def build_app_missing_document():
     source = cdc_change_stream("missing_documents")
     expiry = F.to_date("expiryDate")
     status = F.upper(trimmed(F.col("status")))
@@ -112,7 +113,7 @@ def build_app_document():
     return _with_single_source_audit(selected, "cdc_missing_documents")
 
 
-def build_app_application_event():
+def build_app_lifecycle_event():
     source = event_change_stream("loan_application_events")
     selected = source.select(
         F.col("eventId").cast("string").alias("event_id"),
@@ -161,9 +162,11 @@ def build_app_rejected_application():
 
 
 publish_scd2_model("app_application", build_app_application, ["application_id"])
-publish_append_model("app_application_stage_history", build_app_application_stage_history, ["history_id"])
-publish_append_model("app_status_change_history", build_app_status_change_history, ["change_id"])
-publish_scd2_model("app_document", build_app_document, ["document_id"])
-publish_append_model("app_application_event", build_app_application_event, ["event_id"])
+publish_append_model("app_stage_history", build_app_stage_history, ["history_id"])
+publish_append_model("app_status_change", build_app_status_change, ["change_id"])
+publish_scd2_model("app_missing_document", build_app_missing_document, ["document_id"])
+publish_append_model("app_lifecycle_event", build_app_lifecycle_event, ["event_id"])
 publish_append_model("app_accepted_loan", build_app_accepted_loan, ["loan_id"])
 publish_append_model("app_rejected_application", build_app_rejected_application, ["loan_id"])
+
+register_dependency_validation()

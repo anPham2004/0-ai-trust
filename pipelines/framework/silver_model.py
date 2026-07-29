@@ -7,8 +7,9 @@ from pyspark import pipelines as dp
 from pyspark.dbutils import DBUtils
 from pyspark.sql import DataFrame, SparkSession, Window, functions as F
 
-from framework.data_contract_loader import load_data_contract
-from framework.data_quality_validator import executable_rules
+from framework.data_contract_loader import CONTRACT_ROOT, load_layer_contract
+from framework.data_quality_validator import executable_rules, required_field_rules
+from framework.quarantine import register_record_quarantine_flow
 from framework.refresh_policy import downstream_microbatch_spark_conf
 
 
@@ -23,13 +24,6 @@ SILVER_TABLE_PROPERTIES = {
 }
 APPEND_DEDUPLICATION_WATERMARK = "7 days"
 
-JOINED_CDF_CONTROL_COLUMNS = [
-    "_change_type",
-    "_commit_version",
-    "_commit_timestamp",
-    "_operation",
-    "_sequence_ts",
-]
 AUDIT_COLUMNS_EXCLUDED_FROM_HISTORY = [
     "pipeline_run_id",
     "source_table",
@@ -41,6 +35,7 @@ spark = SparkSession.getActiveSession()
 if spark is None:
     raise RuntimeError("Silver model registration requires an active Spark session")
 dbutils = DBUtils(spark)
+SOURCE_VALIDATED_VIEWS: dict[tuple[str, str], str] = {}
 
 
 def _latest_by(dataframe: DataFrame, keys: list[str], ordering: list) -> DataFrame:
@@ -65,7 +60,7 @@ def _bronze_cdf(table_name: str) -> DataFrame:
 
 def cdc_change_stream(dataset: str) -> DataFrame:
     """Return source CDC records incrementally from the Bronze Delta CDF."""
-    return _bronze_cdf(f"cdc_{dataset}").withColumn(
+    return spark.readStream.table(SOURCE_VALIDATED_VIEWS[("DATABASE", dataset)]).withColumn(
         "_sequence_ts",
         F.coalesce(
             F.col("_commit_ts"),
@@ -78,17 +73,21 @@ def cdc_change_stream(dataset: str) -> DataFrame:
 
 def event_change_stream(dataset: str) -> DataFrame:
     """Return immutable events incrementally from the Bronze Delta CDF."""
-    return _bronze_cdf(f"event_{dataset}")
+    return spark.readStream.table(SOURCE_VALIDATED_VIEWS[("EVENT", dataset)])
 
 
 def file_change_stream(dataset: str) -> DataFrame:
     """Return immutable file rows incrementally from the Bronze Delta CDF."""
-    return _bronze_cdf(f"file_{dataset}")
+    return spark.readStream.table(SOURCE_VALIDATED_VIEWS[("FILE", dataset)])
 
 
 def current_cdc_snapshot(dataset: str, keys: list[str]) -> DataFrame:
     """Resolve current source state for a private multi-source staging view."""
+    contract = load_layer_contract("source", dataset)
+    required = required_field_rules(contract)
     source = spark.read.table(f"{CATALOG}.bronze.cdc_{dataset}")
+    if required:
+        source = source.filter(" AND ".join(f"({expression})" for expression in required.values()))
     current = _latest_by(
         source,
         keys,
@@ -183,9 +182,13 @@ def with_audit_columns(
     )
 
 
-def _contract_rules(name: str) -> tuple[dict[str, str], dict[str, str]]:
-    contract = load_data_contract(f"silver/{name}.yml")
-    return executable_rules(contract, "hard"), executable_rules(contract, "warn")
+def _contract_rules(name: str) -> tuple[dict, dict[str, str], dict[str, str]]:
+    contract = load_layer_contract("silver", name)
+    return (
+        contract,
+        executable_rules(contract, "error"),
+        executable_rules(contract, "warning"),
+    )
 
 
 def _register_scd2_target(
@@ -227,7 +230,7 @@ def publish_scd2_model(
     cluster_by: list[str] | None = None,
 ) -> None:
     """Publish a one-source CDC entity as a native AUTO CDC SCD2 table."""
-    hard_rules, warning_rules = _contract_rules(name)
+    contract, hard_rules, warning_rules = _contract_rules(name)
     source_name = f"_{name}_validated_changes"
 
     @dp.temporary_view(name=source_name, comment=f"Validated CDC changes for {name}")
@@ -235,6 +238,8 @@ def publish_scd2_model(
     @dp.expect_all_or_drop(hard_rules)
     def validated_changes():
         return builder()
+
+    register_record_quarantine_flow(name, builder, contract, keys, hard_rules)
 
     _register_scd2_target(
         name,
@@ -251,59 +256,46 @@ def publish_joined_scd2_model(
     keys: list[str],
     cluster_by: list[str] | None = None,
 ) -> None:
-    """Publish a composite entity and retain changes observed after onboarding.
+    """Publish a composite entity from periodic joined snapshots as SCD2.
 
-    The private materialized view resolves the current state of all contributing
-    Bronze sources. Its change feed then gives AUTO CDC a single ordered stream.
-    The initial version is the onboarding state; subsequent source changes form
-    the SCD2 history.
+    Lakeflow does not expose a materialized view's CDF metadata through its
+    logical name inside the defining pipeline. AUTO CDC FROM SNAPSHOT is the
+    native API for comparing each refreshed joined state with the previous one.
     """
-    hard_rules, warning_rules = _contract_rules(name)
-    staging_name = f"_{name}_current_state"
-    source_name = f"_{name}_validated_changes"
+    contract, hard_rules, warning_rules = _contract_rules(name)
+    source_name = f"_{name}_validated_snapshot"
 
     @dp.materialized_view(
-        name=staging_name,
-        comment=f"Private current-state join for {name}",
+        name=source_name,
+        comment=f"Validated private current-state snapshot for {name}",
         private=True,
         spark_conf=downstream_microbatch_spark_conf(),
-        table_properties={
-            "quality": "silver_staging",
-            "delta.enableChangeDataFeed": "true",
-        },
+        table_properties={"quality": "silver_staging"},
     )
-    def current_state():
-        return builder()
-
-    @dp.temporary_view(name=source_name, comment=f"Validated staging changes for {name}")
     @dp.expect_all(warning_rules)
     @dp.expect_all_or_drop(hard_rules)
-    def validated_changes():
-        return (
-            spark.readStream
-            .option("readChangeFeed", "true")
-            .table(staging_name)
-            .filter(F.col("_change_type").isin("insert", "update_postimage", "delete"))
-            .withColumn(
-                "_operation",
-                F.when(F.col("_change_type") == "delete", F.lit("DELETE")).otherwise(F.lit("UPSERT")),
-            )
-            .withColumn(
-                "_sequence_ts",
-                F.when(
-                    F.col("_change_type") == "delete",
-                    F.col("_commit_timestamp"),
-                ).otherwise(F.coalesce(F.col("processed_at"), F.col("_commit_timestamp")))
-                .cast("timestamp"),
-            )
-        )
+    def validated_snapshot():
+        return builder()
 
-    _register_scd2_target(
-        name,
-        source_name,
-        keys,
-        cluster_by or keys,
-        JOINED_CDF_CONTROL_COLUMNS,
+    target_name = f"{CATALOG}.silver.{name}"
+    dp.create_streaming_table(
+        name=target_name,
+        comment=f"Silver SCD2 entity: {name}",
+        spark_conf=downstream_microbatch_spark_conf(),
+        table_properties={
+            **SILVER_TABLE_PROPERTIES,
+            "history_mode": "scd_type_2",
+            "pipelines.cdc.tombstoneGCThresholdInSeconds": "604800",
+        },
+        cluster_by=cluster_by or keys,
+    )
+    dp.create_auto_cdc_from_snapshot_flow(
+        target=target_name,
+        source=source_name,
+        keys=keys,
+        stored_as_scd_type="2",
+        track_history_except_column_list=AUDIT_COLUMNS_EXCLUDED_FROM_HISTORY,
+        name=f"{name}_scd2_snapshots",
     )
 
 
@@ -319,7 +311,7 @@ def publish_append_model(
     watermark additionally removes business duplicates emitted more than once
     by an at-least-once source or repeated file delivery.
     """
-    hard_rules, warning_rules = _contract_rules(name)
+    contract, hard_rules, warning_rules = _contract_rules(name)
     target_name = f"{CATALOG}.silver.{name}"
     source_name = f"_{name}_validated_records"
 
@@ -328,6 +320,8 @@ def publish_append_model(
     @dp.expect_all_or_drop(hard_rules)
     def validated_records():
         return builder()
+
+    register_record_quarantine_flow(name, builder, contract, keys, hard_rules)
 
     @dp.table(
         name=target_name,
@@ -342,3 +336,56 @@ def publish_append_model(
             .withWatermark("processed_at", APPEND_DEDUPLICATION_WATERMARK)
             .dropDuplicatesWithinWatermark(keys)
         )
+
+
+def _source_contract_references() -> list[tuple[str, str]]:
+    references: set[tuple[str, str]] = set()
+    silver_root = CONTRACT_ROOT / "silver"
+    for path in silver_root.rglob("*.yml"):
+        contract = load_layer_contract("silver", path.stem.replace("-", "_"), require_active=False)
+        sources = next(
+            (item.get("value", []) for item in contract.get("customProperties", [])
+             if item.get("property") == "g3:sources"),
+            [],
+        )
+        for source in sources:
+            references.add((source["type"], source["source_dataset"].removeprefix("public.")))
+    return sorted(references)
+
+
+def _register_source_validations() -> None:
+    prefixes = {"DATABASE": "cdc", "EVENT": "event", "FILE": "file"}
+    for source_type, dataset in _source_contract_references():
+        contract = load_layer_contract("source", dataset)
+        rules = required_field_rules(contract)
+        keys = [
+            field["name"]
+            for field in contract["schema"][0]["properties"]
+            if field.get("primaryKey")
+        ]
+        source_table = f"{prefixes[source_type]}_{dataset}"
+        view_name = f"_source_{source_table}_validated"
+        SOURCE_VALIDATED_VIEWS[(source_type, dataset)] = view_name
+
+        def source_builder(table_name=source_table):
+            return _bronze_cdf(table_name)
+
+        @dp.temporary_view(
+            name=view_name,
+            comment=f"Source-contract pre-validation for {dataset}",
+        )
+        @dp.expect_all_or_drop(rules)
+        def validated_source(builder=source_builder):
+            return builder()
+
+        register_record_quarantine_flow(
+            f"source_{dataset}",
+            source_builder,
+            contract,
+            keys,
+            rules,
+            validation_stage="PRE_TRANSFORM",
+        )
+
+
+_register_source_validations()

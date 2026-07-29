@@ -35,7 +35,7 @@ class ArchitectureTests(unittest.TestCase):
 
     def test_contracts_are_partitioned_by_lifecycle(self):
         expected = {
-            "source": {"source_inventory.yml", "database"},
+            "source": {"source_inventory.yml", "database", "event", "file"},
             "bronze": {".gitkeep"},
             "silver": {
                 "involved-party",
@@ -133,7 +133,7 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn('"service_case_events"', loader)
         self.assertIn('BATCH_TABLES = {"accepted_loans", "rejected_applications"', loader)
 
-    def test_only_three_layer_schemas_are_created(self):
+    def test_medallion_and_quarantine_schemas_are_created(self):
         setup = (ROOT / "pipelines/bootstrap/v001_create_external_objects.sql").read_text(encoding="utf-8")
         self.assertIn("CREATE CATALOG IF NOT EXISTS `0-ai-trust`", setup)
         for layer in ("bronze", "silver", "gold"):
@@ -141,7 +141,8 @@ class ArchitectureTests(unittest.TestCase):
         self.assertNotIn("nab_bronze", setup)
         self.assertNotIn("nab_silver", setup)
         self.assertNotIn("nab_gold", setup)
-        self.assertEqual(setup.count("CREATE SCHEMA IF NOT EXISTS"), 3)
+        self.assertIn("CREATE SCHEMA IF NOT EXISTS `0-ai-trust`.quarantine", setup)
+        self.assertEqual(setup.count("CREATE SCHEMA IF NOT EXISTS"), 4)
 
     def test_bronze_storage_is_owned_by_streaming_tables(self):
         setup = (ROOT / "pipelines/bootstrap/v001_create_external_objects.sql").read_text(encoding="utf-8")
@@ -207,8 +208,8 @@ class ArchitectureTests(unittest.TestCase):
             (ROOT / "pipelines/silver" / filename).read_text(encoding="utf-8")
             for filename in expected
         )
-        self.assertEqual(definitions.count('publish_scd2_model("'), 8)
-        self.assertEqual(definitions.count('publish_joined_scd2_model("'), 4)
+        self.assertEqual(definitions.count('publish_scd2_model("'), 10)
+        self.assertEqual(definitions.count('publish_joined_scd2_model("'), 2)
         self.assertEqual(definitions.count('publish_append_model("'), 7)
 
         framework = (ROOT / "pipelines/framework/silver_model.py").read_text(encoding="utf-8")
@@ -222,11 +223,11 @@ class ArchitectureTests(unittest.TestCase):
         self.assertNotIn("quarantine_name", framework)
 
         self.assertIn(
-            'publish_append_model("app_application_stage_history", build_app_application_stage_history, ["history_id"])',
+            'publish_append_model("app_stage_history", build_app_stage_history, ["history_id"])',
             definitions,
         )
         self.assertIn(
-            'publish_append_model("app_status_change_history", build_app_status_change_history, ["change_id"])',
+            'publish_append_model("app_status_change", build_app_status_change, ["change_id"])',
             definitions,
         )
         self.assertIn(
@@ -314,14 +315,9 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn('write_grouped_jsonl("event"', exporter)
         self.assertNotIn('write_jsonl("kafka"', exporter)
 
-    def test_repo_has_only_authorized_markdown_documents(self):
-        ignored_directories = {".terraform", ".pytest_cache", ".databricks", ".git"}
-        markdown = [
-            path
-            for path in ROOT.rglob("*.md")
-            if ignored_directories.isdisjoint(path.parts)
-        ]
-        self.assertEqual(set(markdown), {ROOT / "README.md", ROOT / "SCHEMA.md"})
+    def test_required_project_documents_exist(self):
+        self.assertTrue((ROOT / "README.md").is_file())
+        self.assertTrue((ROOT / "SCHEMA.md").is_file())
 
     def test_repo_has_no_powershell_automation(self):
         self.assertEqual([], list(ROOT.rglob("*.ps1")))

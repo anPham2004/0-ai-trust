@@ -11,6 +11,10 @@ description:
 servers:
 - server: source-postgresql
   type: postgresql
+  host: postgres
+  port: 5432
+  database: g3_sources
+  schema: public
   description: PostgreSQL CDC source via Debezium for banking_direct_debits
   environment: prod
 schema:
@@ -394,7 +398,7 @@ customProperties:
       format: JSONL
       path_template: s3://<bucket>/bronze/landing/cdc/banking_direct_debits/
       immutable: true
-    bronze_target: bronze.cdc_changes
+    bronze_target: bronze.cdc_banking_direct_debits
     cdc:
       supported_operations:
       - SNAPSHOT

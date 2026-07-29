@@ -11,6 +11,8 @@ description:
 servers:
 - server: silver-delta-lake
   type: databricks
+  catalog: 0-ai-trust
+  schema: silver
   description: Silver Delta Lake table for app_stage_history
   environment: prod
 schema:
@@ -19,9 +21,10 @@ schema:
   physicalType: table
   quality:
   - id: HISTORY_ID_NULL
-    type: sql
-    query: history_id IS NOT NULL
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: history_id IS NOT NULL
     severity: error
     dimension: completeness
     description: Primary key must exist
@@ -29,9 +32,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: APPLICATION_ID_NULL
-    type: sql
-    query: application_id IS NOT NULL
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: application_id IS NOT NULL
     severity: error
     dimension: completeness
     description: Application FK must exist
@@ -39,9 +43,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: GLOBAL_ID_NULL
-    type: sql
-    query: global_id IS NOT NULL
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: global_id IS NOT NULL
     severity: error
     dimension: completeness
     description: Customer FK must exist
@@ -49,9 +54,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: STAGE_NULL
-    type: sql
-    query: stage IS NOT NULL
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: stage IS NOT NULL
     severity: error
     dimension: completeness
     description: Stage name required
@@ -59,9 +65,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: ENTERED_AT_NULL
-    type: sql
-    query: entered_at IS NOT NULL
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: entered_at IS NOT NULL
     severity: error
     dimension: completeness
     description: Entry timestamp required
@@ -69,9 +76,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: STAGE_DATE_ORDER
-    type: sql
-    query: exited_at IS NULL OR exited_at >= entered_at
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: exited_at IS NULL OR exited_at >= entered_at
     severity: error
     dimension: conformity
     description: Exit must follow entry
@@ -79,9 +87,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: HISTORY_ID_UUID_FORMAT
-    type: sql
-    query: history_id IS NULL OR history_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: history_id IS NULL OR history_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     severity: error
     dimension: conformity
     description: history_id must be valid UUID format when present
@@ -89,9 +98,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: APPLICATION_ID_UUID_FORMAT
-    type: sql
-    query: application_id IS NULL OR application_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: application_id IS NULL OR application_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     severity: error
     dimension: conformity
     description: application_id must be valid UUID format when present
@@ -99,9 +109,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: GLOBAL_ID_UUID_FORMAT
-    type: sql
-    query: global_id IS NULL OR global_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: global_id IS NULL OR global_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     severity: error
     dimension: conformity
     description: global_id must be valid UUID format when present
@@ -109,29 +120,32 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: STAGE_NOT_BLANK
-    type: sql
-    query: stage IS NULL OR length(trim(stage)) > 0
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: stage IS NULL OR length(trim(stage)) > 0
     severity: error
-    dimension: conformity
+    dimension: completeness
     description: stage must not be empty or whitespace-only when present
     customProperties:
     - property: g3:action
       value: QUARANTINE
   - id: SLA_OVERDUE
-    type: sql
-    query: sla_deadline IS NULL OR is_sla_breached = false
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: sla_deadline IS NULL OR is_sla_breached = false
     severity: warning
-    dimension: conformity
+    dimension: timeliness
     description: Flag SLA breaches
     customProperties:
     - property: g3:action
       value: ALLOW_WITH_WARNING
   - id: PENDING_ACTION_PARTY_INVALID
-    type: sql
-    query: pending_action_party IS NULL OR pending_action_party IN ('CUSTOMER','ORGANISATION','AUTHORISED_REPRESENTATIVE','DIRECTOR','GUARANTOR','THIRD_PARTY','INTERNAL_TEAM')
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: pending_action_party IS NULL OR pending_action_party IN ('CUSTOMER','ORGANISATION','AUTHORISED_REPRESENTATIVE','DIRECTOR','GUARANTOR','THIRD_PARTY','INTERNAL_TEAM')
     severity: warning
     dimension: conformity
     description: Must be a known action party
@@ -309,23 +323,6 @@ schema:
         is_pii: false
     - property: g3:domainType
       value: timestamp
-  - name: dq_status
-    logicalType: string
-    physicalType: STRING
-    required: true
-    classification: INTERNAL
-    customProperties:
-    - property: g3:sensitivity
-      value:
-        is_pii: false
-    - property: g3:domainType
-      value: category
-    - property: g3:accepted
-      value:
-        values:
-        - PASSED
-        - FAILED
-        - WARNING
   - name: masking_status
     logicalType: string
     physicalType: STRING
@@ -345,7 +342,7 @@ schema:
 slaProperties:
 - property: hardFailureRate
   value: 0.01
-  description: Max proportion of hard-rule failures before pipeline halts
+  description: Alert threshold for quarantined row proportion
 - property: freshnessBreachRate
   value: 0.05
   description: Max proportion of freshness breaches before alert
@@ -354,7 +351,7 @@ customProperties:
   value:
   - type: EVENT
     ingestion_mechanism: APACHE_KAFKA
-    bronze_sink: kafka_events
+    bronze_sink: event_application_stage_history
     source_dataset: application_stage_history
     fields:
     - historyId
@@ -368,6 +365,34 @@ customProperties:
     - pendingActionParty
 - property: g3:freshnessSla
   value: 24 hours
+- property: g3:dependencies
+  value:
+    grace_period: 24 hours
+    foreign_keys:
+    - id: STAGE_APPLICATION_EXISTS
+      columns: [application_id]
+      parent_contract: app_application
+      parent_columns: [application_id]
+    lifecycle:
+      required_core_stages: [SUBMITTED, DOCUMENT_VERIFICATION, ASSESSMENT]
+      terminal_stage_by_outcome:
+        ACCEPTED: APPROVED
+        APPROVED: APPROVED
+        DENIED: DENIED
+        REJECTED: DENIED
+        CANCELLED: CANCELLED
+        WITHDRAWN: WITHDRAWN
+      allowed_transitions:
+      - SUBMITTED->DOCUMENT_VERIFICATION
+      - DOCUMENT_VERIFICATION->ASSESSMENT
+      - ASSESSMENT->CREDIT_CHECK
+      - ASSESSMENT->CONDITIONALLY_APPROVED
+      - ASSESSMENT->WITHDRAWN
+      - ASSESSMENT->CANCELLED
+      - CREDIT_CHECK->APPROVED
+      - CREDIT_CHECK->DENIED
+      - CONDITIONALLY_APPROVED->DOCUMENT_VERIFICATION
+      - DOCUMENT_VERIFICATION->APPROVED
 - property: g3:lineage
   value:
     l1: |
@@ -423,7 +448,7 @@ customProperties:
     - fraud_assessment
 - property: g3:zeroTrust
   value:
-    quality_status_required: true
+    quality_evidence_location: pipeline_event_log_and_quarantine
     source_reference_required: true
     quarantined_excluded: true
     stale_flagged: true

@@ -11,6 +11,8 @@ description:
 servers:
 - server: silver-delta-lake
   type: databricks
+  catalog: 0-ai-trust
+  schema: silver
   description: Silver Delta Lake table for arr_credit_card
   environment: prod
 schema:
@@ -19,9 +21,10 @@ schema:
   physicalType: table
   quality:
   - id: CREDIT_CARD_ID_NULL
-    type: sql
-    query: credit_card_id IS NOT NULL
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: credit_card_id IS NOT NULL
     severity: error
     dimension: completeness
     description: Primary key must exist
@@ -29,9 +32,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: GLOBAL_ID_NULL
-    type: sql
-    query: global_id IS NOT NULL
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: global_id IS NOT NULL
     severity: error
     dimension: completeness
     description: Customer FK must exist
@@ -39,9 +43,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: CARD_TYPE_NULL
-    type: sql
-    query: card_type IS NOT NULL
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: card_type IS NOT NULL
     severity: error
     dimension: completeness
     description: Card type required
@@ -49,9 +54,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: STATUS_NULL
-    type: sql
-    query: status IS NOT NULL
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: status IS NOT NULL
     severity: error
     dimension: completeness
     description: Card status required
@@ -59,9 +65,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: CARD_NUMBER_MASKED_NULL
-    type: sql
-    query: card_number_masked IS NOT NULL
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: card_number_masked IS NOT NULL
     severity: error
     dimension: completeness
     description: Masked card number required
@@ -69,9 +76,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: CREDIT_CARD_ID_UUID_FORMAT
-    type: sql
-    query: credit_card_id IS NULL OR credit_card_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: credit_card_id IS NULL OR credit_card_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     severity: error
     dimension: conformity
     description: credit_card_id must be valid UUID format when present
@@ -79,9 +87,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: GLOBAL_ID_UUID_FORMAT
-    type: sql
-    query: global_id IS NULL OR global_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: global_id IS NULL OR global_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     severity: error
     dimension: conformity
     description: global_id must be valid UUID format when present
@@ -89,9 +98,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: ORGANISATION_ID_UUID_FORMAT
-    type: sql
-    query: organisation_id IS NULL OR organisation_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: organisation_id IS NULL OR organisation_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     severity: error
     dimension: conformity
     description: organisation_id must be valid UUID format when present
@@ -244,23 +254,6 @@ schema:
         is_pii: false
     - property: g3:domainType
       value: timestamp
-  - name: dq_status
-    logicalType: string
-    physicalType: STRING
-    required: true
-    classification: INTERNAL
-    customProperties:
-    - property: g3:sensitivity
-      value:
-        is_pii: false
-    - property: g3:domainType
-      value: category
-    - property: g3:accepted
-      value:
-        values:
-        - PASSED
-        - FAILED
-        - WARNING
   - name: masking_status
     logicalType: string
     physicalType: STRING
@@ -280,7 +273,7 @@ schema:
 slaProperties:
 - property: hardFailureRate
   value: 0.01
-  description: Max proportion of hard-rule failures before pipeline halts
+  description: Alert threshold for quarantined row proportion
 - property: freshnessBreachRate
   value: 0.05
   description: Max proportion of freshness breaches before alert
@@ -289,7 +282,7 @@ customProperties:
   value:
   - type: DATABASE
     ingestion_mechanism: DEBEZIUM_CDC
-    bronze_sink: cdc_changes
+    bronze_sink: cdc_credit_cards
     source_dataset: public.credit_cards
     fields:
     - global_id
@@ -366,7 +359,7 @@ customProperties:
     - display_exact_credit_limit
 - property: g3:zeroTrust
   value:
-    quality_status_required: true
+    quality_evidence_location: pipeline_event_log_and_quarantine
     source_reference_required: true
     quarantined_excluded: true
     stale_flagged: true

@@ -11,6 +11,8 @@ description:
 servers:
 - server: silver-delta-lake
   type: databricks
+  catalog: 0-ai-trust
+  schema: silver
   description: Silver Delta Lake table for evt_case_event
   environment: prod
 schema:
@@ -19,9 +21,10 @@ schema:
   physicalType: table
   quality:
   - id: EVENT_ID_NULL
-    type: sql
-    query: event_id IS NOT NULL
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: event_id IS NOT NULL
     severity: error
     dimension: completeness
     description: Primary key must exist
@@ -29,9 +32,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: CASE_ID_NULL
-    type: sql
-    query: case_id IS NOT NULL
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: case_id IS NOT NULL
     severity: error
     dimension: completeness
     description: Case FK must exist
@@ -39,9 +43,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: GLOBAL_ID_NULL
-    type: sql
-    query: global_id IS NOT NULL
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: global_id IS NOT NULL
     severity: error
     dimension: completeness
     description: Customer FK must exist
@@ -49,9 +54,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: EVENT_TYPE_INVALID
-    type: sql
-    query: event_type IN ('NOTE_ADDED','STATUS_CHANGED','ASSIGNED','ESCALATED','DOCUMENT_ATTACHED','CUSTOMER_CONTACTED')
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: event_type IN ('NOTE_ADDED','STATUS_CHANGED','ASSIGNED','ESCALATED','DOCUMENT_ATTACHED','CUSTOMER_CONTACTED')
     severity: error
     dimension: conformity
     description: Must be a known event type
@@ -59,9 +65,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: EVENT_TIMESTAMP_NULL
-    type: sql
-    query: event_timestamp IS NOT NULL
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: event_timestamp IS NOT NULL
     severity: error
     dimension: completeness
     description: Event timestamp required
@@ -69,9 +76,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: EVENT_ID_UUID_FORMAT
-    type: sql
-    query: event_id IS NULL OR event_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: event_id IS NULL OR event_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     severity: error
     dimension: conformity
     description: event_id must be valid UUID format when present
@@ -79,9 +87,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: CASE_ID_UUID_FORMAT
-    type: sql
-    query: case_id IS NULL OR case_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: case_id IS NULL OR case_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     severity: error
     dimension: conformity
     description: case_id must be valid UUID format when present
@@ -89,9 +98,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: GLOBAL_ID_UUID_FORMAT
-    type: sql
-    query: global_id IS NULL OR global_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: global_id IS NULL OR global_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     severity: error
     dimension: conformity
     description: global_id must be valid UUID format when present
@@ -208,23 +218,6 @@ schema:
         is_pii: false
     - property: g3:domainType
       value: timestamp
-  - name: dq_status
-    logicalType: string
-    physicalType: STRING
-    required: true
-    classification: INTERNAL
-    customProperties:
-    - property: g3:sensitivity
-      value:
-        is_pii: false
-    - property: g3:domainType
-      value: category
-    - property: g3:accepted
-      value:
-        values:
-        - PASSED
-        - FAILED
-        - WARNING
   - name: masking_status
     logicalType: string
     physicalType: STRING
@@ -244,7 +237,7 @@ schema:
 slaProperties:
 - property: hardFailureRate
   value: 0.01
-  description: Max proportion of hard-rule failures before pipeline halts
+  description: Alert threshold for quarantined row proportion
 - property: freshnessBreachRate
   value: 0.05
   description: Max proportion of freshness breaches before alert
@@ -253,7 +246,7 @@ customProperties:
   value:
   - type: EVENT
     ingestion_mechanism: APACHE_KAFKA
-    bronze_sink: kafka_events
+    bronze_sink: event_service_case_events
     source_dataset: service_case_events
     fields:
     - eventId
@@ -264,6 +257,14 @@ customProperties:
     - description
 - property: g3:freshnessSla
   value: 24 hours
+- property: g3:dependencies
+  value:
+    grace_period: 24 hours
+    foreign_keys:
+    - id: CASE_EVENT_PARENT_EXISTS
+      columns: [case_id]
+      parent_contract: evt_service_case
+      parent_columns: [case_id]
 - property: g3:lineage
   value:
     l1: |
@@ -312,7 +313,7 @@ customProperties:
     - fraud_assessment
 - property: g3:zeroTrust
   value:
-    quality_status_required: true
+    quality_evidence_location: pipeline_event_log_and_quarantine
     source_reference_required: true
     quarantined_excluded: true
     stale_flagged: true

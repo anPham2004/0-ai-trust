@@ -11,6 +11,9 @@ description:
 servers:
 - server: source-kafka
   type: kafka
+  host: kafka:9092
+  topic: nab.customer-service.events
+  format: json
   description: Kafka event stream for support_interactions
   environment: prod
 schema:
@@ -722,7 +725,7 @@ customProperties:
       format: JSONL
       path_template: s3://<bucket>/bronze/landing/event/support_interactions/
       immutable: true
-    bronze_target: bronze.kafka_events
+    bronze_target: bronze.event_support_interactions
     deduplicated_bronze_target: bronze.kafka_events_deduplicated
     event_envelope:
       retained_metadata:

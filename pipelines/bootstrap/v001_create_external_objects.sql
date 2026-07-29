@@ -8,7 +8,10 @@ MANAGED LOCATION 's3://g3-assignment/g3/0-ai-trust/bronze/__managed'
 COMMENT 'Incremental native ingestion and source history';
 CREATE SCHEMA IF NOT EXISTS `0-ai-trust`.silver
 MANAGED LOCATION 's3://g3-assignment/g3/0-ai-trust/silver/__managed'
-COMMENT 'Reserved modelling template: validated and quarantined data';
+COMMENT 'Validated canonical data products';
+CREATE SCHEMA IF NOT EXISTS `0-ai-trust`.quarantine
+MANAGED LOCATION 's3://g3-assignment/g3/0-ai-trust/quarantine/__managed'
+COMMENT 'Protected invalid records and cross-entity dependency violations';
 CREATE SCHEMA IF NOT EXISTS `0-ai-trust`.gold
 MANAGED LOCATION 's3://g3-assignment/g3/0-ai-trust/gold/__managed'
 COMMENT 'Reserved modelling template: masked AI-ready data products';

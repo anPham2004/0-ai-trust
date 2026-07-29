@@ -11,6 +11,9 @@ description:
 servers:
 - server: source-kafka
   type: kafka
+  host: kafka:9092
+  topic: nab.application.events
+  format: json
   description: Kafka event stream for status_change_history
   environment: prod
 schema:
@@ -690,7 +693,7 @@ customProperties:
       format: JSONL
       path_template: s3://<bucket>/bronze/landing/event/status_change_history/
       immutable: true
-    bronze_target: bronze.kafka_events
+    bronze_target: bronze.event_status_change_history
     deduplicated_bronze_target: bronze.kafka_events_deduplicated
     event_envelope:
       retained_metadata:

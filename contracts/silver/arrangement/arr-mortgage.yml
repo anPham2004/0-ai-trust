@@ -11,6 +11,8 @@ description:
 servers:
 - server: silver-delta-lake
   type: databricks
+  catalog: 0-ai-trust
+  schema: silver
   description: Silver Delta Lake table for arr_mortgage
   environment: prod
 schema:
@@ -19,9 +21,10 @@ schema:
   physicalType: table
   quality:
   - id: MORTGAGE_ID_NULL
-    type: sql
-    query: mortgage_id IS NOT NULL
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: mortgage_id IS NOT NULL
     severity: error
     dimension: completeness
     description: Primary key must exist
@@ -29,9 +32,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: GLOBAL_ID_NULL
-    type: sql
-    query: global_id IS NOT NULL
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: global_id IS NOT NULL
     severity: error
     dimension: completeness
     description: Customer FK must exist
@@ -39,9 +43,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: MORTGAGE_ID_UUID_FORMAT
-    type: sql
-    query: mortgage_id IS NULL OR mortgage_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: mortgage_id IS NULL OR mortgage_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     severity: error
     dimension: conformity
     description: mortgage_id must be valid UUID format when present
@@ -49,9 +54,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: GLOBAL_ID_UUID_FORMAT
-    type: sql
-    query: global_id IS NULL OR global_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: global_id IS NULL OR global_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     severity: error
     dimension: conformity
     description: global_id must be valid UUID format when present
@@ -59,9 +65,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: ACCOUNT_ID_UUID_FORMAT
-    type: sql
-    query: account_id IS NULL OR account_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: account_id IS NULL OR account_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     severity: error
     dimension: conformity
     description: account_id must be valid UUID format when present
@@ -69,9 +76,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: LVR_RANGE
-    type: sql
-    query: lvr_percent IS NULL OR (CAST(lvr_percent AS DOUBLE) >= 0 AND CAST(lvr_percent AS DOUBLE) <= 100)
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: lvr_percent IS NULL OR (CAST(lvr_percent AS DOUBLE) >= 0 AND CAST(lvr_percent AS DOUBLE) <= 100)
     severity: warning
     dimension: conformity
     description: LVR should be 0-100%
@@ -209,23 +217,6 @@ schema:
         is_pii: false
     - property: g3:domainType
       value: timestamp
-  - name: dq_status
-    logicalType: string
-    physicalType: STRING
-    required: true
-    classification: INTERNAL
-    customProperties:
-    - property: g3:sensitivity
-      value:
-        is_pii: false
-    - property: g3:domainType
-      value: category
-    - property: g3:accepted
-      value:
-        values:
-        - PASSED
-        - FAILED
-        - WARNING
   - name: masking_status
     logicalType: string
     physicalType: STRING
@@ -245,7 +236,7 @@ schema:
 slaProperties:
 - property: hardFailureRate
   value: 0.01
-  description: Max proportion of hard-rule failures before pipeline halts
+  description: Alert threshold for quarantined row proportion
 - property: freshnessBreachRate
   value: 0.05
   description: Max proportion of freshness breaches before alert
@@ -254,7 +245,7 @@ customProperties:
   value:
   - type: DATABASE
     ingestion_mechanism: DEBEZIUM_CDC
-    bronze_sink: cdc_changes
+    bronze_sink: cdc_mortgage_accounts
     source_dataset: public.mortgage_accounts
     fields:
     - global_id
@@ -328,7 +319,7 @@ customProperties:
     - display_lvr
 - property: g3:zeroTrust
   value:
-    quality_status_required: true
+    quality_evidence_location: pipeline_event_log_and_quarantine
     source_reference_required: true
     quarantined_excluded: true
     stale_flagged: true

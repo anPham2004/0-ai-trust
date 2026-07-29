@@ -13,9 +13,9 @@ USING (
     CAST(last_updated_at AS TIMESTAMP) AS last_updated_at,
     pipeline_run_id,
     current_timestamp() AS processed_at,
-    dq_status
+    'PASSED' AS dq_status
   FROM `0-ai-trust`.silver.app_application
-  WHERE dq_status IN ('PASSED', 'WARNING')
+  WHERE `__END_AT` IS NULL
     AND masking_status IN ('MASKED', 'CLEAN')
 ) AS source
 ON target.application_key = source.application_key

@@ -11,6 +11,8 @@ description:
 servers:
 - server: silver-delta-lake
   type: databricks
+  catalog: 0-ai-trust
+  schema: silver
   description: Silver Delta Lake table for evt_service_case
   environment: prod
 schema:
@@ -19,9 +21,10 @@ schema:
   physicalType: table
   quality:
   - id: CASE_ID_NULL
-    type: sql
-    query: case_id IS NOT NULL
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: case_id IS NOT NULL
     severity: error
     dimension: completeness
     description: Primary key must exist
@@ -29,9 +32,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: GLOBAL_ID_NULL
-    type: sql
-    query: global_id IS NOT NULL
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: global_id IS NOT NULL
     severity: error
     dimension: completeness
     description: Customer FK must exist
@@ -39,9 +43,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: CASE_TYPE_NULL
-    type: sql
-    query: case_type IS NOT NULL
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: case_type IS NOT NULL
     severity: error
     dimension: completeness
     description: Case type required
@@ -49,9 +54,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: STATUS_NULL
-    type: sql
-    query: status IS NOT NULL
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: status IS NOT NULL
     severity: error
     dimension: completeness
     description: Case status required
@@ -59,9 +65,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: CREATED_AT_NULL
-    type: sql
-    query: created_at IS NOT NULL
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: created_at IS NOT NULL
     severity: error
     dimension: completeness
     description: Creation timestamp required
@@ -69,9 +76,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: RESOLVED_DATE_ORDER
-    type: sql
-    query: resolved_at IS NULL OR resolved_at >= created_at
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: resolved_at IS NULL OR resolved_at >= created_at
     severity: error
     dimension: conformity
     description: Resolution must follow creation
@@ -79,9 +87,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: CASE_ID_UUID_FORMAT
-    type: sql
-    query: case_id IS NULL OR case_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: case_id IS NULL OR case_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     severity: error
     dimension: conformity
     description: case_id must be valid UUID format when present
@@ -89,9 +98,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: GLOBAL_ID_UUID_FORMAT
-    type: sql
-    query: global_id IS NULL OR global_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: global_id IS NULL OR global_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     severity: error
     dimension: conformity
     description: global_id must be valid UUID format when present
@@ -99,9 +109,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: ORGANISATION_ID_UUID_FORMAT
-    type: sql
-    query: organisation_id IS NULL OR organisation_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: organisation_id IS NULL OR organisation_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     severity: error
     dimension: conformity
     description: organisation_id must be valid UUID format when present
@@ -109,31 +120,34 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: SUBJECT_NOT_BLANK
-    type: sql
-    query: subject IS NULL OR length(trim(subject)) > 0
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: subject IS NULL OR length(trim(subject)) > 0
     severity: error
-    dimension: conformity
+    dimension: completeness
     description: subject must not be empty or whitespace-only when present
     customProperties:
     - property: g3:action
       value: QUARANTINE
   - id: SLA_BREACHED
-    type: sql
-    query: is_sla_breached IS NULL OR is_sla_breached = false
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: is_sla_breached IS NULL OR is_sla_breached = false
     severity: warning
-    dimension: conformity
+    dimension: timeliness
     description: Flag SLA breaches
     customProperties:
     - property: g3:action
       value: ALLOW_WITH_WARNING
   - id: CASE_STALE
-    type: sql
-    query: created_at >= date_sub(current_date(), 90)
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: created_at >= date_sub(current_date(), 90)
     severity: warning
-    dimension: conformity
+    dimension: timeliness
     description: Case created within 90 days
     customProperties:
     - property: g3:action
@@ -331,23 +345,6 @@ schema:
         is_pii: false
     - property: g3:domainType
       value: timestamp
-  - name: dq_status
-    logicalType: string
-    physicalType: STRING
-    required: true
-    classification: INTERNAL
-    customProperties:
-    - property: g3:sensitivity
-      value:
-        is_pii: false
-    - property: g3:domainType
-      value: category
-    - property: g3:accepted
-      value:
-        values:
-        - PASSED
-        - FAILED
-        - WARNING
   - name: masking_status
     logicalType: string
     physicalType: STRING
@@ -367,7 +364,7 @@ schema:
 slaProperties:
 - property: hardFailureRate
   value: 0.01
-  description: Max proportion of hard-rule failures before pipeline halts
+  description: Alert threshold for quarantined row proportion
 - property: freshnessBreachRate
   value: 0.05
   description: Max proportion of freshness breaches before alert
@@ -376,7 +373,7 @@ customProperties:
   value:
   - type: DATABASE
     ingestion_mechanism: DEBEZIUM_CDC
-    bronze_sink: cdc_changes
+    bronze_sink: cdc_service_cases
     source_dataset: public.service_cases
     fields:
     - caseId
@@ -462,7 +459,7 @@ customProperties:
     - fraud_assessment
 - property: g3:zeroTrust
   value:
-    quality_status_required: true
+    quality_evidence_location: pipeline_event_log_and_quarantine
     source_reference_required: true
     quarantined_excluded: true
     stale_flagged: true

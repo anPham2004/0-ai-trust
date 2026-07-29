@@ -11,6 +11,10 @@ description:
 servers:
 - server: source-postgresql
   type: postgresql
+  host: postgres
+  port: 5432
+  database: g3_sources
+  schema: public
   description: PostgreSQL CDC source via Debezium for credit_cards
   environment: prod
 schema:
@@ -399,8 +403,6 @@ schema:
     logicalType: string
     physicalType: string
     classification: HIGHLY_CONFIDENTIAL
-    logicalTypeOptions:
-      minimum: 0
     examples:
     - '2140.50'
     quality:
@@ -445,8 +447,6 @@ schema:
     logicalType: string
     physicalType: string
     classification: HIGHLY_CONFIDENTIAL
-    logicalTypeOptions:
-      minimum: 0
     examples:
     - '42.81'
     quality:
@@ -490,8 +490,6 @@ schema:
     logicalType: string
     physicalType: string
     classification: CONFIDENTIAL
-    logicalTypeOptions:
-      minimum: 10.0
     examples:
     - '19.75'
     quality:
@@ -731,7 +729,7 @@ customProperties:
       format: JSONL
       path_template: s3://<bucket>/bronze/landing/cdc/credit_cards/
       immutable: true
-    bronze_target: bronze.cdc_changes
+    bronze_target: bronze.cdc_credit_cards
     cdc:
       supported_operations:
       - SNAPSHOT

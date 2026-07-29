@@ -11,6 +11,8 @@ description:
 servers:
 - server: silver-delta-lake
   type: databricks
+  catalog: 0-ai-trust
+  schema: silver
   description: Silver Delta Lake table for ip_organisation
   environment: prod
 schema:
@@ -19,9 +21,10 @@ schema:
   physicalType: table
   quality:
   - id: ORGANISATION_ID_NULL
-    type: sql
-    query: organisation_id IS NOT NULL
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: organisation_id IS NOT NULL
     severity: error
     dimension: completeness
     description: Primary key must exist
@@ -29,9 +32,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: GLOBAL_ID_NULL
-    type: sql
-    query: global_id IS NOT NULL
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: global_id IS NOT NULL
     severity: error
     dimension: completeness
     description: Customer link must exist
@@ -39,9 +43,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: BUSINESS_NAME_NULL
-    type: sql
-    query: business_name IS NOT NULL
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: business_name IS NOT NULL
     severity: error
     dimension: completeness
     description: Business name required
@@ -49,9 +54,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: ORG_TYPE_NULL
-    type: sql
-    query: organisation_type IS NOT NULL
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: organisation_type IS NOT NULL
     severity: error
     dimension: completeness
     description: Organisation type required
@@ -59,9 +65,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: ORGANISATION_ID_UUID_FORMAT
-    type: sql
-    query: organisation_id IS NULL OR organisation_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: organisation_id IS NULL OR organisation_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     severity: error
     dimension: conformity
     description: organisation_id must be valid UUID format when present
@@ -69,9 +76,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: GLOBAL_ID_UUID_FORMAT
-    type: sql
-    query: global_id IS NULL OR global_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: global_id IS NULL OR global_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     severity: error
     dimension: conformity
     description: global_id must be valid UUID format when present
@@ -79,29 +87,32 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: BUSINESS_NAME_NOT_BLANK
-    type: sql
-    query: business_name IS NULL OR length(trim(business_name)) > 0
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: business_name IS NULL OR length(trim(business_name)) > 0
     severity: error
-    dimension: conformity
+    dimension: completeness
     description: business_name must not be empty or whitespace-only when present
     customProperties:
     - property: g3:action
       value: QUARANTINE
   - id: ORG_SNAPSHOT_STALE
-    type: sql
-    query: last_updated_at >= date_sub(current_date(), 30)
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: last_updated_at >= date_sub(current_date(), 30)
     severity: warning
-    dimension: conformity
+    dimension: timeliness
     description: Record updated within 30 days
     customProperties:
     - property: g3:action
       value: ALLOW_WITH_WARNING
   - id: ABN_FORMAT_CHECK
-    type: sql
-    query: abn_masked IS NULL OR length(abn_masked) >= 3
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: abn_masked IS NULL OR length(abn_masked) >= 3
     severity: warning
     dimension: conformity
     description: ABN masked value present
@@ -308,23 +319,6 @@ schema:
         is_pii: false
     - property: g3:domainType
       value: timestamp
-  - name: dq_status
-    logicalType: string
-    physicalType: STRING
-    required: true
-    classification: INTERNAL
-    customProperties:
-    - property: g3:sensitivity
-      value:
-        is_pii: false
-    - property: g3:domainType
-      value: category
-    - property: g3:accepted
-      value:
-        values:
-        - PASSED
-        - FAILED
-        - WARNING
   - name: masking_status
     logicalType: string
     physicalType: STRING
@@ -344,7 +338,7 @@ schema:
 slaProperties:
 - property: hardFailureRate
   value: 0.01
-  description: Max proportion of hard-rule failures before pipeline halts
+  description: Alert threshold for quarantined row proportion
 - property: freshnessBreachRate
   value: 0.05
   description: Max proportion of freshness breaches before alert
@@ -353,7 +347,7 @@ customProperties:
   value:
   - type: DATABASE
     ingestion_mechanism: DEBEZIUM_CDC
-    bronze_sink: cdc_changes
+    bronze_sink: cdc_organisations
     source_dataset: public.organisations
     fields:
     - global_id
@@ -436,7 +430,7 @@ customProperties:
     - fraud_assessment
 - property: g3:zeroTrust
   value:
-    quality_status_required: true
+    quality_evidence_location: pipeline_event_log_and_quarantine
     source_reference_required: true
     quarantined_excluded: true
     stale_flagged: true

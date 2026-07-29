@@ -19,9 +19,9 @@ USING (
     sanctions_check,
     pipeline_run_id,
     current_timestamp() AS processed_at,
-    dq_status
-  FROM `0-ai-trust`.silver.ip_kyc_kyb_record
-  WHERE dq_status IN ('PASSED', 'WARNING')
+    'PASSED' AS dq_status
+  FROM `0-ai-trust`.silver.ip_kyc
+  WHERE `__END_AT` IS NULL
     AND masking_status IN ('MASKED', 'CLEAN')
 ) AS source
 ON target.kyc_key = source.kyc_key

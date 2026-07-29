@@ -11,6 +11,8 @@ description:
 servers:
 - server: silver-delta-lake
   type: databricks
+  catalog: 0-ai-trust
+  schema: silver
   description: Silver Delta Lake table for ip_kyc
   environment: prod
 schema:
@@ -19,9 +21,10 @@ schema:
   physicalType: table
   quality:
   - id: KYC_ID_NULL
-    type: sql
-    query: kyc_id IS NOT NULL
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: kyc_id IS NOT NULL
     severity: error
     dimension: completeness
     description: Primary key must exist
@@ -29,9 +32,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: GLOBAL_ID_NULL
-    type: sql
-    query: global_id IS NOT NULL
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: global_id IS NOT NULL
     severity: error
     dimension: completeness
     description: Customer FK must exist
@@ -39,9 +43,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: VERIFICATION_STATUS_INVALID
-    type: sql
-    query: verification_status IN ('VERIFIED','PENDING','FAILED')
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: verification_status IN ('VERIFIED','PENDING','FAILED')
     severity: error
     dimension: conformity
     description: Must be a known verification status
@@ -49,9 +54,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: RISK_RATING_INVALID
-    type: sql
-    query: risk_rating IN ('LOW','MEDIUM','HIGH','VERY_HIGH')
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: risk_rating IN ('LOW','MEDIUM','HIGH','VERY_HIGH')
     severity: error
     dimension: conformity
     description: Must be a known risk rating
@@ -59,9 +65,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: SANCTIONS_CHECK_INVALID
-    type: sql
-    query: sanctions_check IN ('CLEAR','MATCH','PENDING')
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: sanctions_check IN ('CLEAR','MATCH','PENDING')
     severity: error
     dimension: conformity
     description: Must be a known sanctions status
@@ -69,9 +76,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: RECORD_TYPE_INVALID
-    type: sql
-    query: record_type IN ('KYC','KYB')
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: record_type IN ('KYC','KYB')
     severity: error
     dimension: conformity
     description: Must be KYC or KYB
@@ -79,9 +87,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: KYC_ID_UUID_FORMAT
-    type: sql
-    query: kyc_id IS NULL OR kyc_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: kyc_id IS NULL OR kyc_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     severity: error
     dimension: conformity
     description: kyc_id must be valid UUID format when present
@@ -89,9 +98,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: GLOBAL_ID_UUID_FORMAT
-    type: sql
-    query: global_id IS NULL OR global_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: global_id IS NULL OR global_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     severity: error
     dimension: conformity
     description: global_id must be valid UUID format when present
@@ -99,9 +109,10 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: ORGANISATION_ID_UUID_FORMAT
-    type: sql
-    query: organisation_id IS NULL OR organisation_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: organisation_id IS NULL OR organisation_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     severity: error
     dimension: conformity
     description: organisation_id must be valid UUID format when present
@@ -109,19 +120,21 @@ schema:
     - property: g3:action
       value: QUARANTINE
   - id: KYC_REVIEW_OVERDUE
-    type: sql
-    query: next_review_date IS NULL OR next_review_date >= current_date()
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: next_review_date IS NULL OR next_review_date >= current_date()
     severity: warning
-    dimension: conformity
+    dimension: timeliness
     description: KYC review not overdue
     customProperties:
     - property: g3:action
       value: ALLOW_WITH_WARNING
   - id: REVIEW_DATE_ORDER
-    type: sql
-    query: next_review_date IS NULL OR last_review_date IS NULL OR next_review_date > last_review_date
-    mustBe: 0
+    type: custom
+    engine: databricks-lakeflow
+    implementation:
+      expression: next_review_date IS NULL OR last_review_date IS NULL OR next_review_date > last_review_date
     severity: warning
     dimension: conformity
     description: Next review must follow last review
@@ -358,23 +371,6 @@ schema:
         is_pii: false
     - property: g3:domainType
       value: timestamp
-  - name: dq_status
-    logicalType: string
-    physicalType: STRING
-    required: true
-    classification: INTERNAL
-    customProperties:
-    - property: g3:sensitivity
-      value:
-        is_pii: false
-    - property: g3:domainType
-      value: category
-    - property: g3:accepted
-      value:
-        values:
-        - PASSED
-        - FAILED
-        - WARNING
   - name: masking_status
     logicalType: string
     physicalType: STRING
@@ -394,7 +390,7 @@ schema:
 slaProperties:
 - property: hardFailureRate
   value: 0.01
-  description: Max proportion of hard-rule failures before pipeline halts
+  description: Alert threshold for quarantined row proportion
 - property: freshnessBreachRate
   value: 0.05
   description: Max proportion of freshness breaches before alert
@@ -403,7 +399,7 @@ customProperties:
   value:
   - type: DATABASE
     ingestion_mechanism: DEBEZIUM_CDC
-    bronze_sink: cdc_changes
+    bronze_sink: cdc_kyc_records
     source_dataset: public.kyc_records
     fields:
     - global_id
@@ -491,7 +487,7 @@ customProperties:
     - display_sanctions_check
 - property: g3:zeroTrust
   value:
-    quality_status_required: true
+    quality_evidence_location: pipeline_event_log_and_quarantine
     source_reference_required: true
     quarantined_excluded: true
     stale_flagged: true

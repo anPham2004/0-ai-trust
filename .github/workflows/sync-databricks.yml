@@ -16,7 +16,10 @@ jobs:
 
       - name: Validate repository and data contracts
         run: |
-          python -m pip install pytest pyyaml
+          python -m pip install pytest pyyaml datacontract-cli==1.0.14
+          find contracts/silver contracts/source/database contracts/source/event contracts/source/file \
+            -type f -name '*.yml' -print0 \
+            | xargs -0 -n1 -P4 datacontract lint
           python -m pytest tests -q
 
       - uses: databricks/setup-cli@main

@@ -70,7 +70,7 @@ def build_evt_support_interaction():
     return _with_audit(selected, "event_support_interactions")
 
 
-def build_evt_service_case_event():
+def build_evt_case_event():
     source = event_change_stream("service_case_events")
     selected = source.select(
         F.col("eventId").cast("string").alias("event_id"),
@@ -87,4 +87,4 @@ def build_evt_service_case_event():
 
 publish_scd2_model("evt_service_case", build_evt_service_case, ["case_id"])
 publish_append_model("evt_support_interaction", build_evt_support_interaction, ["interaction_id"])
-publish_append_model("evt_service_case_event", build_evt_service_case_event, ["event_id"])
+publish_append_model("evt_case_event", build_evt_case_event, ["event_id"])

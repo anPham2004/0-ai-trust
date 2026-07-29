@@ -11,6 +11,8 @@ description:
 servers:
 - server: source-s3
   type: s3
+  location: s3://g3-assignment/g3/0-ai-trust/bronze/landing/file/energy_plans/*.jsonl
+  format: json
   description: S3 file drop for energy_plans
   environment: prod
 schema:
@@ -623,7 +625,7 @@ customProperties:
       path_template: s3://<bucket>/bronze/landing/file/energy_plans/*.csv
       immutable: true
       copy_mode: BYTE_FOR_BYTE
-    bronze_target: bronze.file_arrivals
+    bronze_target: bronze.file_energy_plans
     bronze_reader: AUTO_LOADER_BINARY_FILE
     bronze_metadata:
     - file_path

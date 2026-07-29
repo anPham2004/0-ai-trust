@@ -11,6 +11,10 @@ description:
 servers:
 - server: source-postgresql
   type: postgresql
+  host: postgres
+  port: 5432
+  database: g3_sources
+  schema: public
   description: PostgreSQL CDC source via Debezium for loan_accounts
   environment: prod
 schema:
@@ -534,8 +538,6 @@ schema:
     logicalType: string
     physicalType: string
     classification: CONFIDENTIAL
-    logicalTypeOptions:
-      minimum: 3.0
     examples:
     - '8.50'
     quality:
@@ -800,7 +802,7 @@ customProperties:
       format: JSONL
       path_template: s3://<bucket>/bronze/landing/cdc/loan_accounts/
       immutable: true
-    bronze_target: bronze.cdc_changes
+    bronze_target: bronze.cdc_loan_accounts
     cdc:
       supported_operations:
       - SNAPSHOT

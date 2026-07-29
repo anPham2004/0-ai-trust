@@ -27,9 +27,9 @@ USING (
     CAST(NULL AS STRING) AS resolution,
     pipeline_run_id,
     current_timestamp() AS processed_at,
-    dq_status
+    'PASSED' AS dq_status
   FROM `0-ai-trust`.silver.evt_service_case
-  WHERE dq_status IN ('PASSED', 'WARNING') AND masking_status IN ('MASKED', 'CLEAN')
+  WHERE `__END_AT` IS NULL AND masking_status IN ('MASKED', 'CLEAN')
 
   UNION ALL
 
@@ -40,9 +40,9 @@ USING (
     CAST(NULL AS STRING), CAST(NULL AS TIMESTAMP), false, CAST(NULL AS TIMESTAMP),
     CAST(NULL AS TIMESTAMP), CAST(NULL AS STRING), CAST(NULL AS STRING), CAST(NULL AS TIMESTAMP),
     CAST(NULL AS STRING), channel, CAST(interaction_timestamp AS TIMESTAMP), topic, resolution,
-    pipeline_run_id, current_timestamp(), dq_status
+    pipeline_run_id, current_timestamp(), 'PASSED'
   FROM `0-ai-trust`.silver.evt_support_interaction
-  WHERE dq_status IN ('PASSED', 'WARNING') AND masking_status IN ('MASKED', 'CLEAN')
+  WHERE masking_status IN ('MASKED', 'CLEAN')
 
   UNION ALL
 
@@ -53,11 +53,11 @@ USING (
     CAST(c.created_at AS TIMESTAMP), CAST(c.resolved_at AS TIMESTAMP), c.resolution_summary,
     e.event_type, CAST(e.event_timestamp AS TIMESTAMP), e.description, CAST(NULL AS STRING),
     CAST(NULL AS TIMESTAMP), CAST(NULL AS STRING), CAST(NULL AS STRING), e.pipeline_run_id,
-    current_timestamp(), CASE WHEN e.dq_status = 'WARNING' OR c.dq_status = 'WARNING' THEN 'WARNING' ELSE 'PASSED' END
-  FROM `0-ai-trust`.silver.evt_service_case_event AS e
-  JOIN `0-ai-trust`.silver.evt_service_case AS c ON c.case_id = e.case_id
-  WHERE e.dq_status IN ('PASSED', 'WARNING') AND c.dq_status IN ('PASSED', 'WARNING')
-    AND e.masking_status IN ('MASKED', 'CLEAN') AND c.masking_status IN ('MASKED', 'CLEAN')
+    current_timestamp(), 'PASSED'
+  FROM `0-ai-trust`.silver.evt_case_event AS e
+  JOIN `0-ai-trust`.silver.evt_service_case AS c
+    ON c.case_id = e.case_id AND c.`__END_AT` IS NULL
+  WHERE e.masking_status IN ('MASKED', 'CLEAN') AND c.masking_status IN ('MASKED', 'CLEAN')
 ) AS source
 ON target.service_fact_key = source.service_fact_key
 WHEN MATCHED THEN UPDATE SET *

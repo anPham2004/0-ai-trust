@@ -11,6 +11,9 @@ description:
 servers:
 - server: source-kafka
   type: kafka
+  host: kafka:9092
+  topic: nab.application.events
+  format: json
   description: Kafka event stream for loan_application_events
   environment: prod
 schema:
@@ -918,9 +921,6 @@ schema:
     logicalType: string
     physicalType: string
     classification: HIGHLY_CONFIDENTIAL
-    logicalTypeOptions:
-      minimum: 0
-      maximum: 1000
     examples:
     - '750'
     quality:
@@ -1046,7 +1046,7 @@ customProperties:
       format: JSONL
       path_template: s3://<bucket>/bronze/landing/event/loan_application_events/
       immutable: true
-    bronze_target: bronze.kafka_events
+    bronze_target: bronze.event_loan_application_events
     deduplicated_bronze_target: bronze.kafka_events_deduplicated
     event_envelope:
       retained_metadata:

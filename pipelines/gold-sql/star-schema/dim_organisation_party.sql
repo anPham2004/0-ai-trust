@@ -8,16 +8,16 @@ USING (
     r.party_role,
     r.authority_level,
     r.is_active,
-    r.relationship_start_date AS start_date,
-    r.relationship_end_date AS end_date,
+    r.start_date,
+    r.end_date,
     i.preferred_contact_channel,
     r.pipeline_run_id,
     current_timestamp() AS processed_at,
-    CASE WHEN r.dq_status = 'WARNING' OR i.dq_status = 'WARNING' THEN 'WARNING' ELSE 'PASSED' END AS dq_status
-  FROM `0-ai-trust`.silver.ip_organisation_party_relationship AS r
+    'PASSED' AS dq_status
+  FROM `0-ai-trust`.silver.ip_party_relationship AS r
   JOIN `0-ai-trust`.silver.ip_individual AS i ON i.global_id = r.global_id
-  WHERE r.dq_status IN ('PASSED', 'WARNING')
-    AND i.dq_status IN ('PASSED', 'WARNING')
+  WHERE r.`__END_AT` IS NULL
+    AND i.`__END_AT` IS NULL
     AND r.masking_status IN ('MASKED', 'CLEAN')
     AND i.masking_status IN ('MASKED', 'CLEAN')
 ) AS source

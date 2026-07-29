@@ -3,11 +3,11 @@
 
 WITH mutable_entities(table_name) AS (
   SELECT * FROM VALUES
-    ('ip_individual'), ('ip_kyc_kyb_record'), ('ip_organisation'),
-    ('ip_organisation_party_relationship'), ('ip_organisation_relationship'),
-    ('arr_banking_arrangement'), ('arr_loan_arrangement'),
-    ('arr_mortgage_arrangement'), ('arr_credit_card_arrangement'),
-    ('app_application'), ('app_document'), ('evt_service_case')
+    ('ip_individual'), ('ip_kyc'), ('ip_organisation'),
+    ('ip_party_relationship'), ('ip_org_relationship'),
+    ('arr_banking_arrangement'), ('arr_loan'),
+    ('arr_mortgage'), ('arr_credit_card'),
+    ('app_application'), ('app_missing_document'), ('evt_service_case')
 ), required_columns(column_name) AS (
   SELECT * FROM VALUES ('__START_AT'), ('__END_AT')
 ), missing AS (

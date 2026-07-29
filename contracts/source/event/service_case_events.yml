@@ -11,6 +11,9 @@ description:
 servers:
 - server: source-kafka
   type: kafka
+  host: kafka:9092
+  topic: nab.customer-service.events
+  format: json
   description: Kafka event stream for service_case_events
   environment: prod
 schema:
@@ -579,7 +582,7 @@ customProperties:
       format: JSONL
       path_template: s3://<bucket>/bronze/landing/event/service_case_events/
       immutable: true
-    bronze_target: bronze.kafka_events
+    bronze_target: bronze.event_service_case_events
     deduplicated_bronze_target: bronze.kafka_events_deduplicated
     event_envelope:
       retained_metadata:

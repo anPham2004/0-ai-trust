@@ -61,7 +61,7 @@ SELECT assert_true(
 SELECT assert_true(
   (SELECT COUNT(*) FROM `0-ai-trust`.gold.dim_document) =
   (SELECT COUNT(DISTINCT document_id)
-   FROM `0-ai-trust`.silver.app_document
+   FROM `0-ai-trust`.silver.app_missing_document
    WHERE dq_status IN ('PASSED', 'WARNING')
      AND masking_status IN ('MASKED', 'CLEAN')),
   'Document reconciliation failed'

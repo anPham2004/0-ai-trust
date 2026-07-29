@@ -11,6 +11,10 @@ description:
 servers:
 - server: source-postgresql
   type: postgresql
+  host: postgres
+  port: 5432
+  database: g3_sources
+  schema: public
   description: PostgreSQL CDC source via Debezium for kyc_records
   environment: prod
 schema:
@@ -794,7 +798,7 @@ customProperties:
       format: JSONL
       path_template: s3://<bucket>/bronze/landing/cdc/kyc_records/
       immutable: true
-    bronze_target: bronze.cdc_changes
+    bronze_target: bronze.cdc_kyc_records
     cdc:
       supported_operations:
       - SNAPSHOT

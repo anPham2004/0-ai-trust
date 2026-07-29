@@ -16,9 +16,9 @@ USING (
     CAST(last_reminder_at AS TIMESTAMP) AS last_reminder_at,
     pipeline_run_id,
     current_timestamp() AS processed_at,
-    dq_status
-  FROM `0-ai-trust`.silver.app_document
-  WHERE dq_status IN ('PASSED', 'WARNING')
+    'PASSED' AS dq_status
+  FROM `0-ai-trust`.silver.app_missing_document
+  WHERE `__END_AT` IS NULL
     AND masking_status IN ('MASKED', 'CLEAN')
 ) AS source
 ON target.document_key = source.document_key

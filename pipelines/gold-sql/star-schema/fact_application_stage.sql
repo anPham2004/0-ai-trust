@@ -24,9 +24,9 @@ USING (
     CAST(NULL AS STRING) AS action,
     pipeline_run_id,
     current_timestamp() AS processed_at,
-    dq_status
-  FROM `0-ai-trust`.silver.app_application_stage_history
-  WHERE dq_status IN ('PASSED', 'WARNING') AND masking_status IN ('MASKED', 'CLEAN')
+    'PASSED' AS dq_status
+  FROM `0-ai-trust`.silver.app_stage_history
+  WHERE masking_status IN ('MASKED', 'CLEAN')
 
   UNION ALL
 
@@ -36,9 +36,9 @@ USING (
     CAST(NULL AS TIMESTAMP), CAST(NULL AS INT), false, CAST(NULL AS TIMESTAMP), false,
     CAST(NULL AS STRING), CAST(NULL AS STRING), old_status, new_status, reason,
     CAST(NULL AS STRING), CAST(NULL AS STRING), CAST(NULL AS STRING), pipeline_run_id,
-    current_timestamp(), dq_status
-  FROM `0-ai-trust`.silver.app_status_change_history
-  WHERE dq_status IN ('PASSED', 'WARNING') AND masking_status IN ('MASKED', 'CLEAN')
+    current_timestamp(), 'PASSED'
+  FROM `0-ai-trust`.silver.app_status_change
+  WHERE masking_status IN ('MASKED', 'CLEAN')
 
   UNION ALL
 
@@ -48,9 +48,9 @@ USING (
     CAST(NULL AS TIMESTAMP), CAST(NULL AS INT), false, CAST(NULL AS TIMESTAMP), false,
     CAST(NULL AS STRING), CAST(NULL AS STRING), CAST(NULL AS STRING), CAST(NULL AS STRING),
     CAST(NULL AS STRING), lifecycle_transition, event_origin, action, pipeline_run_id,
-    current_timestamp(), dq_status
-  FROM `0-ai-trust`.silver.app_application_event
-  WHERE dq_status IN ('PASSED', 'WARNING') AND masking_status IN ('MASKED', 'CLEAN')
+    current_timestamp(), 'PASSED'
+  FROM `0-ai-trust`.silver.app_lifecycle_event
+  WHERE masking_status IN ('MASKED', 'CLEAN')
 ) AS source
 ON target.stage_fact_key = source.stage_fact_key
 WHEN MATCHED THEN UPDATE SET *

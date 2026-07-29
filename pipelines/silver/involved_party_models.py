@@ -99,7 +99,7 @@ def build_ip_individual():
     ).drop(*[column for column in selected.columns if column.startswith("_")])
 
 
-def build_ip_kyc_kyb_record():
+def build_ip_kyc():
     source = cdc_change_stream("kyc_records")
     selected = source.select(
         F.col("global_id").cast("string").alias("global_id"),
@@ -152,7 +152,7 @@ def build_ip_organisation():
     ], masking_status="MASKED")
 
 
-def build_ip_organisation_party_relationship():
+def build_ip_party_relationship():
     return _single_source("organisation_party_relationships", [
         F.col("relationshipId").cast("string").alias("relationship_id"),
         F.col("global_id").cast("string").alias("global_id"),
@@ -160,24 +160,24 @@ def build_ip_organisation_party_relationship():
         F.upper(trimmed(F.col("partyRole"))).alias("party_role"),
         F.upper(trimmed(F.col("authorityLevel"))).alias("authority_level"),
         F.col("isActive").cast("boolean").alias("is_active"),
-        F.to_date("startDate").alias("relationship_start_date"),
-        F.to_date("endDate").alias("relationship_end_date"),
+        F.to_date("startDate").alias("start_date"),
+        F.to_date("endDate").alias("end_date"),
     ])
 
 
-def build_ip_organisation_relationship():
+def build_ip_org_relationship():
     return _single_source("organisation_relationships", [
         F.col("relationshipId").cast("string").alias("relationship_id"),
         F.col("sourceOrgId").cast("string").alias("source_org_id"),
         F.col("targetOrgId").cast("string").alias("target_org_id"),
         F.upper(trimmed(F.col("relationshipType"))).alias("relationship_type"),
         F.col("isActive").cast("boolean").alias("is_active"),
-        F.to_date("startDate").alias("relationship_start_date"),
+        F.to_date("startDate").alias("start_date"),
     ])
 
 
 publish_joined_scd2_model("ip_individual", build_ip_individual, ["global_id"])
-publish_scd2_model("ip_kyc_kyb_record", build_ip_kyc_kyb_record, ["kyc_id"])
+publish_scd2_model("ip_kyc", build_ip_kyc, ["kyc_id"])
 publish_scd2_model("ip_organisation", build_ip_organisation, ["organisation_id"])
-publish_scd2_model("ip_organisation_party_relationship", build_ip_organisation_party_relationship, ["relationship_id"])
-publish_scd2_model("ip_organisation_relationship", build_ip_organisation_relationship, ["relationship_id"])
+publish_scd2_model("ip_party_relationship", build_ip_party_relationship, ["relationship_id"])
+publish_scd2_model("ip_org_relationship", build_ip_org_relationship, ["relationship_id"])

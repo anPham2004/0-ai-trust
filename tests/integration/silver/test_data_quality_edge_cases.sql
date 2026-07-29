@@ -17,7 +17,7 @@ WHERE LOWER(status) NOT IN ('open', 'in_progress', 'resolved', 'closed');
 SELECT assert_true(COUNT(*) = 0, 'Application has multiple current stages')
 FROM (
   SELECT application_id
-  FROM `0-ai-trust`.silver.app_application_stage_history
+  FROM `0-ai-trust`.silver.app_stage_history
   WHERE is_current_stage
   GROUP BY application_id
   HAVING COUNT(*) > 1
@@ -26,11 +26,11 @@ FROM (
 -- At-least-once event delivery and repeated file drops must remain idempotent.
 SELECT assert_true(COUNT(*) = 0, 'Duplicate immutable records reached Silver')
 FROM (
-  SELECT history_id AS record_id FROM `0-ai-trust`.silver.app_application_stage_history GROUP BY history_id HAVING COUNT(*) > 1
+  SELECT history_id AS record_id FROM `0-ai-trust`.silver.app_stage_history GROUP BY history_id HAVING COUNT(*) > 1
   UNION ALL
-  SELECT change_id FROM `0-ai-trust`.silver.app_status_change_history GROUP BY change_id HAVING COUNT(*) > 1
+  SELECT change_id FROM `0-ai-trust`.silver.app_status_change GROUP BY change_id HAVING COUNT(*) > 1
   UNION ALL
-  SELECT event_id FROM `0-ai-trust`.silver.app_application_event GROUP BY event_id HAVING COUNT(*) > 1
+  SELECT event_id FROM `0-ai-trust`.silver.app_lifecycle_event GROUP BY event_id HAVING COUNT(*) > 1
   UNION ALL
   SELECT loan_id FROM `0-ai-trust`.silver.app_accepted_loan GROUP BY loan_id HAVING COUNT(*) > 1
   UNION ALL
@@ -38,11 +38,11 @@ FROM (
   UNION ALL
   SELECT interaction_id FROM `0-ai-trust`.silver.evt_support_interaction GROUP BY interaction_id HAVING COUNT(*) > 1
   UNION ALL
-  SELECT event_id FROM `0-ai-trust`.silver.evt_service_case_event GROUP BY event_id HAVING COUNT(*) > 1
+  SELECT event_id FROM `0-ai-trust`.silver.evt_case_event GROUP BY event_id HAVING COUNT(*) > 1
 );
 
 SELECT assert_true(COUNT(*) = 0, 'Invalid application status transition survived Silver')
-FROM `0-ai-trust`.silver.app_status_change_history
+FROM `0-ai-trust`.silver.app_status_change
 WHERE CONCAT(UPPER(old_status), '->', UPPER(new_status)) NOT IN (
   'ASSESSMENT->CANCELLED',
   'ASSESSMENT->CONDITIONALLY_APPROVED',
