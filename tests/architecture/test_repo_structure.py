@@ -200,7 +200,7 @@ class ArchitectureTests(unittest.TestCase):
     def test_silver_defines_the_approved_nineteen_entity_model(self):
         expected = {
             "application_models.py", "arrangement_models.py", "event_models.py",
-            "involved_party_models.py",
+            "involved_party_models.py", "contract_validation_models.py",
         }
         actual = {path.name for path in (ROOT / "pipelines/silver").glob("*.py")}
         self.assertEqual(actual, expected)
