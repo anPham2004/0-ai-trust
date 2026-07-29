@@ -295,7 +295,6 @@ def publish_joined_scd2_model(
         keys=keys,
         stored_as_scd_type="2",
         track_history_except_column_list=AUDIT_COLUMNS_EXCLUDED_FROM_HISTORY,
-        name=f"{name}_scd2_snapshots",
     )
 
 
