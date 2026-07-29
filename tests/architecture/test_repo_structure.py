@@ -43,7 +43,7 @@ class ArchitectureTests(unittest.TestCase):
                 "application",
                 "event",
             },
-            "gold": {"cde_registry.yml", "scope_registry.yml"},
+            "gold": {"ai_ready_context.yml", "cde_registry.yml", "scope_registry.yml"},
         }
         for layer, filenames in expected.items():
             actual = {path.name for path in (ROOT / "contracts" / layer).iterdir()
@@ -143,44 +143,137 @@ class ArchitectureTests(unittest.TestCase):
         self.assertNotIn("nab_gold", setup)
         self.assertEqual(setup.count("CREATE SCHEMA IF NOT EXISTS"), 3)
 
-    def test_all_bronze_tables_are_external_delta(self):
+    def test_bronze_storage_is_owned_by_streaming_tables(self):
         setup = (ROOT / "pipelines/bootstrap/v001_create_external_objects.sql").read_text(encoding="utf-8")
-        for table in ("cdc_changes", "kafka_events", "file_arrivals"):
-            marker = f"CREATE TABLE IF NOT EXISTS `0-ai-trust`.bronze.{table}"
-            section = setup.split(marker, 1)[1].split(";", 1)[0]
-            self.assertIn("USING DELTA", section)
-            self.assertIn("LOCATION 's3://g3-assignment/g3/0-ai-trust/bronze/tables/", section)
-        self.assertIn("CREATE OR REPLACE VIEW `0-ai-trust`.bronze.cdc_scd2", setup)
+        cleanup = (ROOT / "pipelines/bootstrap/v002_remove_legacy_bronze_objects.sql").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("CREATE TABLE", setup)
+        self.assertIn("CREATE EXTERNAL VOLUME", setup)
+        for legacy in ("cdc_changes", "cdc_scd2", "kafka_events", "file_arrivals"):
+            self.assertIn(legacy, cleanup)
+        self.assertNotIn("CREATE OR REPLACE VIEW", cleanup)
 
-    def test_declarative_pipeline_writes_only_external_sinks(self):
+    def test_declarative_pipeline_uses_source_aligned_streaming_tables(self):
         definitions = "\n".join(
             path.read_text(encoding="utf-8")
-            for path in sorted((ROOT / "pipelines/bronze").glob("*_ingestion.py"))
+            for path in sorted((ROOT / "pipelines/bronze").glob("*.py"))
         )
         support = (ROOT / "pipelines/framework/landing_stream_reader.py").read_text(encoding="utf-8")
-        self.assertEqual(definitions.count("dp.create_sink("), 3)
-        self.assertEqual(definitions.count("@dp.append_flow"), 3)
+        registry = __import__(
+            "pipelines.framework.source_dataset_registry",
+            fromlist=["CDC_DATASETS", "EVENT_DATASETS", "FILE_DATASETS"],
+        )
+        self.assertEqual(len(registry.CDC_DATASETS), 23)
+        self.assertEqual(len(registry.EVENT_DATASETS), 5)
+        self.assertEqual(len(registry.FILE_DATASETS), 4)
+        self.assertIn('name=f"cdc_{dataset}"', definitions)
+        self.assertIn('name=f"event_{dataset}"', definitions)
+        self.assertIn('name=f"file_{dataset}"', definitions)
+        self.assertIn('name="ingestion_quarantine"', definitions)
+        self.assertIn('name="control_ingestion_manifests"', definitions)
+        self.assertNotIn("path=", definitions)
+        self.assertNotIn("dp.create_sink(", definitions)
+        self.assertNotIn("@dp.append_flow", definitions)
         self.assertNotIn("import dlt", definitions)
         self.assertNotIn("dlt.", definitions)
         self.assertIn("from pyspark import pipelines as dp", definitions)
         self.assertIn('option("cloudFiles.useManagedFileEvents", "true")', support + definitions)
-        self.assertIn('option("cloudFiles.format", "binaryFile")', definitions)
+        self.assertIn('option("cloudFiles.format", "json")', support)
+        self.assertIn('option("cloudFiles.format", "csv")', support)
+        self.assertIn('option("cloudFiles.schemaEvolutionMode", "addNewColumns")', support)
+        self.assertIn('option("rescuedDataColumn", "_rescued_data")', support)
+        self.assertNotIn('option("cloudFiles.format", "binaryFile")', definitions + support)
+        self.assertNotIn("raw_payload", definitions)
+        self.assertNotIn("raw_content", definitions)
 
-    def test_silver_and_gold_are_templates_only(self):
+    def test_landing_exposes_nested_records_for_native_schema_evolution(self):
+        exporter = (ROOT / "source-simulator/landing-exporter/exporter.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('record["record"] = envelope.get("after") or envelope.get("before")', exporter)
+        self.assertIn('record["record"] = envelope["payload"]', exporter)
+        self.assertIn('"payload": parsed', exporter)
+        self.assertNotIn('"value": message.value()', exporter)
+
+    def test_silver_defines_the_approved_nineteen_entity_model(self):
         expected = {
-            "silver": {
-                "application_curated.py", "customer_curated.py", "organisation_curated.py",
-                "record_quarantine.py", "service_curated.py",
-            },
-            "gold": {"banker_assist_context.py", "data_quality_context.py", "semantic_context.py"},
+            "application_models.py", "arrangement_models.py", "event_models.py",
+            "involved_party_models.py",
         }
-        for layer, filenames in expected.items():
-            actual = {path.name for path in (ROOT / "pipelines" / layer).glob("*.py")}
-            self.assertEqual(actual, filenames)
-            for filename in filenames:
-                content = (ROOT / "pipelines" / layer / filename).read_text(encoding="utf-8")
-                self.assertNotIn("@dp.", content)
-                self.assertNotIn("CREATE TABLE", content.upper())
+        actual = {path.name for path in (ROOT / "pipelines/silver").glob("*.py")}
+        self.assertEqual(actual, expected)
+        definitions = "\n".join(
+            (ROOT / "pipelines/silver" / filename).read_text(encoding="utf-8")
+            for filename in expected
+        )
+        self.assertEqual(definitions.count('publish_scd2_model("'), 8)
+        self.assertEqual(definitions.count('publish_joined_scd2_model("'), 4)
+        self.assertEqual(definitions.count('publish_append_model("'), 7)
+
+        framework = (ROOT / "pipelines/framework/silver_model.py").read_text(encoding="utf-8")
+        self.assertIn('.option("readChangeFeed", "true")', framework)
+        self.assertIn("dp.create_auto_cdc_flow(", framework)
+        self.assertIn('stored_as_scd_type="2"', framework)
+        self.assertIn('F.col("_sequence_ts")', framework)
+        self.assertIn('private=True', framework)
+        self.assertIn('dropDuplicatesWithinWatermark(keys)', framework)
+        self.assertIn('withWatermark("processed_at", APPEND_DEDUPLICATION_WATERMARK)', framework)
+        self.assertNotIn("quarantine_name", framework)
+
+        self.assertIn(
+            'publish_append_model("app_application_stage_history", build_app_application_stage_history, ["history_id"])',
+            definitions,
+        )
+        self.assertIn(
+            'publish_append_model("app_status_change_history", build_app_status_change_history, ["change_id"])',
+            definitions,
+        )
+        self.assertIn(
+            'publish_append_model("evt_support_interaction", build_evt_support_interaction, ["interaction_id"])',
+            definitions,
+        )
+
+    def test_gold_has_external_star_tables_and_ai_ready_views(self):
+        star = sorted((ROOT / "pipelines/gold-sql/star-schema").glob("*.sql"))
+        ai_ready = sorted((ROOT / "pipelines/gold-sql/ai-ready").glob("*.sql"))
+        self.assertEqual(len(star), 10)
+        self.assertEqual(len(ai_ready), 10)
+
+        for path in star:
+            sql = path.read_text(encoding="utf-8").upper()
+            self.assertIn("MERGE INTO `0-AI-TRUST`.GOLD.", sql)
+            self.assertNotIn("CREATE MATERIALIZED VIEW", sql)
+            self.assertNotIn("CREATE STREAMING TABLE", sql)
+
+        for path in ai_ready:
+            sql = path.read_text(encoding="utf-8").upper()
+            self.assertIn("CREATE OR REPLACE VIEW `0-AI-TRUST`.GOLD.AIV_", sql)
+            self.assertNotIn("CREATE MATERIALIZED VIEW", sql)
+
+    def test_all_gold_physical_tables_are_external_delta(self):
+        setup = (ROOT / "pipelines/bootstrap/v003_create_gold_external_tables.sql").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(setup.count("CREATE TABLE IF NOT EXISTS `0-ai-trust`.gold."), 10)
+        self.assertEqual(setup.count("USING DELTA"), 10)
+        self.assertEqual(
+            setup.count("LOCATION 's3://g3-assignment/g3/0-ai-trust/gold/tables/"),
+            10,
+        )
+
+    def test_ai_ready_views_carry_zero_trust_context(self):
+        definitions = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted((ROOT / "pipelines/gold-sql/ai-ready").glob("*.sql"))
+        )
+        for field in (
+            "dq_status", "pipeline_run_id", "last_refreshed_at",
+            "context_version", "usage_restriction",
+        ):
+            self.assertIn(field, definitions)
+        self.assertIn("is_account_group_member('banker-assist-users')", definitions)
+        self.assertNotRegex(definitions.lower(), r"\b(email|phone_number|tfn|card_number)\b")
 
     def test_periodic_database_kafka_and_file_activity_exists(self):
         activity = (ROOT / "source-simulator/activity-generator/activity.py").read_text(encoding="utf-8")
@@ -188,6 +281,10 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn("INSERT INTO lending_origination.loan_applications", activity)
         self.assertIn('"nab.application.events"', activity)
         self.assertIn("copy_object", activity)
+        self.assertIn('"ApplicationSubmitted"', activity)
+        self.assertIn('"ApplicationDetailsUpdated"', activity)
+        self.assertIn('"LoanApplicationProcessEvent"', activity)
+        self.assertNotIn('"periodic_update"', activity)
 
     def test_compose_uses_apache_kafka_and_credit_guard(self):
         compose = (ROOT / "source-simulator/compose.yaml").read_text(encoding="utf-8")
@@ -199,6 +296,8 @@ class ArchitectureTests(unittest.TestCase):
         self.assertNotIn("kafka-topics.sh", compose)
         self.assertIn("mem_limit:", compose)
         self.assertIn("MICROBATCH_INTERVAL_SECONDS:-60", compose)
+        self.assertIn("SOURCE_ACTIVITY_INTERVAL_SECONDS:-60", compose)
+        self.assertIn("SOURCE_FILE_INTERVAL_SECONDS:-3600", compose)
 
     def test_downstream_refresh_policy_is_fifteen_minutes(self):
         policy = (ROOT / "pipelines/framework/refresh_policy.py").read_text(encoding="utf-8")

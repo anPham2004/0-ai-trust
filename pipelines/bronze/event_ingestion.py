@@ -1,32 +1,49 @@
-"""Append source-native business-event envelopes to the external Bronze ledger."""
+"""Declare one source-aligned Bronze streaming table per business-event dataset."""
 
 from pyspark import pipelines as dp
 from pyspark.sql import functions as F
 
-from framework.landing_stream_reader import external_bronze_table, read_transport_stream
+from framework.landing_stream_reader import read_json_dataset_stream
+from framework.source_dataset_registry import EVENT_DATASETS
 
 
-dp.create_sink(
-    "kafka_events_sink",
-    "delta",
-    {"tableName": external_bronze_table("kafka_events")},
-)
-
-
-@dp.append_flow(name="ingest_kafka_events", target="kafka_events_sink")
-def ingest_kafka_events():
-    return read_transport_stream("event").select(
-        "topic",
-        F.col("partition").alias("kafka_partition"),
-        F.col("offset").alias("kafka_offset"),
-        F.col("key").alias("event_key"),
-        F.get_json_object("value", "$.event_id").alias("event_id"),
-        F.get_json_object("value", "$.event_type").alias("event_type"),
-        F.get_json_object("value", "$.source_dataset").alias("source_dataset"),
-        F.get_json_object("value", "$.occurred_at").alias("occurred_at"),
-        F.col("value").alias("raw_payload"),
-        F.to_timestamp("captured_at").alias("captured_at"),
-        "_source_file",
-        "_source_file_modified_at",
-        F.current_timestamp().alias("_ingested_at"),
+def register_event_table(dataset: str) -> None:
+    @dp.table(
+        name=f"event_{dataset}",
+        comment=f"Append-only logical raw business-event history for {dataset}",
+        spark_conf={"pipelines.trigger.interval": "1 minute"},
+        table_properties={
+            "quality": "bronze",
+            "source_type": "event",
+            "data_classification": "Highly Confidential",
+            "delta.appendOnly": "true",
+            "delta.enableChangeDataFeed": "true",
+        },
     )
+    def source_aligned_event_table():
+        source = read_json_dataset_stream("event", dataset)
+        return source.select(
+            "record.*",
+            F.lit(dataset).alias("_source_dataset"),
+            F.col("load_type").alias("_load_type"),
+            F.col("payload.event_id").alias("_event_id"),
+            F.col("payload.event_type").alias("_event_type"),
+            F.col("payload.event_version").alias("_event_version"),
+            F.col("payload.occurred_at").cast("timestamp").alias("_occurred_at"),
+            F.col("payload.producer").alias("_producer"),
+            F.col("payload.correlation_id").alias("_correlation_id"),
+            F.col("topic").alias("_topic"),
+            F.col("partition").cast("long").alias("_kafka_partition"),
+            F.col("offset").cast("long").alias("_kafka_offset"),
+            F.col("key").alias("_event_key"),
+            F.col("batch_id").alias("_batch_id"),
+            F.to_timestamp("captured_at").alias("_captured_at"),
+            F.col("_rescued_data"),
+            F.col("_metadata.file_path").alias("_source_file"),
+            F.col("_metadata.file_modification_time").alias("_source_file_modified_at"),
+            F.current_timestamp().alias("_ingested_at"),
+        )
+
+
+for dataset_name in EVENT_DATASETS:
+    register_event_table(dataset_name)

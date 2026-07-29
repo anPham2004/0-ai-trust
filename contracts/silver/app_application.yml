@@ -1,0 +1,20 @@
+product: app_application
+version: 1.0.0
+contract_status: ACTIVE
+owner: application-domain
+producer: lending-origination-platform
+canonical_key: application_id
+history_mode: SCD_TYPE_2
+critical_data_elements: [application_id, global_id, application_type, final_outcome]
+lineage_l1: cdc_loan_applications -> silver.app_application
+schema: {global_id: STRING, application_id: STRING, organisation_id: STRING, is_business_application: BOOLEAN, num_offers: STRING, loan_goal: STRING, application_type: STRING, final_outcome: STRING, submitted_at: TIMESTAMP, last_updated_at: TIMESTAMP, requested_amount_masked: STRING, credit_score: INT}
+rules:
+  hard:
+    - {id: application_key_required, expression: "application_id IS NOT NULL AND global_id IS NOT NULL"}
+    - {id: application_fields_required, expression: "application_type IS NOT NULL AND loan_goal IS NOT NULL AND submitted_at IS NOT NULL"}
+    - {id: application_outcome_valid, expression: "final_outcome IS NULL OR final_outcome IN ('ACCEPTED', 'APPROVED', 'CANCELLED', 'DENIED', 'PENDING', 'REJECTED', 'WITHDRAWN')"}
+    - {id: application_dates_valid, expression: "last_updated_at IS NULL OR submitted_at IS NULL OR last_updated_at >= submitted_at"}
+  warn:
+    - {id: application_stale, expression: "last_updated_at IS NULL OR last_updated_at >= current_timestamp() - INTERVAL 30 DAYS"}
+tolerances: {hard_failure_rate: 0.0, warning_failure_rate: 0.05}
+quality_dimensions: {completeness: [application_key_required, application_fields_required], validity: [application_outcome_valid], consistency: [application_dates_valid], timeliness: [application_stale]}

@@ -1,0 +1,21 @@
+product: ip_individual
+version: 1.0.0
+contract_status: ACTIVE
+owner: involved-party-domain
+producer: customer-master-platform
+canonical_key: global_id
+history_mode: SCD_TYPE_2
+critical_data_elements: [global_id, customer_id, customer_type, name_token]
+lineage_l1: cdc_customers + cdc_customer_preferences + cdc_physical_addresses -> silver.ip_individual
+schema: {global_id: STRING, customer_id: STRING, customer_type: STRING, prefix: STRING, full_name: STRING, name_token: STRING, middle_names: STRING, gender: STRING, age: INT, state: STRING, occupation_code: STRING, email_masked: STRING, phone_masked: STRING, preferred_contact_channel: STRING, preferred_language: STRING, marketing_opt_in: BOOLEAN, satisfaction_score: STRING, address_suburb: STRING, address_state: STRING, address_postcode: STRING, customer_since: TIMESTAMP, last_updated_at: TIMESTAMP}
+rules:
+  hard:
+    - {id: individual_key_required, expression: "global_id IS NOT NULL AND customer_id IS NOT NULL"}
+    - {id: individual_type_valid, expression: "customer_type IN ('INDIVIDUAL', 'BUSINESS', 'SOLE_TRADER')"}
+    - {id: individual_identity_protected, expression: "name_token IS NOT NULL AND email_masked IS NOT NULL AND phone_masked IS NOT NULL"}
+    - {id: individual_age_valid, expression: "age IS NULL OR age BETWEEN 0 AND 120"}
+  warn:
+    - {id: individual_preference_missing, expression: "preferred_contact_channel IS NOT NULL"}
+    - {id: individual_address_missing, expression: "address_state IS NOT NULL"}
+tolerances: {hard_failure_rate: 0.0, warning_failure_rate: 0.05}
+quality_dimensions: {completeness: [individual_key_required], validity: [individual_type_valid, individual_age_valid], consistency: [individual_identity_protected], timeliness: []}

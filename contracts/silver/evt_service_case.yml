@@ -1,0 +1,19 @@
+product: evt_service_case
+version: 1.0.0
+contract_status: ACTIVE
+owner: service-domain
+producer: case-management-platform
+canonical_key: case_id
+history_mode: SCD_TYPE_2
+critical_data_elements: [case_id, global_id, case_type, status]
+lineage_l1: cdc_service_cases -> silver.evt_service_case
+schema: {case_id: STRING, global_id: STRING, organisation_id: STRING, application_id: STRING, sla_deadline: TIMESTAMP, is_sla_breached: BOOLEAN, is_business_case: BOOLEAN, case_type: STRING, subject: STRING, status: STRING, priority: STRING, assigned_team: STRING, created_at: TIMESTAMP, resolved_at: TIMESTAMP, resolution_summary: STRING}
+rules:
+  hard:
+    - {id: service_case_key_required, expression: "case_id IS NOT NULL AND global_id IS NOT NULL"}
+    - {id: service_case_status_valid, expression: "status IN ('open', 'in_progress', 'resolved', 'closed')"}
+    - {id: service_case_dates_valid, expression: "resolved_at IS NULL OR created_at IS NULL OR resolved_at >= created_at"}
+  warn:
+    - {id: service_case_sla_breached, expression: "is_sla_breached = false OR is_sla_breached IS NULL"}
+tolerances: {hard_failure_rate: 0.0, warning_failure_rate: 0.05}
+quality_dimensions: {completeness: [service_case_key_required], validity: [service_case_status_valid], consistency: [service_case_dates_valid], timeliness: [service_case_sla_breached]}

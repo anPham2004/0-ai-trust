@@ -1,0 +1,18 @@
+product: ip_organisation_party_relationship
+version: 1.0.0
+contract_status: ACTIVE
+owner: involved-party-domain
+producer: organisation-master-platform
+canonical_key: relationship_id
+history_mode: SCD_TYPE_2
+critical_data_elements: [relationship_id, global_id, organisation_id, party_role, authority_level]
+lineage_l1: cdc_organisation_party_relationships -> silver.ip_organisation_party_relationship
+schema: {relationship_id: STRING, global_id: STRING, organisation_id: STRING, party_role: STRING, authority_level: STRING, is_active: BOOLEAN, relationship_start_date: DATE, relationship_end_date: DATE}
+rules:
+  hard:
+    - {id: party_relationship_keys_required, expression: "relationship_id IS NOT NULL AND global_id IS NOT NULL AND organisation_id IS NOT NULL"}
+    - {id: party_relationship_dates_valid, expression: "relationship_end_date IS NULL OR relationship_start_date IS NULL OR relationship_end_date >= relationship_start_date"}
+  warn:
+    - {id: active_relationship_has_no_end, expression: "is_active = false OR relationship_end_date IS NULL"}
+tolerances: {hard_failure_rate: 0.0, warning_failure_rate: 0.05}
+quality_dimensions: {completeness: [party_relationship_keys_required], validity: [party_relationship_dates_valid], consistency: [active_relationship_has_no_end], timeliness: []}

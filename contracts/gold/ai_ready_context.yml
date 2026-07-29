@@ -1,0 +1,41 @@
+product: ai_ready_context
+version: 1.0.0
+owner: banker-assist-domain
+producer: gold-context-workstream
+contract_status: DRAFT_PENDING_SILVER
+physical_layer:
+  type: EXTERNAL_DELTA_STAR_SCHEMA
+  refresh_mode: IDEMPOTENT_MICROBATCH
+  refresh_target: 15 minutes
+semantic_layer:
+  type: LOGICAL_VIEW
+  required_metadata:
+    - usage_restriction
+    - context_version
+    - last_refreshed_at
+    - pipeline_run_id
+    - dq_status
+  prohibited_fields:
+    - email
+    - phone_number
+    - tfn
+    - card_number
+    - raw_payload
+outputs:
+  banker_only:
+    - aiv_banker_customer_360
+    - aiv_banker_org_360
+    - aiv_banker_org_party_summary
+    - aiv_banker_kyb_status
+    - aiv_banker_org_arrangement_summary
+  customer_safe:
+    - aiv_customer_self_profile
+  shared:
+    - aiv_shared_application_status
+    - aiv_shared_application_timeline
+    - aiv_shared_document_checklist
+    - aiv_shared_service_summary
+known_limitations:
+  - Identity-to-party row entitlement is not present in the supplied Silver schema.
+  - Unity Catalog grants and banker-assist-users membership are deployment responsibilities.
+  - Gold execution remains disabled until the Silver hand-off tests pass.

@@ -16,8 +16,8 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 S3_BUCKET = os.environ["S3_BUCKET"]
 SOURCE_BATCH_PREFIX = os.getenv("SOURCE_BATCH_PREFIX", "g3/source/nab/batch").strip("/")
-INTERVAL = int(os.getenv("SOURCE_ACTIVITY_INTERVAL_SECONDS", "300"))
-FILE_EVERY = int(os.getenv("SOURCE_FILE_EVERY_CYCLES", "12"))
+INTERVAL = int(os.getenv("SOURCE_ACTIVITY_INTERVAL_SECONDS", "60"))
+FILE_INTERVAL = int(os.getenv("SOURCE_FILE_INTERVAL_SECONDS", "3600"))
 S3 = boto3.client("s3", region_name=os.getenv("AWS_REGION", "ap-southeast-2"))
 
 
@@ -78,42 +78,77 @@ def insert_database_record(cycle: int) -> tuple[str, str | None]:
         return row[0], row[1]
 
 
-def publish_event(cycle: int, application_id: str, global_id: str | None) -> None:
+def process_event(
+    cycle: int,
+    application_id: str,
+    global_id: str | None,
+    lifecycle_transition: str,
+    action: str,
+) -> tuple[str, bytes, bytes]:
+    """Build a meaningful event using the same payload shape as bootstrap history."""
     timestamp = now().isoformat()
-    event_id = hashlib.sha256(f"periodic|{cycle}|{application_id}|{timestamp}".encode()).hexdigest()
-    payload = {
+    event_id = hashlib.sha256(
+        f"{cycle}|{application_id}|{lifecycle_transition}|{timestamp}".encode()
+    ).hexdigest()
+    event_payload = {
+        "global_id": global_id,
+        "eventId": event_id,
+        "applicationId": application_id,
+        "conceptName": "LoanApplication",
+        "lifecycleTransition": lifecycle_transition,
+        "timestamp": timestamp,
+        "orgResource": "source-simulator",
+        "action": action,
+        "eventOrigin": "source-simulator",
+        "offerId": None,
+        "offeredAmount": None,
+        "firstWithdrawalAmount": None,
+        "numberOfTerms": None,
+        "monthlyCost": None,
+        "creditScore": None,
+        "accepted": None,
+        "selected": None,
+    }
+    envelope = {
         "event_id": event_id,
-        "event_type": "LoanApplicationActivityObserved",
+        "event_type": "LoanApplicationProcessEvent",
         "event_version": "1.0",
         "occurred_at": timestamp,
         "producer": "activity-generator",
         "correlation_id": application_id,
         "source_dataset": "loan_application_events",
-        "payload": {
-            "eventId": event_id,
-            "applicationId": application_id,
-            "global_id": global_id,
-            "timestamp": timestamp,
-            "eventOrigin": "source-simulator",
-            "action": "periodic_update",
-        },
+        "load_type": "INCREMENTAL",
+        "payload": event_payload,
     }
+    return application_id, application_id.encode(), json.dumps(
+        envelope, separators=(",", ":")
+    ).encode()
+
+
+def publish_events(events: list[tuple[str, bytes, bytes]]) -> None:
     producer = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP, "enable.idempotence": True})
-    producer.produce(
-        "nab.application.events",
-        key=application_id.encode(),
-        value=json.dumps(payload, separators=(",", ":")).encode(),
-    )
-    producer.flush(30)
+    for _, key, value in events:
+        producer.produce("nab.application.events", key=key, value=value)
+        producer.poll(0)
+    undelivered = producer.flush(30)
+    if undelivered:
+        raise RuntimeError(f"Kafka delivery timed out for {undelivered} event(s)")
 
 
-def publish_file(cycle: int) -> bool:
-    if cycle % FILE_EVERY:
-        return False
+def publish_file() -> bool:
+    """Create at most one immutable source file per interval, including across restarts."""
     source_prefix = f"{SOURCE_BATCH_PREFIX}/banking_products/"
     response = S3.list_objects_v2(Bucket=S3_BUCKET, Prefix=source_prefix)
+    objects = [item for item in response.get("Contents", []) if item["Key"].endswith(".csv")]
+    generated = [
+        item
+        for item in objects
+        if item["Key"].removeprefix(source_prefix).startswith("banking_products-")
+    ]
+    if generated and (now() - max(item["LastModified"] for item in generated)).total_seconds() < FILE_INTERVAL:
+        return False
     source = next(
-        (item["Key"] for item in response.get("Contents", []) if item["Key"].endswith(".csv")),
+        (item["Key"] for item in sorted(objects, key=lambda item: item["LastModified"])),
         None,
     )
     if source is None:
@@ -133,12 +168,28 @@ def main() -> None:
     cycle = 0
     while True:
         try:
-            update_database(cycle)
-            application_id, global_id = insert_database_record(cycle)
-            publish_event(cycle, application_id, global_id)
-            file_created = publish_file(cycle)
+            updated_application_id, updated_global_id = update_database(cycle)
+            inserted_application_id, inserted_global_id = insert_database_record(cycle)
+            events = [
+                process_event(
+                    cycle,
+                    inserted_application_id,
+                    inserted_global_id,
+                    "ApplicationSubmitted",
+                    "create",
+                ),
+                process_event(
+                    cycle,
+                    updated_application_id,
+                    updated_global_id,
+                    "ApplicationDetailsUpdated",
+                    "update",
+                ),
+            ]
+            publish_events(events)
+            file_created = publish_file()
             safe_log("source_activity_complete", cycle=cycle, database_inserts=1, database_updates=1,
-                     kafka_events=1, file_arrivals=int(file_created))
+                     kafka_events=len(events), file_arrivals=int(file_created))
             cycle += 1
         except Exception as exc:
             safe_log("source_activity_failed", error_type=type(exc).__name__)

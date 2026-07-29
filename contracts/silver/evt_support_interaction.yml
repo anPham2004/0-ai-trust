@@ -1,0 +1,18 @@
+product: evt_support_interaction
+version: 1.0.0
+contract_status: ACTIVE
+owner: service-domain
+producer: customer-service-events
+canonical_key: interaction_id
+history_mode: APPEND_ONLY
+critical_data_elements: [interaction_id, global_id, channel, interaction_timestamp]
+lineage_l1: event_support_interactions -> silver.evt_support_interaction
+schema: {interaction_id: STRING, global_id: STRING, channel: STRING, interaction_timestamp: TIMESTAMP, topic: STRING, resolution: STRING, duration_minutes: INT}
+rules:
+  hard:
+    - {id: interaction_keys_required, expression: "interaction_id IS NOT NULL AND global_id IS NOT NULL"}
+    - {id: interaction_values_required, expression: "channel IS NOT NULL AND interaction_timestamp IS NOT NULL"}
+    - {id: interaction_duration_valid, expression: "duration_minutes IS NULL OR duration_minutes >= 0"}
+  warn: []
+tolerances: {hard_failure_rate: 0.0, warning_failure_rate: 0.05}
+quality_dimensions: {completeness: [interaction_keys_required], validity: [interaction_values_required, interaction_duration_valid], consistency: [], timeliness: []}

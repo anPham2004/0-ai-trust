@@ -1,0 +1,19 @@
+product: app_document
+version: 1.0.0
+contract_status: ACTIVE
+owner: application-domain
+producer: lending-origination-platform
+canonical_key: document_id
+history_mode: SCD_TYPE_2
+critical_data_elements: [document_id, application_id, document_type, status]
+lineage_l1: cdc_missing_documents -> silver.app_document
+schema: {document_id: STRING, application_id: STRING, global_id: STRING, document_type: STRING, status: STRING, is_invalid_or_expired: BOOLEAN, requested_at: TIMESTAMP, received_at: TIMESTAMP, expiry_date: DATE, reminders_sent: INT, last_reminder_at: TIMESTAMP, rejection_reason: STRING}
+rules:
+  hard:
+    - {id: document_keys_required, expression: "document_id IS NOT NULL AND application_id IS NOT NULL AND global_id IS NOT NULL"}
+    - {id: document_status_valid, expression: "status IN ('REQUIRED', 'RECEIVED', 'VERIFIED', 'INVALID', 'EXPIRED')"}
+    - {id: document_dates_valid, expression: "received_at IS NULL OR requested_at IS NULL OR received_at >= requested_at"}
+  warn:
+    - {id: document_requires_attention, expression: "is_invalid_or_expired = false"}
+tolerances: {hard_failure_rate: 0.0, warning_failure_rate: 0.05}
+quality_dimensions: {completeness: [document_keys_required], validity: [document_status_valid], consistency: [document_dates_valid], timeliness: [document_requires_attention]}

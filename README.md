@@ -1,6 +1,6 @@
 # 0 AI Trust
 
-This repository simulates a NAB-style data ingestion boundary for the Banker Assist assignment. The current deliverable stops at Bronze. Silver and Gold contain code templates only and must not create datasets until modelling, data-quality rules, PII policies, and AI consumption contracts are approved.
+This repository simulates a NAB-style data platform for the Banker Assist assignment. Bronze ingestion and the approved 19-entity Silver model are implemented. Gold remains outside the active pipeline until Silver deployment evidence is complete and its former row-level `dq_status` dependency is replaced by the agreed metrics-only quality interface.
 
 ## Outcome
 
@@ -29,30 +29,34 @@ Databricks also exposes the read-only `information_schema` system namespace auto
 `0-ai-trust`
 ├── bronze
 │   ├── landing                         external volume
-│   ├── cdc_changes                     external Delta table
-│   ├── cdc_scd2                        logical SCD2 view
-│   ├── kafka_events                    external Delta table
-│   ├── kafka_events_deduplicated       view
-│   └── file_arrivals                   external Delta table
-├── silver                              empty template
-└── gold                                empty template
+│   ├── cdc_<dataset>                   23 source-aligned streaming tables
+│   ├── event_<dataset>                 5 source-aligned streaming tables
+│   ├── file_<dataset>                  4 row-level CSV streaming tables
+│   ├── ingestion_quarantine            malformed/rescued records
+│   └── control_ingestion_manifests     reconciliation control table
+├── silver
+│   ├── 12 SCD2 streaming tables        mutable CDC-backed entities
+│   └── 7 append-only streaming tables  event/history/file entities
+└── gold
+    ├── 10 external Delta star tables
+    └── 10 AI-ready logical views
 ```
 
 ```text
 s3://g3-assignment/g3/0-ai-trust/
 ├── bronze/
 │   ├── landing/
-│   │   ├── cdc/<dataset>/              CDC envelopes plus LSN/topic/offset
-│   │   ├── event/<dataset>/            business-event envelopes
+│   │   ├── cdc/<dataset>/              nested CDC envelope and record image
+│   │   ├── event/<dataset>/            nested event envelope and record
 │   │   ├── file/<dataset>/             source files, byte-for-byte
+│   │   ├── quarantine/<source>/        malformed transport records
 │   │   └── manifests/                  heartbeat and reconciliation receipts
-│   └── tables/
-│       ├── cdc_changes/                Delta
-│       ├── kafka_events/               Delta
-│       └── file_arrivals/              Delta
-├── silver/                             reserved
-├── gold/                               reserved
-└── __managed/                          guard root; expected to contain no tables
+│   └── __managed/                      UC-managed Bronze streaming tables
+├── silver/__managed/                   reserved Silver managed root
+├── gold/
+│   ├── __managed/                      reserved Gold managed root
+│   └── tables/<table>/                 future external Delta star tables
+└── __managed/                          catalog-level managed metadata
 ```
 
 The former top-level `landing/` layout is legacy and must not receive new objects.
@@ -63,17 +67,19 @@ Dropping an external table removes Unity Catalog metadata but does not delete it
 
 The native S3 landing is the immutable, schema-on-read audit trail and is the rerun boundary.
 
-Bronze adds only transport and ingestion metadata:
+Bronze is logical raw and source-aligned. It structurally parses source records without applying business casts, masking, deduplication, or merge logic:
 
-- `cdc_changes` retains every snapshot, insert, update, delete, and tombstone envelope. The `cdc_scd2` view orders versions by source LSN and Kafka offset and exposes `valid_from`, `valid_to`, `is_current`, and `is_deleted`.
-- `kafka_events` is append-only because a business event is already historical fact. Pretending that an immutable event is a mutable SCD dimension would destroy its meaning.
-- `file_arrivals` stores every source file byte-for-byte. Parsing and business schema decisions are deferred to Silver.
+- `cdc_<dataset>` flattens the Debezium `after` image, or `before` for deletes, and retains operation, LSN, Kafka offset, commit time, and `_load_type`.
+- `event_<dataset>` exposes source event fields with event ID, type, correlation, Kafka transport metadata, and `_load_type`.
+- `file_<dataset>` parses CSV into rows while leaving source columns as strings. The original CSV remains byte-for-byte in Landing.
+- `_rescued_data` prevents schema mismatches from being dropped; affected rows also appear in `ingestion_quarantine`.
+- `control_ingestion_manifests` makes checksum, record-count, freshness, LSN, and offset evidence queryable.
 
-This gives mutable database entities SCD Type 2 behaviour without rewriting the protected raw landing. Kafka event history and immutable file facts remain append-only. Initial onboarding follows the HVR pattern: complete the initial snapshot, retain its source position, then continue from the same LSN without a gap.
+All Bronze business tables are append-only. Initial and incremental records share a table and are distinguished by `_load_type`. Silver owns deduplication, current-state merge, SCD, typing, and business validation. Initial database onboarding follows the HVR pattern: complete the initial snapshot, retain its source position, then continue from the same LSN without a gap.
 
-Never run a full refresh casually. External sinks are append-only and a full refresh resets pipeline checkpoints without clearing sink data. Recovery must either preserve the checkpoint or deliberately rebuild the affected external path from the immutable landing.
+Never run a full refresh casually. It resets streaming state and replays the immutable landing. Use it only for an intentional, audited Bronze rebuild.
 
-Do not rename or change the URL/file-event configuration of an external location after Auto Loader has checkpointed it. Managed file events bind the checkpoint continuation token to the queue. If that configuration must change, first stop the pipeline, make the location change once, temporarily disable `delta.appendOnly`, truncate the three external sinks, restore `delta.appendOnly`, recreate the pipeline checkpoint, and replay from landing. This recovery was tested during setup; changing the queue without resetting the checkpoint raises `CF_MANAGED_FILE_EVENTS_INVALID_CONTINUATION_TOKEN`.
+Do not rename or change `zero_ai_trust_landing` after Auto Loader has checkpointed it. Managed file events bind continuation state to its queue. A deliberate queue replacement requires a stopped pipeline and a clean replay from immutable landing.
 
 ## Source allocation
 
@@ -93,7 +99,9 @@ The simulator uses Debezium because HVR/Precisely is proprietary. It reproduces 
 
 The pipeline uses the successor Spark Declarative Pipelines interface, `from pyspark import pipelines as dp`, Spark Structured Streaming, and Auto Loader. It does not use the legacy `dlt` Python module, Lakeflow Connect managed database connectors, or direct outbound database/Kafka connections from Free Edition.
 
-Databricks renamed Delta Live Tables to Lakeflow Spark Declarative Pipelines. The single pipeline runs continuously and owns the Auto Loader checkpoints. Bronze streaming flows use their low-latency default trigger, while every future Silver and Gold dataset must set `spark_conf=downstream_microbatch_spark_conf()` to run at a 15-minute trigger interval. This preserves both SLAs inside the one concurrently active workspace pipeline allowed by Free Edition.
+Databricks renamed Delta Live Tables to Lakeflow Spark Declarative Pipelines. The pipeline runs continuously and owns the Auto Loader and Silver checkpoints. Bronze flows run every minute. Silver reads Bronze Delta CDF with `readStream` and runs in 15-minute micro-batches inside the same pipeline.
+
+Gold is deliberately outside the Spark Declarative Pipeline source glob. Its SQL is not activated by this change because the previous draft expects row-level `dq_status`, which no longer belongs in canonical Silver. Gold quality context must be sourced from aggregate pipeline metrics or a later approved control interface before orchestration is enabled.
 
 ## Repository structure
 
@@ -107,7 +115,7 @@ Databricks renamed Delta Live Tables to Lakeflow Spark Declarative Pipelines. Th
 ├── contracts/
 │   ├── source/                 source routing and ingestion mechanism
 │   ├── bronze/                 intentionally empty; raw retention has no business contract
-│   ├── silver/                 domain schema, DQ, tolerance, and quarantine contracts
+    │   ├── silver/                 19 active entity schema/DQ contracts
 │   └── gold/                   CDE classification, scope, masking, and AI consumption
 ├── dev-tools/
 │   └── datagen/
@@ -127,19 +135,24 @@ Databricks renamed Delta Live Tables to Lakeflow Spark Declarative Pipelines. Th
 ├── pipelines/
 │   ├── bootstrap/              versioned Unity Catalog DDL migrations
 │   ├── bronze/                 implemented ingestion pipeline
-│   ├── silver/                 modelling template only
-│   └── gold/                   modelling template only
+│   ├── silver/                 approved 19-entity incremental model
+│   ├── gold-sql/
+│   │   ├── star-schema/        idempotent Silver-to-Gold MERGE statements
+│   │   └── ai-ready/           role-aware denormalized logical views
+│   └── gold/                   intentionally contains no SDP definitions
 ├── infrastructure/aws/         Terraform for EC2, IAM, S3, and monitoring
 └── tests/
     ├── architecture/           repository and ingestion invariants
     ├── unit/                   isolated policy tests
     ├── contracts/              reserved for contract validation
-    └── integration/            reserved for pipeline smoke tests
+    └── integration/
+        ├── silver/             Silver SCD2, DQ, and hand-off acceptance tests
+        └── gold/               Gold integrity and AI-ready edge-case tests
 ```
 
 Naming is deterministic: deployable component directories use `kebab-case`; Python, test, contract, and Terraform identifiers use `snake_case`; SQL migrations use `vNNN_description.sql` and run in lexical order. Do not introduce version suffixes such as `nab-v2` into resource names.
 
-Contract ownership follows the data lifecycle. `source/source_inventory.yml` routes all 32 datasets into ingestion. Bronze intentionally has no transform contract because it retains every native record. Silver owns the four draft domain contracts used for future validation and quarantine. Gold owns CDE classification and Banker Assist consumption scope.
+Contract ownership follows the data lifecycle. `source/source_inventory.yml` routes all 32 datasets into ingestion. Bronze intentionally has no transform contract because it retains every native record. Silver owns one active contract per approved entity; hard rules compile to native drop expectations and warning rules compile to metrics-only expectations. Gold owns CDE classification and Banker Assist consumption scope.
 
 There are no PowerShell deployment scripts. Commands below use standard Terraform, Docker, AWS, Databricks, SSH, and Git CLIs and work from any operating system that provides those tools.
 
@@ -152,7 +165,7 @@ There are no PowerShell deployment scripts. Commands below use standard Terrafor
 - OpenSSH
 - GNU Make
 - Python 3.12+
-- The existing S3 storage credential and external location must have read/write access to `s3://g3-assignment/g3/0-ai-trust/`.
+- Storage credential `zero_ai_trust_storage_credential`; narrowly scoped external locations for catalog/schema managed roots, Bronze landing, and future Gold tables.
 
 Confirm identity before changing infrastructure:
 
@@ -234,7 +247,7 @@ ssh -i ~/.ssh/g3-assignment "ubuntu@$HOST" 'cd /opt/0-ai-trust/source-simulator 
 ssh -i ~/.ssh/g3-assignment "ubuntu@$HOST" 'cd /opt/0-ai-trust/source-simulator && sudo docker compose ps'
 ```
 
-The activity service inserts and updates PostgreSQL applications and publishes Kafka events every five minutes. Every hour it drops a new file version. The exporter flushes available CDC, Kafka, and file data to S3 every 60 seconds. The continuous Bronze pipeline then discovers new landing objects with Auto Loader. Logs contain only operational counts and error types, never payload values or credentials.
+The activity service inserts and updates PostgreSQL applications and publishes meaningful Kafka events every minute. Every hour it drops a new file version. The exporter drains backlog in bounded 5,000-record chunks, then flushes available CDC, Kafka, and file data to S3 every 60 seconds. The continuous Bronze pipeline discovers new landing objects with Auto Loader. Logs contain only operational counts and error types, never payload values or credentials.
 
 Inspect health without printing source payloads:
 
@@ -270,15 +283,15 @@ PostgreSQL and Kafka Connect ports bind only to EC2 loopback and are not exposed
 
 ## Initialize Unity Catalog
 
-Run `pipelines/bootstrap/v001_create_external_objects.sql` once through Databricks SQL Editor as the storage owner. Future idempotent migrations use the next `vNNN_description.sql` name. The initial migration creates only:
+Run `v001_create_external_objects.sql` once through Databricks SQL Editor as the storage owner. `v002_remove_legacy_bronze_objects.sql` removes the superseded shared Bronze model. When replacing the old Silver MVs, stop the pipeline and run `v004_rebuild_silver_streaming_tables.sql` once; it does not touch Bronze or Landing. Do not run `v003_create_gold_external_tables.sql` until Silver deployment evidence is complete.
 
 - catalog `0-ai-trust`
 - schemas `bronze`, `silver`, and `gold`
 - external landing volume
-- three external Bronze Delta tables
-- two metadata-only views
+- 32 source-aligned Bronze streaming tables plus shared quarantine and manifest control tables
+- the Bronze schema managed location is the team-owned S3 prefix `bronze/__managed`
 
-Confirm that every physical Bronze table is external:
+Confirm that every physical object resolves to the team-owned S3 hierarchy. Unity Catalog does not allow an explicit `path` on a pipeline streaming table; it places the table under the schema's S3 managed location. A streaming table is reported as `STREAMING_TABLE`; its storage path proves storage ownership:
 
 ```sql
 SELECT table_schema, table_name, table_type, data_source_format, storage_path
@@ -289,23 +302,24 @@ ORDER BY table_schema, table_name;
 
 ## Configure and run the pipelines
 
-After repository changes are merged into `develop`, the GitHub workflow tests and syncs them into `/Shared/0-ai-trust`. The existing `0-ai-trust-medallion` pipeline directly registers `pipelines/bronze`, `pipelines/silver`, and `pipelines/gold` and runs continuously. Retaining this pipeline preserves its Auto Loader checkpoints and prevents a duplicate replay into the external sinks. It has no generic entrypoint file. Its root directory is:
+After repository changes are merged into `develop`, the GitHub workflow tests and syncs them into `/Shared/0-ai-trust`. The single `0-ai-trust-medallion` pipeline runs Bronze continuously and processes Silver every 15 minutes. Gold SQL is outside the pipeline source glob and cannot execute accidentally. Its root directory is:
 
 ```text
 Root folder: /Workspace/Shared/0-ai-trust/pipelines
 ```
 
-The Bronze flows use Spark Structured Streaming and Auto Loader to materialise newly landed data without waiting for a scheduled Job. Free Edition permits only one concurrently active workspace pipeline, so a second triggered Silver/Gold pipeline cannot run while Bronze remains continuous. Future Silver and Gold tables therefore stay in the same pipeline and use a per-dataset 15-minute `pipelines.trigger.interval`. No Lakeflow Job is required for this execution model.
+The Bronze flows use Spark Structured Streaming and Auto Loader with a one-minute trigger. Silver uses streaming CDF reads with the shared 15-minute trigger. Twelve mutable entities use native AUTO CDC SCD2 with timestamp `__START_AT` and nullable `__END_AT`; seven immutable entities append incrementally. Hard DQ failures are dropped from Silver and counted in pipeline expectation metrics. No Silver quarantine tables or external Databricks Job are required.
 
-Future downstream declarations must use the shared policy explicitly:
+The shared refresh policy is applied explicitly:
 
 ```python
 from pyspark import pipelines as dp
 from framework.refresh_policy import downstream_microbatch_spark_conf
 
-@dp.table(spark_conf=downstream_microbatch_spark_conf())
-def customer_curated():
-    ...
+dp.create_streaming_table(
+    name="`0-ai-trust`.silver.ip_individual",
+    spark_conf=downstream_microbatch_spark_conf(),
+)
 ```
 
 Useful Databricks CLI operations:
@@ -317,28 +331,30 @@ databricks pipelines list-pipelines --profile g3-databricks
 databricks jobs list --profile g3-databricks
 
 # Validate all continuous pipeline definitions without writing data.
-databricks pipelines start-update ba6a2d09-4d80-4b13-ac56-22e644411fe2 \
+databricks pipelines start-update <pipeline-id-from-list> \
   --validate-only --profile g3-databricks
 
 # Start continuous processing. Use --full-refresh only for an intentional rebuild.
-databricks pipelines start-update ba6a2d09-4d80-4b13-ac56-22e644411fe2 \
+databricks pipelines start-update <pipeline-id-from-list> \
   --profile g3-databricks
 
 ```
 
-Validate Bronze:
+Validate representative Bronze tables:
 
 ```sql
-SELECT COUNT(*) FROM `0-ai-trust`.bronze.cdc_changes;
-SELECT COUNT(*) FROM `0-ai-trust`.bronze.kafka_events;
-SELECT COUNT(*) FROM `0-ai-trust`.bronze.file_arrivals;
+SELECT _load_type, _operation, COUNT(*)
+FROM `0-ai-trust`.bronze.cdc_customers
+GROUP BY ALL;
 
-SELECT source_dataset, COUNT(*) AS versions,
-       COUNT_IF(is_current) AS current_versions,
-       COUNT_IF(is_deleted) AS delete_markers
-FROM `0-ai-trust`.bronze.cdc_scd2
-GROUP BY source_dataset
-ORDER BY source_dataset;
+SELECT _load_type, COUNT(*)
+FROM `0-ai-trust`.bronze.event_loan_application_events
+GROUP BY ALL;
+
+SELECT COUNT(*) FROM `0-ai-trust`.bronze.file_accepted_loans;
+SELECT failure_reason, COUNT(*)
+FROM `0-ai-trust`.bronze.ingestion_quarantine
+GROUP BY failure_reason;
 ```
 
 ## GitHub and Databricks collaboration
@@ -356,10 +372,29 @@ feature branch -> pull request -> develop -> GitHub Action -> Databricks Git Fol
 - Bronze is Protected data. It is not an AI or Genie source.
 - No PII or raw payload values may be written to application logs.
 - Every source is ingested; business relevance is decided only after Silver contracts are approved.
-- Silver will implement config-driven DQ, tolerances, quarantine references, and CDE lineage.
-- Gold will implement purpose-bound access, PII masking, quality evidence, known limitations, and AI-ready semantic context.
+- Silver implements config-driven native expectations, SCD2/append history, masking/tokenisation, and L1 lineage. Rejected rows remain replayable from Bronze; aggregate failures are recorded in the pipeline event log.
+- Gold SQL implements purpose-bound views, no raw PII projection, quality evidence, known limitations, and AI-ready context. Unity Catalog grants and the `banker-assist-users` group must still be provisioned before deployment.
 - AI must never make credit approval or fraud decisions and must not receive raw Highly Confidential fields.
 
-## Current modelling boundary
+## Gold execution order after Silver is ready
 
-The descriptive files under `pipelines/silver` and `pipelines/gold` intentionally contain no dataset definitions. Adding curated or context tables before modelling approval is a scope violation for the current phase.
+1. Run `pipelines/bootstrap/v003_create_gold_external_tables.sql`.
+2. Run the SQL files in `pipelines/gold-sql/star-schema` in this dependency order: party/KYC/organisation dimensions, arrangement/application/document dimensions, application/service facts, then arrangement snapshots.
+3. Run every file in `pipelines/gold-sql/ai-ready`; these statements are idempotent logical-view replacements.
+4. Execute `tests/integration/gold/test_required_silver_schema.sql` before refresh, then the remaining Gold SQL tests after refresh.
+5. Only after a clean manual end-to-end run, configure a non-overlapping 15-minute Gold refresh Job.
+
+The Gold `MERGE` statements are rerunnable. Additive Silver columns are tolerated because projections are explicit. Removing, renaming, or changing the type of a required Silver field is a breaking change detected by the schema test.
+
+## Assignment readiness and remaining gaps
+
+Prepared in this repository: three ingestion mechanisms, immutable Bronze evidence, more than eight contract-defined DQ rules, external Gold star modelling, hybrid AI-ready views, role-aware restricted fields, lineage/quality/version metadata, reconciliation tests, and tests for duplicates, foreign keys, late data, date ordering, idempotency, schema evolution, freshness limitations, and PII leakage.
+
+Still blocked on downstream deployment evidence:
+- Unity Catalog grants and membership of `banker-assist-users`;
+- identity-to-party entitlements or row filters for customer-specific access, which are absent from the supplied Silver schema;
+- sample AI answers, missing/unsafe/refusal cases, and screenshot evidence;
+- clean-state end-to-end rerun, measured freshness/reconciliation results, and the final 15-minute Gold Job;
+- final runbook values and submitted output extracts.
+
+No Gold SQL, test, migration, grant, Job, or pipeline update is executed by this change.
