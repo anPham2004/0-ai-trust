@@ -1,388 +1,438 @@
-# =============================================================================
-# DATA CONTRACT: customer_preferences
-# =============================================================================
-# Purpose:
-# - Stores one set of communication and service preferences for each customer.
-# - Records the preferred contact channel, preferred language, marketing choice,
-#   satisfaction score, and the latest source update time.
-#
-# Important relationship:
-# - This dataset is generated as one-to-one with customers.
-# - global_id and customerId should identify the same customer record.
-#
-# Quick guide:
-# - required: the source column must exist.
-# - nullable: the field value may be null.
-# - ERROR + QUARANTINE: do not send the record to the trusted output.
-# - WARNING + ALLOW_WITH_WARNING: keep the record but report the issue.
-# =============================================================================
-
-contract_version: "1.0.0"
-contract_id: "source.database.customer_preferences"
-
-# -----------------------------------------------------------------------------
-# 1. Basic dataset information
-# -----------------------------------------------------------------------------
-dataset:
-  name: customer_preferences
-  domain: CUSTOMER
-  description: >
-    One-to-one source dataset containing each customer's preferred contact
-    channel, preferred language, marketing consent choice, satisfaction score,
-    and latest update timestamp.
-  expected_rows_scale_1: 1000
-  physical_schema_ref: "dev-tools/datagen/output/master-schema.json#/customer_preferences"
-
-# -----------------------------------------------------------------------------
-# 2. Ownership and contract lifecycle
-# -----------------------------------------------------------------------------
-lifecycle:
-  # DRAFT -> IN_REVIEW -> APPROVED -> DEPRECATED / RETIRED
-  status: DRAFT
-  owner: TBD
-  approver: TBD
-  effective_from: null
-
-# -----------------------------------------------------------------------------
-# 3. Source and ingestion information
-# -----------------------------------------------------------------------------
-source:
-  category: DATABASE
-  system_type: POSTGRESQL
-  source_object: "public.customer_preferences"
-  authoritative: true
-
-ingestion:
-  mechanism: DEBEZIUM_CDC
-  transport: APACHE_KAFKA
-
-  landing:
-    format: JSONL
-    path_template: "s3://<bucket>/bronze/landing/cdc/customer_preferences/"
-    immutable: true
-
-  bronze_target: "bronze.cdc_changes"
-
-  cdc:
-    supported_operations:
+kind: DataContract
+apiVersion: v3.1.0
+id: source.database.customer_preferences
+version: 1.0.0
+name: customer_preferences
+status: draft
+domain: CUSTOMER
+description:
+  purpose: |
+    One-to-one source dataset containing each customer's preferred contact channel, preferred language, marketing consent choice, satisfaction score, and latest update timestamp.
+servers:
+- server: source-postgresql
+  type: postgresql
+  description: PostgreSQL CDC source via Debezium for customer_preferences
+  environment: prod
+schema:
+- name: customer_preferences
+  logicalType: object
+  physicalType: table
+  physicalName: public.customer_preferences
+  relationships:
+  - type: foreignKey
+    from:
+    - customer_preferences.global_id
+    to:
+    - customers.global_id
+    customProperties:
+    - property: g3:nullable
+      value: true
+  - type: foreignKey
+    from:
+    - customer_preferences.customerId
+    to:
+    - customers.customerId
+    customProperties:
+    - property: g3:nullable
+      value: true
+  quality:
+  - id: PREF_GLOBAL_ID_UNIQUE_IF_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: UNIQUE_IF_PRESENT
+      columns:
+      - global_id
+    severity: error
+    dimension: consistency
+    description: |
+      The source is generated as one preferences record per customer, so a populated global_id must not appear in multiple records.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: PREF_CUSTOMER_ID_UNIQUE_IF_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: UNIQUE_IF_PRESENT
+      columns:
+      - customerId
+    severity: error
+    dimension: consistency
+    description: |
+      The source is generated as one preferences record per customer, so a populated customerId must not appear in multiple records.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: PREF_CUSTOMER_LINK_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: ALL_NOT_NULL
+      columns:
+      - global_id
+      - customerId
+    severity: warning
+    dimension: completeness
+    description: |
+      A preferences record should identify its customer using both global_id and customerId. The physical schema currently permits null values.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: PREF_CUSTOMER_IDENTIFIERS_CONSISTENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: REFERENCE_PAIR_CONSISTENT
+      parameters:
+        reference_dataset: customers
+        source_columns:
+        - global_id
+        - customerId
+        reference_columns:
+        - global_id
+        - customerId
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      global_id and customerId must refer to the same row in the customers dataset.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: PREF_UPDATED_AT_NOT_IN_FUTURE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: TIMESTAMP_NOT_IN_FUTURE
+      columns:
+      - updatedAt
+    severity: warning
+    dimension: timeliness
+    description: |
+      updatedAt should not be later than the pipeline processing timestamp.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  properties:
+  - name: global_id
+    logicalType: string
+    physicalType: string
+    primaryKey: true
+    primaryKeyPosition: 1
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - 65df84b8-4274-4dbd-9667-6c9967ae6538
+    quality:
+    - id: PREF_GLOBAL_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: global_id must be a valid UUID when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: PREF_GLOBAL_ID_CUSTOMER_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: customers
+          reference_column: global_id
+      severity: error
+      dimension: consistency
+      description: |
+        global_id must exist in customers.global_id when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: person_identifier
+  - name: customerId
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      pattern: ^CUST-\d{5}$
+    examples:
+    - CUST-00042
+    quality:
+    - id: PREF_CUSTOMER_ID_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^CUST-\d{5}$
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        customerId must follow the CUST-00000 pattern when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: PREF_CUSTOMER_ID_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: customers
+          reference_column: customerId
+      severity: error
+      dimension: consistency
+      description: |
+        customerId must exist in customers.customerId when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: customer_identifier
+  - name: preferredContactChannel
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: CONFIDENTIAL
+    examples:
+    - email
+    quality:
+    - id: PREF_CONTACT_CHANNEL_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - email
+        - phone
+        - sms
+        - chat
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        preferredContactChannel must be one of the supported source values.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: contact_channel_preference
+    - property: g3:accepted
+      value:
+        values:
+        - email
+        - phone
+        - sms
+        - chat
+  - name: preferredLanguage
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: CONFIDENTIAL
+    examples:
+    - en
+    quality:
+    - id: PREF_LANGUAGE_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - en
+        - es
+        - zh
+        - vi
+        - fr
+        - ko
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        preferredLanguage must be one of the supported source language codes.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: language_preference
+    - property: g3:accepted
+      value:
+        values:
+        - en
+        - es
+        - zh
+        - vi
+        - fr
+        - ko
+  - name: marketingOptIn
+    logicalType: boolean
+    physicalType: bool
+    required: true
+    classification: CONFIDENTIAL
+    examples:
+    - true
+    quality:
+    - id: PREF_MARKETING_OPT_IN_BOOLEAN
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: BOOLEAN
+      severity: error
+      dimension: conformity
+      description: marketingOptIn must be a boolean value.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: marketing_consent_flag
+    - property: g3:accepted
+      value:
+        values:
+        - true
+        - false
+  - name: satisfactionScore
+    logicalType: string
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      minimum: 1.0
+      maximum: 5.0
+    examples:
+    - '4.2'
+    quality:
+    - id: PREF_SATISFACTION_SCORE_NUMERIC
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DECIMAL_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        satisfactionScore must be parseable as a decimal number when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: PREF_SATISFACTION_SCORE_RANGE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: RANGE_IF_PRESENT
+        parameters:
+          min: 1.0
+          max: 5.0
+      severity: error
+      dimension: conformity
+      description: |
+        satisfactionScore must be between 1.0 and 5.0 when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: decimal_score
+  - name: updatedAt
+    logicalType: timestamp
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: ISO_8601_TIMESTAMP
+    examples:
+    - '2026-06-30T14:15:00Z'
+    quality:
+    - id: PREF_UPDATED_AT_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_TIMESTAMP_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: updatedAt must be parseable as a timestamp.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: timestamp
+customProperties:
+- property: g3:source
+  value:
+    category: DATABASE
+    system_type: POSTGRESQL
+    source_object: public.customer_preferences
+    authoritative: true
+- property: g3:ingestion
+  value:
+    mechanism: DEBEZIUM_CDC
+    transport: APACHE_KAFKA
+    landing:
+      format: JSONL
+      path_template: s3://<bucket>/bronze/landing/cdc/customer_preferences/
+      immutable: true
+    bronze_target: bronze.cdc_changes
+    cdc:
+      supported_operations:
       - SNAPSHOT
       - INSERT
       - UPDATE
       - DELETE
-
-    ordering_metadata:
+      ordering_metadata:
       - source_lsn
       - kafka_partition
       - kafka_offset
-
-# -----------------------------------------------------------------------------
-# 4. Keys and relationships
-# -----------------------------------------------------------------------------
-keys:
-  # The source is generated as one preferences record per customer.
-  primary_key:
-    - global_id
-
-  alternate_keys:
-    - customerId
-
-  foreign_keys:
-    - columns:
-        - global_id
-      reference:
-        dataset: customers
-        columns:
-          - global_id
-      nullable: true
-
-    - columns:
-        - customerId
-      reference:
-        dataset: customers
-        columns:
-          - customerId
-      nullable: true
-
-# -----------------------------------------------------------------------------
-# 5. Field-level contract
-# -----------------------------------------------------------------------------
-schema:
-  fields:
-
-    - name: global_id
-      data_type: string
-      logical_type: person_identifier
-      required: true
-      nullable: true
-      accepted:
-        format: UUID
-      example: "65df84b8-4274-4dbd-9667-6c9967ae6538"
-      sensitivity:
-        classification: INTERNAL
-        is_pii: false
-        handling: NONE
-      quality_rules:
-        - rule_id: PREF_GLOBAL_ID_UUID
-          type: FORMAT_IF_PRESENT
-          parameters:
-            format: UUID
-          severity: ERROR
-          action: QUARANTINE
-          description: "global_id must be a valid UUID when supplied."
-
-        - rule_id: PREF_GLOBAL_ID_CUSTOMER_FK
-          type: FOREIGN_KEY_IF_PRESENT
-          parameters:
-            reference_dataset: customers
-            reference_column: global_id
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            global_id must exist in customers.global_id when supplied.
-
-    - name: customerId
-      data_type: string
-      logical_type: customer_identifier
-      required: true
-      nullable: true
-      accepted:
-        regex: '^CUST-\d{5}$'
-      example: "CUST-00042"
-      sensitivity:
-        classification: INTERNAL
-        is_pii: false
-        handling: NONE
-      quality_rules:
-        - rule_id: PREF_CUSTOMER_ID_PATTERN
-          type: REGEX_IF_PRESENT
-          parameters:
-            regex: '^CUST-\d{5}$'
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            customerId must follow the CUST-00000 pattern when supplied.
-
-        - rule_id: PREF_CUSTOMER_ID_FK
-          type: FOREIGN_KEY_IF_PRESENT
-          parameters:
-            reference_dataset: customers
-            reference_column: customerId
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            customerId must exist in customers.customerId when supplied.
-
-    - name: preferredContactChannel
-      data_type: string
-      logical_type: contact_channel_preference
-      required: true
-      nullable: false
-      accepted:
-        values:
-          - email
-          - phone
-          - sms
-          - chat
-      example: "email"
-      sensitivity:
-        classification: CONFIDENTIAL
-        is_pii: false
-        handling: RESTRICT_ACCESS
-      quality_rules:
-        - rule_id: PREF_CONTACT_CHANNEL_ENUM
-          type: ACCEPTED_VALUES
-          parameters:
-            values:
-              - email
-              - phone
-              - sms
-              - chat
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            preferredContactChannel must be one of the supported source values.
-
-    - name: preferredLanguage
-      data_type: string
-      logical_type: language_preference
-      required: true
-      nullable: false
-      accepted:
-        values:
-          - en
-          - es
-          - zh
-          - vi
-          - fr
-          - ko
-      example: "en"
-      sensitivity:
-        classification: CONFIDENTIAL
-        is_pii: false
-        handling: RESTRICT_ACCESS
-      quality_rules:
-        - rule_id: PREF_LANGUAGE_ENUM
-          type: ACCEPTED_VALUES
-          parameters:
-            values:
-              - en
-              - es
-              - zh
-              - vi
-              - fr
-              - ko
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            preferredLanguage must be one of the supported source language codes.
-
-    - name: marketingOptIn
-      data_type: bool
-      logical_type: marketing_consent_flag
-      required: true
-      nullable: false
-      accepted:
-        values:
-          - true
-          - false
-      example: true
-      sensitivity:
-        classification: CONFIDENTIAL
-        is_pii: false
-        handling: RESTRICT_ACCESS
-      quality_rules:
-        - rule_id: PREF_MARKETING_OPT_IN_BOOLEAN
-          type: BOOLEAN
-          severity: ERROR
-          action: QUARANTINE
-          description: "marketingOptIn must be a boolean value."
-
-    - name: satisfactionScore
-      data_type: string
-      logical_type: decimal_score
-      required: true
-      nullable: true
-      accepted:
-        min: 1.0
-        max: 5.0
-      example: "4.2"
-      sensitivity:
-        classification: CONFIDENTIAL
-        is_pii: false
-        handling: RESTRICT_ACCESS
-      quality_rules:
-        - rule_id: PREF_SATISFACTION_SCORE_NUMERIC
-          type: PARSEABLE_DECIMAL_IF_PRESENT
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            satisfactionScore must be parseable as a decimal number when supplied.
-
-        - rule_id: PREF_SATISFACTION_SCORE_RANGE
-          type: RANGE_IF_PRESENT
-          parameters:
-            min: 1.0
-            max: 5.0
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            satisfactionScore must be between 1.0 and 5.0 when supplied.
-
-    - name: updatedAt
-      data_type: string
-      logical_type: timestamp
-      required: true
-      nullable: true
-      accepted:
-        format: ISO_8601_TIMESTAMP
-      example: "2026-06-30T14:15:00Z"
-      sensitivity:
-        classification: INTERNAL
-        is_pii: false
-        handling: NONE
-      quality_rules:
-        - rule_id: PREF_UPDATED_AT_PARSEABLE
-          type: PARSEABLE_TIMESTAMP_IF_PRESENT
-          severity: ERROR
-          action: QUARANTINE
-          description: "updatedAt must be parseable as a timestamp."
-
-# -----------------------------------------------------------------------------
-# 6. Dataset-level quality rules
-# -----------------------------------------------------------------------------
-dataset_quality_rules:
-
-  - rule_id: PREF_GLOBAL_ID_UNIQUE_IF_PRESENT
-    type: UNIQUE_IF_PRESENT
-    columns:
-      - global_id
-    severity: ERROR
-    action: QUARANTINE
-    description: >
-      The source is generated as one preferences record per customer, so a
-      populated global_id must not appear in multiple records.
-
-  - rule_id: PREF_CUSTOMER_ID_UNIQUE_IF_PRESENT
-    type: UNIQUE_IF_PRESENT
-    columns:
-      - customerId
-    severity: ERROR
-    action: QUARANTINE
-    description: >
-      The source is generated as one preferences record per customer, so a
-      populated customerId must not appear in multiple records.
-
-  - rule_id: PREF_CUSTOMER_LINK_PRESENT
-    type: ALL_NOT_NULL
-    columns:
-      - global_id
-      - customerId
-    severity: WARNING
-    action: ALLOW_WITH_WARNING
-    description: >
-      A preferences record should identify its customer using both global_id
-      and customerId. The physical schema currently permits null values.
-
-  - rule_id: PREF_CUSTOMER_IDENTIFIERS_CONSISTENT
-    type: REFERENCE_PAIR_CONSISTENT
-    parameters:
-      reference_dataset: customers
-      source_columns:
-        - global_id
-        - customerId
-      reference_columns:
-        - global_id
-        - customerId
-      ignore_nulls: true
-    severity: ERROR
-    action: QUARANTINE
-    description: >
-      global_id and customerId must refer to the same row in the customers dataset.
-
-  - rule_id: PREF_UPDATED_AT_NOT_IN_FUTURE
-    type: TIMESTAMP_NOT_IN_FUTURE
-    columns:
-      - updatedAt
-    severity: WARNING
-    action: ALLOW_WITH_WARNING
-    description: >
-      updatedAt should not be later than the pipeline processing timestamp.
-
-# -----------------------------------------------------------------------------
-# 7. Notes for the team
-# -----------------------------------------------------------------------------
-notes:
-  - >
-    This contract describes the raw source preferences dataset. It does not
-    define how Customer.AI or Banker.AI should apply communication preferences.
-  - >
-    preferredContactChannel, preferredLanguage, marketingOptIn, and
-    satisfactionScore are customer preference attributes and should only be
-    exposed to approved downstream consumers.
-  - >
-    satisfactionScore is physically stored as a string, so the pipeline must
-    parse it before applying the numeric range rule.
-  - >
-    Customer-link completeness is currently a warning because global_id and
-    customerId are physically nullable, even though the dataset is generated
-    one-to-one with customers.
+- property: g3:lifecycle
+  value:
+    owner: TBD
+    approver: TBD
+    effective_from: null
+- property: g3:dataset
+  value:
+    expected_rows_scale_1: 1000
+    physical_schema_ref: dev-tools/datagen/output/master-schema.json#/customer_preferences
+- property: g3:alternateKeys
+  value:
+  - customerId
+- property: g3:notes
+  value:
+  - |
+    This contract describes the raw source preferences dataset. It does not define how Customer.AI or Banker.AI should apply communication preferences.
+  - |
+    preferredContactChannel, preferredLanguage, marketingOptIn, and satisfactionScore are customer preference attributes and should only be exposed to approved downstream consumers.
+  - |
+    satisfactionScore is physically stored as a string, so the pipeline must parse it before applying the numeric range rule.
+  - Customer-link completeness is currently a warning because global_id and customerId are physically nullable, even though
+    the dataset is generated one-to-one with customers.

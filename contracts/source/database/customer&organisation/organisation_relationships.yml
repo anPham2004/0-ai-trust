@@ -1,370 +1,404 @@
-# =============================================================================
-# DATA CONTRACT: organisation_relationships
-# =============================================================================
-# Purpose:
-# - Links one organisation to another organisation.
-# - Records the relationship type, active status, and start date.
-#
-# Direction matters:
-# - sourceOrgId is the organisation where the relationship starts.
-# - targetOrgId is the organisation where the relationship points.
-# - For PARENT_SUBSIDIARY, the source should be the parent and the target
-#   should be the subsidiary.
-#
-# Important difference:
-# - organisation_party_relationships links a PERSON to an ORGANISATION.
-# - organisation_relationships links an ORGANISATION to another ORGANISATION.
-#
-# Quick guide:
-# - required: the source column must exist.
-# - nullable: the field value may be null.
-# - ERROR + QUARANTINE: do not send the record to the trusted output.
-# - WARNING + ALLOW_WITH_WARNING: keep the record but report the issue.
-# =============================================================================
-
-contract_version: "1.0.0"
-contract_id: "source.database.organisation_relationships"
-
-# -----------------------------------------------------------------------------
-# 1. Basic dataset information
-# -----------------------------------------------------------------------------
-dataset:
-  name: organisation_relationships
-  domain: ORGANISATION
-  description: >
-    Source dataset that records directed relationships between two
-    organisations, such as parent-subsidiary, trust-trustee, partnership,
-    franchise, and joint venture relationships.
-  expected_rows_scale_1: 100
-  physical_schema_ref: "dev-tools/datagen/output/master-schema.json#/organisation_relationships"
-
-  # This dataset has no global_id because it models organisation-to-organisation
-  # relationships rather than a person.
-  catalogue_without_global_id: true
-
-# -----------------------------------------------------------------------------
-# 2. Ownership and contract lifecycle
-# -----------------------------------------------------------------------------
-lifecycle:
-  # DRAFT -> IN_REVIEW -> APPROVED -> DEPRECATED / RETIRED
-  status: DRAFT
-  owner: TBD
-  approver: TBD
-  effective_from: null
-
-# -----------------------------------------------------------------------------
-# 3. Source and ingestion information
-# -----------------------------------------------------------------------------
-source:
-  category: DATABASE
-  system_type: POSTGRESQL
-  source_object: "public.organisation_relationships"
-  authoritative: true
-
-ingestion:
-  mechanism: DEBEZIUM_CDC
-  transport: APACHE_KAFKA
-
-  landing:
-    format: JSONL
-    path_template: "s3://<bucket>/bronze/landing/cdc/organisation_relationships/"
-    immutable: true
-
-  bronze_target: "bronze.cdc_changes"
-
-  cdc:
-    supported_operations:
+kind: DataContract
+apiVersion: v3.1.0
+id: source.database.organisation_relationships
+version: 1.0.0
+name: organisation_relationships
+status: draft
+domain: ORGANISATION
+description:
+  purpose: |
+    Source dataset that records directed relationships between two organisations, such as parent-subsidiary, trust-trustee, partnership, franchise, and joint venture relationships.
+servers:
+- server: source-postgresql
+  type: postgresql
+  description: PostgreSQL CDC source via Debezium for organisation_relationships
+  environment: prod
+schema:
+- name: organisation_relationships
+  logicalType: object
+  physicalType: table
+  physicalName: public.organisation_relationships
+  relationships:
+  - type: foreignKey
+    from:
+    - organisation_relationships.sourceOrgId
+    to:
+    - organisations.organisationId
+    customProperties:
+    - property: g3:nullable
+      value: true
+  - type: foreignKey
+    from:
+    - organisation_relationships.targetOrgId
+    to:
+    - organisations.organisationId
+    customProperties:
+    - property: g3:nullable
+      value: true
+  quality:
+  - id: ORR_RELATIONSHIP_ID_UNIQUE
+    type: library
+    metric: duplicateValues
+    mustBe: 0
+    severity: error
+    dimension: uniqueness
+    description: relationshipId must be unique across the dataset.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+    - property: g3:columns
+      value:
+      - relationshipId
+  - id: ORR_SOURCE_ORG_PRESENT
+    type: library
+    metric: nullValues
+    mustBe: 0
+    severity: warning
+    dimension: completeness
+    description: |
+      A relationship should identify its source organisation. The physical schema currently permits null.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+    - property: g3:columns
+      value:
+      - sourceOrgId
+  - id: ORR_TARGET_ORG_PRESENT
+    type: library
+    metric: nullValues
+    mustBe: 0
+    severity: warning
+    dimension: completeness
+    description: |
+      A relationship should identify its target organisation. The physical schema currently permits null.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+    - property: g3:columns
+      value:
+      - targetOrgId
+  - id: ORR_SOURCE_TARGET_DIFFERENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: COLUMN_COMPARISON
+      parameters:
+        left_column: sourceOrgId
+        operator: NOT_EQUAL
+        right_column: targetOrgId
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      sourceOrgId and targetOrgId must identify different organisations.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: ORR_START_DATE_NOT_IN_FUTURE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: DATE_NOT_IN_FUTURE
+      columns:
+      - startDate
+    severity: warning
+    dimension: timeliness
+    description: startDate should not be later than the processing date.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: ORR_ACTIVE_RELATIONSHIP_UNIQUE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: COMPOSITE_UNIQUE_WHEN
+      parameters:
+        when:
+          column: isActive
+          equals: true
+      columns:
+      - sourceOrgId
+      - targetOrgId
+      - relationshipType
+    severity: warning
+    dimension: consistency
+    description: |
+      The same active relationship should not be duplicated for the same source organisation, target organisation, and relationship type.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  properties:
+  - name: relationshipId
+    logicalType: string
+    physicalType: string
+    required: true
+    primaryKey: true
+    primaryKeyPosition: 1
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - e8014dbc-0950-45ba-b577-bc9b093b6483
+    quality:
+    - id: ORR_RELATIONSHIP_ID_NOT_NULL
+      type: library
+      metric: nullValues
+      mustBe: 0
+      severity: error
+      dimension: completeness
+      description: relationshipId must always be present.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: ORR_RELATIONSHIP_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: relationshipId must be a valid UUID.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: relationship_identifier
+  - name: sourceOrgId
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      pattern: ^ORG-\d{5}$
+    examples:
+    - ORG-00012
+    quality:
+    - id: ORR_SOURCE_ORG_ID_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^ORG-\d{5}$
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        sourceOrgId must follow the ORG-00000 pattern when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: ORR_SOURCE_ORG_ID_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: organisations
+          reference_column: organisationId
+      severity: error
+      dimension: consistency
+      description: |
+        sourceOrgId must exist in organisations.organisationId when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: source_organisation_identifier
+  - name: targetOrgId
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      pattern: ^ORG-\d{5}$
+    examples:
+    - ORG-00341
+    quality:
+    - id: ORR_TARGET_ORG_ID_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^ORG-\d{5}$
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        targetOrgId must follow the ORG-00000 pattern when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: ORR_TARGET_ORG_ID_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: organisations
+          reference_column: organisationId
+      severity: error
+      dimension: consistency
+      description: |
+        targetOrgId must exist in organisations.organisationId when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: target_organisation_identifier
+  - name: relationshipType
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: CONFIDENTIAL
+    examples:
+    - PARENT_SUBSIDIARY
+    quality:
+    - id: ORR_RELATIONSHIP_TYPE_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - PARENT_SUBSIDIARY
+        - TRUST_TRUSTEE
+        - PARTNERSHIP
+        - FRANCHISE
+        - JOINT_VENTURE
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        relationshipType must be one of the supported organisation relationship values.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: organisation_relationship_type
+    - property: g3:accepted
+      value:
+        values:
+        - PARENT_SUBSIDIARY
+        - TRUST_TRUSTEE
+        - PARTNERSHIP
+        - FRANCHISE
+        - JOINT_VENTURE
+  - name: isActive
+    logicalType: boolean
+    physicalType: bool
+    required: true
+    classification: INTERNAL
+    examples:
+    - true
+    quality:
+    - id: ORR_IS_ACTIVE_BOOLEAN
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: BOOLEAN
+      severity: error
+      dimension: conformity
+      description: isActive must be a boolean value.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: boolean
+    - property: g3:accepted
+      value:
+        values:
+        - true
+        - false
+  - name: startDate
+    logicalType: date
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: ISO_8601_DATE
+    examples:
+    - '2024-05-10'
+    quality:
+    - id: ORR_START_DATE_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DATE_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: startDate must be parseable as a date.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: date
+customProperties:
+- property: g3:source
+  value:
+    category: DATABASE
+    system_type: POSTGRESQL
+    source_object: public.organisation_relationships
+    authoritative: true
+- property: g3:ingestion
+  value:
+    mechanism: DEBEZIUM_CDC
+    transport: APACHE_KAFKA
+    landing:
+      format: JSONL
+      path_template: s3://<bucket>/bronze/landing/cdc/organisation_relationships/
+      immutable: true
+    bronze_target: bronze.cdc_changes
+    cdc:
+      supported_operations:
       - SNAPSHOT
       - INSERT
       - UPDATE
       - DELETE
-
-    ordering_metadata:
+      ordering_metadata:
       - source_lsn
       - kafka_partition
       - kafka_offset
-
-# -----------------------------------------------------------------------------
-# 4. Keys and relationships
-# -----------------------------------------------------------------------------
-keys:
-  primary_key:
-    - relationshipId
-
-  alternate_keys: []
-
-  foreign_keys:
-    - columns:
-        - sourceOrgId
-      reference:
-        dataset: organisations
-        columns:
-          - organisationId
-      nullable: true
-
-    - columns:
-        - targetOrgId
-      reference:
-        dataset: organisations
-        columns:
-          - organisationId
-      nullable: true
-
-# -----------------------------------------------------------------------------
-# 5. Field-level contract
-# -----------------------------------------------------------------------------
-schema:
-  fields:
-
-    - name: relationshipId
-      data_type: string
-      logical_type: relationship_identifier
-      required: true
-      nullable: false
-      accepted:
-        format: UUID
-      example: "e8014dbc-0950-45ba-b577-bc9b093b6483"
-      sensitivity:
-        classification: INTERNAL
-        is_pii: false
-        handling: NONE
-      quality_rules:
-        - rule_id: ORR_RELATIONSHIP_ID_NOT_NULL
-          type: NOT_NULL
-          severity: ERROR
-          action: QUARANTINE
-          description: "relationshipId must always be present."
-
-        - rule_id: ORR_RELATIONSHIP_ID_UUID
-          type: FORMAT
-          parameters:
-            format: UUID
-          severity: ERROR
-          action: QUARANTINE
-          description: "relationshipId must be a valid UUID."
-
-    - name: sourceOrgId
-      data_type: string
-      logical_type: source_organisation_identifier
-      required: true
-      nullable: true
-      accepted:
-        regex: '^ORG-\d{5}$'
-      example: "ORG-00012"
-      sensitivity:
-        classification: INTERNAL
-        is_pii: false
-        handling: NONE
-      quality_rules:
-        - rule_id: ORR_SOURCE_ORG_ID_PATTERN
-          type: REGEX_IF_PRESENT
-          parameters:
-            regex: '^ORG-\d{5}$'
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            sourceOrgId must follow the ORG-00000 pattern when supplied.
-
-        - rule_id: ORR_SOURCE_ORG_ID_FK
-          type: FOREIGN_KEY_IF_PRESENT
-          parameters:
-            reference_dataset: organisations
-            reference_column: organisationId
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            sourceOrgId must exist in organisations.organisationId when supplied.
-
-    - name: targetOrgId
-      data_type: string
-      logical_type: target_organisation_identifier
-      required: true
-      nullable: true
-      accepted:
-        regex: '^ORG-\d{5}$'
-      example: "ORG-00341"
-      sensitivity:
-        classification: INTERNAL
-        is_pii: false
-        handling: NONE
-      quality_rules:
-        - rule_id: ORR_TARGET_ORG_ID_PATTERN
-          type: REGEX_IF_PRESENT
-          parameters:
-            regex: '^ORG-\d{5}$'
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            targetOrgId must follow the ORG-00000 pattern when supplied.
-
-        - rule_id: ORR_TARGET_ORG_ID_FK
-          type: FOREIGN_KEY_IF_PRESENT
-          parameters:
-            reference_dataset: organisations
-            reference_column: organisationId
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            targetOrgId must exist in organisations.organisationId when supplied.
-
-    - name: relationshipType
-      data_type: string
-      logical_type: organisation_relationship_type
-      required: true
-      nullable: false
-      accepted:
-        values:
-          - PARENT_SUBSIDIARY
-          - TRUST_TRUSTEE
-          - PARTNERSHIP
-          - FRANCHISE
-          - JOINT_VENTURE
-      example: "PARENT_SUBSIDIARY"
-      sensitivity:
-        classification: CONFIDENTIAL
-        is_pii: false
-        handling: RESTRICT_ACCESS
-      quality_rules:
-        - rule_id: ORR_RELATIONSHIP_TYPE_ENUM
-          type: ACCEPTED_VALUES
-          parameters:
-            values:
-              - PARENT_SUBSIDIARY
-              - TRUST_TRUSTEE
-              - PARTNERSHIP
-              - FRANCHISE
-              - JOINT_VENTURE
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            relationshipType must be one of the supported organisation
-            relationship values.
-
-    - name: isActive
-      data_type: bool
-      logical_type: boolean
-      required: true
-      nullable: false
-      accepted:
-        values:
-          - true
-          - false
-      example: true
-      sensitivity:
-        classification: INTERNAL
-        is_pii: false
-        handling: NONE
-      quality_rules:
-        - rule_id: ORR_IS_ACTIVE_BOOLEAN
-          type: BOOLEAN
-          severity: ERROR
-          action: QUARANTINE
-          description: "isActive must be a boolean value."
-
-    - name: startDate
-      data_type: string
-      logical_type: date
-      required: true
-      nullable: true
-      accepted:
-        format: ISO_8601_DATE
-      example: "2024-05-10"
-      sensitivity:
-        classification: INTERNAL
-        is_pii: false
-        handling: NONE
-      quality_rules:
-        - rule_id: ORR_START_DATE_PARSEABLE
-          type: PARSEABLE_DATE_IF_PRESENT
-          severity: ERROR
-          action: QUARANTINE
-          description: "startDate must be parseable as a date."
-
-# -----------------------------------------------------------------------------
-# 6. Dataset-level quality rules
-# -----------------------------------------------------------------------------
-dataset_quality_rules:
-
-  - rule_id: ORR_RELATIONSHIP_ID_UNIQUE
-    type: UNIQUE
-    columns:
-      - relationshipId
-    severity: ERROR
-    action: QUARANTINE
-    description: "relationshipId must be unique across the dataset."
-
-  - rule_id: ORR_SOURCE_ORG_PRESENT
-    type: NOT_NULL
-    columns:
-      - sourceOrgId
-    severity: WARNING
-    action: ALLOW_WITH_WARNING
-    description: >
-      A relationship should identify its source organisation. The physical
-      schema currently permits null.
-
-  - rule_id: ORR_TARGET_ORG_PRESENT
-    type: NOT_NULL
-    columns:
-      - targetOrgId
-    severity: WARNING
-    action: ALLOW_WITH_WARNING
-    description: >
-      A relationship should identify its target organisation. The physical
-      schema currently permits null.
-
-  - rule_id: ORR_SOURCE_TARGET_DIFFERENT
-    type: COLUMN_COMPARISON
-    parameters:
-      left_column: sourceOrgId
-      operator: NOT_EQUAL
-      right_column: targetOrgId
-      ignore_nulls: true
-    severity: ERROR
-    action: QUARANTINE
-    description: >
-      sourceOrgId and targetOrgId must identify different organisations.
-
-  - rule_id: ORR_START_DATE_NOT_IN_FUTURE
-    type: DATE_NOT_IN_FUTURE
-    columns:
-      - startDate
-    severity: WARNING
-    action: ALLOW_WITH_WARNING
-    description: "startDate should not be later than the processing date."
-
-  - rule_id: ORR_ACTIVE_RELATIONSHIP_UNIQUE
-    type: COMPOSITE_UNIQUE_WHEN
-    columns:
-      - sourceOrgId
-      - targetOrgId
-      - relationshipType
-    parameters:
-      when:
-        column: isActive
-        equals: true
-    severity: WARNING
-    action: ALLOW_WITH_WARNING
-    description: >
-      The same active relationship should not be duplicated for the same
-      source organisation, target organisation, and relationship type.
-
-# -----------------------------------------------------------------------------
-# 7. Notes for the team
-# -----------------------------------------------------------------------------
-notes:
-  - >
-    This dataset does not contain global_id because it models
-    organisation-to-organisation relationships rather than a person.
-  - >
-    Although it is excluded from universal global_id validation, the current
-    ingestion inventory classifies it as a DATABASE source using Debezium CDC.
-  - >
-    Relationship direction is meaningful. For PARENT_SUBSIDIARY, sourceOrgId
-    should represent the parent and targetOrgId should represent the subsidiary.
-  - >
-    The source schema does not contain an endDate, so this contract cannot
-    verify when an inactive relationship ended.
-  - >
-    The source and target presence checks remain warnings because the physical
-    schema marks both fields as nullable.
+- property: g3:lifecycle
+  value:
+    owner: TBD
+    approver: TBD
+    effective_from: null
+- property: g3:dataset
+  value:
+    expected_rows_scale_1: 100
+    physical_schema_ref: dev-tools/datagen/output/master-schema.json#/organisation_relationships
+- property: g3:notes
+  value:
+  - |
+    This dataset does not contain global_id because it models organisation-to-organisation relationships rather than a person.
+  - |
+    Although it is excluded from universal global_id validation, the current ingestion inventory classifies it as a DATABASE source using Debezium CDC.
+  - |
+    Relationship direction is meaningful. For PARENT_SUBSIDIARY, sourceOrgId should represent the parent and targetOrgId should represent the subsidiary.
+  - |
+    The source schema does not contain an endDate, so this contract cannot verify when an inactive relationship ended.
+  - The source and target presence checks remain warnings because the physical schema marks both fields as nullable.

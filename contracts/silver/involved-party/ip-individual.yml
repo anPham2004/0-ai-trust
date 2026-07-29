@@ -1,353 +1,642 @@
-product: ip_individual
-version: 1.1.0
-contract_status: DRAFT
-approver: TBD
-effective_from: null
-owner: customer-domain
-producer: customer-master-platform
-consumers: [banker-assist, lending-operations]
-description: >
-  Individual customer profile from CDC with KYC enrichment, preferences, and address.
-  Joined from customers + kyc_records + customer_preferences + physical_addresses bronze CDC payloads.
-
-canonical_key: global_id
-customer_key: global_id
-keys:
-  primary_key: [global_id]
-  alternate_keys: [customer_id]
-critical_data_elements: [global_id, customer_id, full_name, email_masked]
-lifecycle_stage: Monitor
-
-sources:
+kind: DataContract
+apiVersion: v3.1.0
+id: silver.involved_party.ip_individual
+version: 1.0.0
+name: ip_individual
+status: draft
+domain: CUSTOMER
+description:
+  purpose: |
+    Individual customer profile from CDC with KYC enrichment, preferences, and address. Joined from customers + kyc_records + customer_preferences + physical_addresses bronze CDC payloads.
+servers:
+- server: silver-delta-lake
+  type: databricks
+  description: Silver Delta Lake table for ip_individual
+  environment: prod
+schema:
+- name: ip_individual
+  logicalType: object
+  physicalType: table
+  quality:
+  - id: GLOBAL_ID_NULL
+    type: sql
+    query: global_id IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Universal FK must exist
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: CUSTOMER_ID_NULL
+    type: sql
+    query: customer_id IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Primary ID must exist
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: FULL_NAME_NULL
+    type: sql
+    query: full_name IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Customer name required
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: CUSTOMER_TYPE_INVALID
+    type: sql
+    query: customer_type IN ('INDIVIDUAL','BUSINESS','SOLE_TRADER')
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: Must be a known customer type
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: AGE_MINIMUM
+    type: sql
+    query: age IS NULL OR age >= 18
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: Must be adult
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: GLOBAL_ID_UUID_FORMAT
+    type: sql
+    query: global_id IS NULL OR global_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: global_id must be valid UUID format when present
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: FULL_NAME_NOT_BLANK
+    type: sql
+    query: full_name IS NULL OR length(trim(full_name)) > 0
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: full_name must not be empty or whitespace-only when present
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: CUSTOMER_SNAPSHOT_STALE
+    type: sql
+    query: last_updated_at >= date_sub(current_date(), 30)
+    mustBe: 0
+    severity: warning
+    dimension: conformity
+    description: Record updated within 30 days
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: EMAIL_FORMAT_REVIEW
+    type: sql
+    query: email_masked IS NULL OR email_masked RLIKE '^[^@]+@[^@]+\.[^@]+$'
+    mustBe: 0
+    severity: warning
+    dimension: conformity
+    description: Masked email format check
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: PHONE_FORMAT_REVIEW
+    type: sql
+    query: phone_masked IS NULL OR length(phone_masked) >= 8
+    mustBe: 0
+    severity: warning
+    dimension: conformity
+    description: Phone length check
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: EMAIL_MASKED_NULL
+    type: sql
+    query: email_masked IS NOT NULL
+    mustBe: 0
+    severity: warning
+    dimension: completeness
+    description: Masked email required
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: PHONE_MASKED_NULL
+    type: sql
+    query: phone_masked IS NOT NULL
+    mustBe: 0
+    severity: warning
+    dimension: completeness
+    description: Masked phone required
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  properties:
+  - name: global_id
+    logicalType: string
+    physicalType: STRING
+    required: true
+    primaryKey: true
+    primaryKeyPosition: 1
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: customer_id
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: customer_type
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+    - property: g3:accepted
+      value:
+        values:
+        - INDIVIDUAL
+        - BUSINESS
+        - SOLE_TRADER
+  - name: prefix
+    logicalType: string
+    physicalType: STRING
+    classification: RESTRICTED
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: DIRECT_IDENTIFIER
+        handling: redact
+    - property: g3:domainType
+      value: person_name
+  - name: full_name
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: RESTRICTED
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: DIRECT_IDENTIFIER
+        handling: hash
+    - property: g3:domainType
+      value: person_name
+  - name: name_token
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: identifier
+  - name: middle_names
+    logicalType: string
+    physicalType: STRING
+    classification: RESTRICTED
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: DIRECT_IDENTIFIER
+        handling: redact
+    - property: g3:domainType
+      value: person_name
+  - name: gender
+    logicalType: string
+    physicalType: STRING
+    classification: CONFIDENTIAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: DEMOGRAPHIC_INFORMATION
+    - property: g3:domainType
+      value: category
+  - name: age
+    logicalType: integer
+    physicalType: INT
+    classification: CONFIDENTIAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: DEMOGRAPHIC_INFORMATION
+    - property: g3:domainType
+      value: counter
+  - name: state
+    logicalType: string
+    physicalType: STRING
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+  - name: occupation_code
+    logicalType: string
+    physicalType: STRING
+    classification: CONFIDENTIAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: EMPLOYMENT_INFORMATION
+    - property: g3:domainType
+      value: code
+  - name: email_masked
+    logicalType: string
+    physicalType: STRING
+    classification: RESTRICTED
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: CONTACT_INFORMATION
+        handling: redact
+    - property: g3:domainType
+      value: email
+  - name: phone_masked
+    logicalType: string
+    physicalType: STRING
+    classification: RESTRICTED
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: CONTACT_INFORMATION
+        handling: redact
+    - property: g3:domainType
+      value: phone
+  - name: preferred_contact_channel
+    logicalType: string
+    physicalType: STRING
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+  - name: preferred_language
+    logicalType: string
+    physicalType: STRING
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+  - name: marketing_opt_in
+    logicalType: boolean
+    physicalType: BOOLEAN
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: boolean_flag
+  - name: satisfaction_score
+    logicalType: string
+    physicalType: STRING
+    classification: CONFIDENTIAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: counter
+  - name: address_suburb
+    logicalType: string
+    physicalType: STRING
+    classification: CONFIDENTIAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: CONTACT_INFORMATION
+        handling: generalise
+    - property: g3:domainType
+      value: address_component
+  - name: address_state
+    logicalType: string
+    physicalType: STRING
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: CONTACT_INFORMATION
+    - property: g3:domainType
+      value: address_component
+  - name: address_postcode
+    logicalType: string
+    physicalType: STRING
+    classification: CONFIDENTIAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: CONTACT_INFORMATION
+        handling: generalise
+    - property: g3:domainType
+      value: address_component
+  - name: customer_since
+    logicalType: timestamp
+    physicalType: TIMESTAMP
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: timestamp
+  - name: last_updated_at
+    logicalType: timestamp
+    physicalType: TIMESTAMP
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: timestamp
+  - name: pipeline_run_id
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: source_table
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: identifier
+  - name: processed_at
+    logicalType: timestamp
+    physicalType: TIMESTAMP
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: timestamp
+  - name: dq_status
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+    - property: g3:accepted
+      value:
+        values:
+        - PASSED
+        - FAILED
+        - WARNING
+  - name: masking_status
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+    - property: g3:accepted
+      value:
+        values:
+        - MASKED
+        - CLEAN
+slaProperties:
+- property: hardFailureRate
+  value: 0.01
+  description: Max proportion of hard-rule failures before pipeline halts
+- property: freshnessBreachRate
+  value: 0.05
+  description: Max proportion of freshness breaches before alert
+customProperties:
+- property: g3:sources
+  value:
   - type: DATABASE
     ingestion_mechanism: DEBEZIUM_CDC
     bronze_sink: cdc_changes
     source_dataset: public.customers
-    fields: [global_id, customerId, customerType, prefix, firstName, lastName,
-             middleNames, gender, age, state, occupationCode, email, phoneNumber,
-             createdAt, lastUpdateTime]
+    fields:
+    - global_id
+    - customerId
+    - customerType
+    - prefix
+    - firstName
+    - lastName
+    - middleNames
+    - gender
+    - age
+    - state
+    - occupationCode
+    - email
+    - phoneNumber
+    - createdAt
+    - lastUpdateTime
     cdc:
-      supported_operations: [SNAPSHOT, INSERT, UPDATE, DELETE]
-      ordering_metadata: [source_lsn, kafka_partition, kafka_offset]
+      supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+      ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
   - type: DATABASE
     ingestion_mechanism: DEBEZIUM_CDC
     bronze_sink: cdc_changes
     source_dataset: public.kyc_records
-    fields: [global_id, kycId, verificationStatus, verificationDate, riskRating,
-             pepStatus, sanctionsCheck, lastReviewDate, nextReviewDate,
-             documentTypes, organisationId, abnVerified, asicCheckStatus,
-             beneficialOwnershipVerified]
+    fields:
+    - global_id
+    - kycId
+    - verificationStatus
+    - verificationDate
+    - riskRating
+    - pepStatus
+    - sanctionsCheck
+    - lastReviewDate
+    - nextReviewDate
+    - documentTypes
+    - organisationId
+    - abnVerified
+    - asicCheckStatus
+    - beneficialOwnershipVerified
     cdc:
-      supported_operations: [SNAPSHOT, INSERT, UPDATE, DELETE]
-      ordering_metadata: [source_lsn, kafka_partition, kafka_offset]
+      supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+      ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
   - type: DATABASE
     ingestion_mechanism: DEBEZIUM_CDC
     bronze_sink: cdc_changes
     source_dataset: public.customer_preferences
-    fields: [global_id, preferredContactChannel, preferredLanguage,
-             marketingOptIn, satisfactionScore]
+    fields:
+    - global_id
+    - preferredContactChannel
+    - preferredLanguage
+    - marketingOptIn
+    - satisfactionScore
     cdc:
-      supported_operations: [SNAPSHOT, INSERT, UPDATE, DELETE]
-      ordering_metadata: [source_lsn, kafka_partition, kafka_offset]
+      supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+      ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
   - type: DATABASE
     ingestion_mechanism: DEBEZIUM_CDC
     bronze_sink: cdc_changes
     source_dataset: public.physical_addresses
-    fields: [global_id, suburb, state, postcode]
+    fields:
+    - global_id
+    - suburb
+    - state
+    - postcode
     cdc:
-      supported_operations: [SNAPSHOT, INSERT, UPDATE, DELETE]
-      ordering_metadata: [source_lsn, kafka_partition, kafka_offset]
-
-freshness_sla: 24 hours
-lineage_l1: >
-  customer-master DB -> Debezium -> Kafka CDC topics -> landing-exporter
-  -> S3 bronze/landing/cdc/ -> Auto Loader -> bronze.cdc_changes -> Silver
-lineage_l2_required: true
-known_source_limitations:
-  - "CDC eventual consistency — records may arrive out of order within partition"
-
-output_schema:
-  - name: global_id
-    type: STRING
-    required: true
-    nullable: false
-    classification: INTERNAL
-    is_pii: false
-    logical_type: uuid
-    description: "Universal join key across all tables"
-  - name: customer_id
-    type: STRING
-    required: true
-    nullable: false
-    classification: INTERNAL
-    is_pii: false
-    logical_type: uuid
-  - name: customer_type
-    type: STRING
-    required: true
-    nullable: false
-    classification: INTERNAL
-    is_pii: false
-    logical_type: category
-    allowed_values: [INDIVIDUAL, BUSINESS, SOLE_TRADER]
-  - name: prefix
-    type: STRING
-    required: false
-    nullable: true
-    classification: RESTRICTED
-    is_pii: true
-    pii_type: DIRECT_IDENTIFIER
-    logical_type: person_name
-    masking: redact
-  - name: full_name
-    type: STRING
-    required: true
-    nullable: false
-    classification: RESTRICTED
-    is_pii: true
-    pii_type: DIRECT_IDENTIFIER
-    logical_type: person_name
-    masking: hash
-    description: "Hashed to name_token for AI output"
-  - name: name_token
-    type: STRING
-    required: true
-    nullable: false
-    classification: INTERNAL
-    is_pii: false
-    logical_type: identifier
-    description: "SHA-256 of full_name, used in AI output"
-  - name: middle_names
-    type: STRING
-    required: false
-    nullable: true
-    classification: RESTRICTED
-    is_pii: true
-    pii_type: DIRECT_IDENTIFIER
-    logical_type: person_name
-    masking: redact
-  - name: gender
-    type: STRING
-    required: false
-    nullable: true
-    classification: CONFIDENTIAL
-    is_pii: true
-    pii_type: DEMOGRAPHIC_INFORMATION
-    logical_type: category
-  - name: age
-    type: INT
-    required: false
-    nullable: true
-    classification: CONFIDENTIAL
-    is_pii: true
-    pii_type: DEMOGRAPHIC_INFORMATION
-    logical_type: counter
-  - name: state
-    type: STRING
-    required: false
-    nullable: true
-    classification: INTERNAL
-    is_pii: false
-    logical_type: category
-  - name: occupation_code
-    type: STRING
-    required: false
-    nullable: true
-    classification: CONFIDENTIAL
-    is_pii: true
-    pii_type: EMPLOYMENT_INFORMATION
-    logical_type: code
-    description: "ANZSCO code"
-  - name: email_masked
-    type: STRING
-    required: true
-    nullable: true
-    classification: RESTRICTED
-    is_pii: true
-    pii_type: CONTACT_INFORMATION
-    logical_type: email
-    masking: redact
-    description: "Never expose raw email"
-  - name: phone_masked
-    type: STRING
-    required: true
-    nullable: true
-    classification: RESTRICTED
-    is_pii: true
-    pii_type: CONTACT_INFORMATION
-    logical_type: phone
-    masking: redact
-    description: "Never expose raw phone"
-  - name: preferred_contact_channel
-    type: STRING
-    required: false
-    nullable: true
-    classification: INTERNAL
-    is_pii: false
-    logical_type: category
-  - name: preferred_language
-    type: STRING
-    required: false
-    nullable: true
-    classification: INTERNAL
-    is_pii: false
-    logical_type: category
-  - name: marketing_opt_in
-    type: BOOLEAN
-    required: false
-    nullable: true
-    classification: INTERNAL
-    is_pii: false
-    logical_type: boolean_flag
-  - name: satisfaction_score
-    type: STRING
-    required: false
-    nullable: true
-    classification: CONFIDENTIAL
-    is_pii: false
-    logical_type: counter
-  - name: address_suburb
-    type: STRING
-    required: false
-    nullable: true
-    classification: CONFIDENTIAL
-    is_pii: true
-    pii_type: CONTACT_INFORMATION
-    logical_type: address_component
-    masking: generalise
-    description: "Generalised to region for AI output"
-  - name: address_state
-    type: STRING
-    required: false
-    nullable: true
-    classification: INTERNAL
-    is_pii: true
-    pii_type: CONTACT_INFORMATION
-    logical_type: address_component
-  - name: address_postcode
-    type: STRING
-    required: false
-    nullable: true
-    classification: CONFIDENTIAL
-    is_pii: true
-    pii_type: CONTACT_INFORMATION
-    logical_type: address_component
-    masking: generalise
-    description: "First 2 digits only for AI output"
-  - name: customer_since
-    type: TIMESTAMP
-    required: false
-    nullable: true
-    classification: INTERNAL
-    is_pii: false
-    logical_type: timestamp
-  - name: last_updated_at
-    type: TIMESTAMP
-    required: false
-    nullable: true
-    classification: INTERNAL
-    is_pii: false
-    logical_type: timestamp
-  - name: pipeline_run_id
-    type: STRING
-    required: true
-    nullable: false
-    classification: INTERNAL
-    is_pii: false
-    logical_type: uuid
-    description: "Pipeline lineage tracking"
-  - name: source_table
-    type: STRING
-    required: true
-    nullable: false
-    classification: INTERNAL
-    is_pii: false
-    logical_type: identifier
-  - name: processed_at
-    type: TIMESTAMP
-    required: true
-    nullable: false
-    classification: INTERNAL
-    is_pii: false
-    logical_type: timestamp
-  - name: dq_status
-    type: STRING
-    required: true
-    nullable: false
-    classification: INTERNAL
-    is_pii: false
-    logical_type: category
-    allowed_values: [PASSED, FAILED, WARNING]
-  - name: masking_status
-    type: STRING
-    required: true
-    nullable: false
-    classification: INTERNAL
-    is_pii: false
-    logical_type: category
-    allowed_values: [MASKED, CLEAN]
-
-rules:
-  hard:
-    - id: GLOBAL_ID_NULL
-      expression: "global_id IS NOT NULL"
-      description: "Universal FK must exist"
-    - id: CUSTOMER_ID_NULL
-      expression: "customer_id IS NOT NULL"
-      description: "Primary ID must exist"
-    - id: FULL_NAME_NULL
-      expression: "full_name IS NOT NULL"
-      description: "Customer name required"
-    - id: CUSTOMER_TYPE_INVALID
-      expression: "customer_type IN ('INDIVIDUAL','BUSINESS','SOLE_TRADER')"
-      description: "Must be a known customer type"
-    - id: AGE_MINIMUM
-      expression: "age IS NULL OR age >= 18"
-      description: "Must be adult"
-    - id: GLOBAL_ID_UUID_FORMAT
-      expression: "global_id IS NULL OR global_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'"
-      description: "global_id must be valid UUID format when present"
-    - id: FULL_NAME_NOT_BLANK
-      expression: "full_name IS NULL OR length(trim(full_name)) > 0"
-      description: "full_name must not be empty or whitespace-only when present"
-  warn:
-    - id: CUSTOMER_SNAPSHOT_STALE
-      expression: "last_updated_at >= date_sub(current_date(), 30)"
-      description: "Record updated within 30 days"
-    - id: EMAIL_FORMAT_REVIEW
-      expression: "email_masked IS NULL OR email_masked RLIKE '^[^@]+@[^@]+\\.[^@]+$'"
-      description: "Masked email format check"
-    - id: PHONE_FORMAT_REVIEW
-      expression: "phone_masked IS NULL OR length(phone_masked) >= 8"
-      description: "Phone length check"
-    - id: EMAIL_MASKED_NULL
-      expression: "email_masked IS NOT NULL"
-      description: "Masked email required"
-    - id: PHONE_MASKED_NULL
-      expression: "phone_masked IS NOT NULL"
-      description: "Masked phone required"
-
-tolerances:
-  hard_failure_rate: 0.01
-  freshness_breach_rate: 0.05
-
-quality_dimensions:
-  completeness: [GLOBAL_ID_NULL, CUSTOMER_ID_NULL, FULL_NAME_NULL, FULL_NAME_NOT_BLANK]
-  validity: [CUSTOMER_TYPE_INVALID, AGE_MINIMUM, GLOBAL_ID_UUID_FORMAT]
-  timeliness: [CUSTOMER_SNAPSHOT_STALE]
-
-ai_policy:
-  allowed: [profile_summary, contact_preference, kyc_status_check]
-  prohibited: [display_raw_pii, credit_decision, risk_scoring, fraud_assessment]
-
-zero_trust:
-  quality_status_required: true
-  source_reference_required: true
-  quarantined_excluded: true
-  stale_flagged: true
-
-parameters:
-  allowed_customer_types: [INDIVIDUAL, BUSINESS, SOLE_TRADER]
-  freshness_days: 30
-  minimum_age: 18
-  minimum_created_date: "2010-01-01"
+      supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+      ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+- property: g3:freshnessSla
+  value: 24 hours
+- property: g3:lineage
+  value:
+    l1: |
+      customer-master DB -> Debezium -> Kafka CDC topics -> landing-exporter -> S3 bronze/landing/cdc/ -> Auto Loader -> bronze.cdc_changes -> Silver
+    l2_required: true
+- property: g3:knownSourceLimitations
+  value:
+  - CDC eventual consistency — records may arrive out of order within partition
+- property: g3:lifecycle
+  value:
+    owner: customer-domain
+    producer: customer-master-platform
+    consumers:
+    - banker-assist
+    - lending-operations
+    approver: TBD
+    effective_from: null
+- property: g3:dataset
+  value:
+    canonical_key: global_id
+    customer_key: global_id
+    critical_data_elements:
+    - global_id
+    - customer_id
+    - full_name
+    - email_masked
+    lifecycle_stage: Monitor
+- property: g3:qualityDimensions
+  value:
+    completeness:
+    - GLOBAL_ID_NULL
+    - CUSTOMER_ID_NULL
+    - FULL_NAME_NULL
+    - FULL_NAME_NOT_BLANK
+    - EMAIL_MASKED_NULL
+    - PHONE_MASKED_NULL
+    validity:
+    - CUSTOMER_TYPE_INVALID
+    - AGE_MINIMUM
+    - GLOBAL_ID_UUID_FORMAT
+    - EMAIL_FORMAT_REVIEW
+    - PHONE_FORMAT_REVIEW
+    timeliness:
+    - CUSTOMER_SNAPSHOT_STALE
+- property: g3:aiPolicy
+  value:
+    allowed:
+    - profile_summary
+    - contact_preference
+    - kyc_status_check
+    prohibited:
+    - display_raw_pii
+    - credit_decision
+    - risk_scoring
+    - fraud_assessment
+- property: g3:zeroTrust
+  value:
+    quality_status_required: true
+    source_reference_required: true
+    quarantined_excluded: true
+    stale_flagged: true
+- property: g3:parameters
+  value:
+    allowed_customer_types:
+    - INDIVIDUAL
+    - BUSINESS
+    - SOLE_TRADER
+    freshness_days: 30
+    minimum_age: 18
+    minimum_created_date: 2010-01-01
+- property: g3:notes
+  value:
+  - |
+    This contract describes the Silver output table. PII is masked, hashed, or redacted before landing in Silver. Quality rules are executable Spark SQL expressions that can be compiled via F.expr().

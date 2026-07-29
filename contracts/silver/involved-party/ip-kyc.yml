@@ -1,270 +1,516 @@
-product: ip_kyc
-version: 1.1.0
-contract_status: DRAFT
-approver: TBD
-effective_from: null
-owner: customer-domain
-producer: customer-master-platform
-consumers: [banker-assist, lending-operations]
-description: >
-  KYC/KYB verification records from CDC. Covers individuals (KYC) and
-  organisations (KYB) with risk rating, PEP status, and sanctions checks.
-
-canonical_key: kyc_id
-customer_key: global_id
-keys:
-  primary_key: [kyc_id]
-  alternate_keys: []
-critical_data_elements: [kyc_id, global_id, verification_status, risk_rating]
-lifecycle_stage: Monitor
-
-sources:
+kind: DataContract
+apiVersion: v3.1.0
+id: silver.involved_party.ip_kyc
+version: 1.0.0
+name: ip_kyc
+status: draft
+domain: CUSTOMER
+description:
+  purpose: |
+    KYC/KYB verification records from CDC. Covers individuals (KYC) and organisations (KYB) with risk rating, PEP status, and sanctions checks.
+servers:
+- server: silver-delta-lake
+  type: databricks
+  description: Silver Delta Lake table for ip_kyc
+  environment: prod
+schema:
+- name: ip_kyc
+  logicalType: object
+  physicalType: table
+  quality:
+  - id: KYC_ID_NULL
+    type: sql
+    query: kyc_id IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Primary key must exist
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: GLOBAL_ID_NULL
+    type: sql
+    query: global_id IS NOT NULL
+    mustBe: 0
+    severity: error
+    dimension: completeness
+    description: Customer FK must exist
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: VERIFICATION_STATUS_INVALID
+    type: sql
+    query: verification_status IN ('VERIFIED','PENDING','FAILED')
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: Must be a known verification status
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: RISK_RATING_INVALID
+    type: sql
+    query: risk_rating IN ('LOW','MEDIUM','HIGH','VERY_HIGH')
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: Must be a known risk rating
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: SANCTIONS_CHECK_INVALID
+    type: sql
+    query: sanctions_check IN ('CLEAR','MATCH','PENDING')
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: Must be a known sanctions status
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: RECORD_TYPE_INVALID
+    type: sql
+    query: record_type IN ('KYC','KYB')
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: Must be KYC or KYB
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: KYC_ID_UUID_FORMAT
+    type: sql
+    query: kyc_id IS NULL OR kyc_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: kyc_id must be valid UUID format when present
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: GLOBAL_ID_UUID_FORMAT
+    type: sql
+    query: global_id IS NULL OR global_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: global_id must be valid UUID format when present
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: ORGANISATION_ID_UUID_FORMAT
+    type: sql
+    query: organisation_id IS NULL OR organisation_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    mustBe: 0
+    severity: error
+    dimension: conformity
+    description: organisation_id must be valid UUID format when present
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: KYC_REVIEW_OVERDUE
+    type: sql
+    query: next_review_date IS NULL OR next_review_date >= current_date()
+    mustBe: 0
+    severity: warning
+    dimension: conformity
+    description: KYC review not overdue
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: REVIEW_DATE_ORDER
+    type: sql
+    query: next_review_date IS NULL OR last_review_date IS NULL OR next_review_date > last_review_date
+    mustBe: 0
+    severity: warning
+    dimension: conformity
+    description: Next review must follow last review
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  properties:
+  - name: global_id
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: kyc_id
+    logicalType: string
+    physicalType: STRING
+    required: true
+    primaryKey: true
+    primaryKeyPosition: 1
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: organisation_id
+    logicalType: string
+    physicalType: STRING
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: record_type
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+    - property: g3:accepted
+      value:
+        values:
+        - KYC
+        - KYB
+  - name: verification_status
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+    - property: g3:accepted
+      value:
+        values:
+        - VERIFIED
+        - PENDING
+        - FAILED
+  - name: verification_date
+    logicalType: date
+    physicalType: DATE
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: date
+  - name: verification_method
+    logicalType: string
+    physicalType: STRING
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+  - name: risk_rating
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: RESTRICTED
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: redact
+    - property: g3:domainType
+      value: category
+    - property: g3:accepted
+      value:
+        values:
+        - LOW
+        - MEDIUM
+        - HIGH
+        - VERY_HIGH
+  - name: pep_status
+    logicalType: boolean
+    physicalType: BOOLEAN
+    required: true
+    classification: RESTRICTED
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: redact
+    - property: g3:domainType
+      value: boolean_flag
+  - name: sanctions_check
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: RESTRICTED
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: redact
+    - property: g3:domainType
+      value: category
+    - property: g3:accepted
+      value:
+        values:
+        - CLEAR
+        - MATCH
+        - PENDING
+  - name: last_review_date
+    logicalType: date
+    physicalType: DATE
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: date
+  - name: next_review_date
+    logicalType: date
+    physicalType: DATE
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: date
+  - name: document_types
+    logicalType: string
+    physicalType: STRING
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+  - name: abn_verified
+    logicalType: boolean
+    physicalType: BOOLEAN
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: boolean_flag
+  - name: asic_check_status
+    logicalType: string
+    physicalType: STRING
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+  - name: beneficial_ownership_verified
+    logicalType: boolean
+    physicalType: BOOLEAN
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: boolean_flag
+  - name: pipeline_run_id
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: uuid
+  - name: source_table
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: identifier
+  - name: processed_at
+    logicalType: timestamp
+    physicalType: TIMESTAMP
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: timestamp
+  - name: dq_status
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+    - property: g3:accepted
+      value:
+        values:
+        - PASSED
+        - FAILED
+        - WARNING
+  - name: masking_status
+    logicalType: string
+    physicalType: STRING
+    required: true
+    classification: INTERNAL
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+    - property: g3:domainType
+      value: category
+    - property: g3:accepted
+      value:
+        values:
+        - MASKED
+        - CLEAN
+slaProperties:
+- property: hardFailureRate
+  value: 0.01
+  description: Max proportion of hard-rule failures before pipeline halts
+- property: freshnessBreachRate
+  value: 0.05
+  description: Max proportion of freshness breaches before alert
+customProperties:
+- property: g3:sources
+  value:
   - type: DATABASE
     ingestion_mechanism: DEBEZIUM_CDC
     bronze_sink: cdc_changes
     source_dataset: public.kyc_records
-    fields: [global_id, kycId, organisationId, verificationStatus, verificationDate,
-             verificationMethod, riskRating, pepStatus, sanctionsCheck,
-             lastReviewDate, nextReviewDate, documentTypes, abnVerified,
-             asicCheckStatus, beneficialOwnershipVerified]
+    fields:
+    - global_id
+    - kycId
+    - organisationId
+    - verificationStatus
+    - verificationDate
+    - verificationMethod
+    - riskRating
+    - pepStatus
+    - sanctionsCheck
+    - lastReviewDate
+    - nextReviewDate
+    - documentTypes
+    - abnVerified
+    - asicCheckStatus
+    - beneficialOwnershipVerified
     cdc:
-      supported_operations: [SNAPSHOT, INSERT, UPDATE, DELETE]
-      ordering_metadata: [source_lsn, kafka_partition, kafka_offset]
-
-freshness_sla: 24 hours
-lineage_l1: >
-  customer-master DB -> Debezium -> Kafka CDC topics -> landing-exporter
-  -> S3 bronze/landing/cdc/ -> Auto Loader -> bronze.cdc_changes -> Silver
-lineage_l2_required: true
-known_source_limitations:
-  - "CDC eventual consistency — records may arrive out of order within partition"
-
-output_schema:
-  - name: global_id
-    type: STRING
-    required: true
-    nullable: false
-    classification: INTERNAL
-    is_pii: false
-    logical_type: uuid
-    description: "FK to ip_individual"
-  - name: kyc_id
-    type: STRING
-    required: true
-    nullable: false
-    classification: INTERNAL
-    is_pii: false
-    logical_type: uuid
-    description: "PK"
-  - name: organisation_id
-    type: STRING
-    required: false
-    nullable: true
-    classification: INTERNAL
-    is_pii: false
-    logical_type: uuid
-    description: "NULL = KYC, populated = KYB"
-  - name: record_type
-    type: STRING
-    required: true
-    nullable: false
-    classification: INTERNAL
-    is_pii: false
-    logical_type: category
-    description: "KYC or KYB, derived from organisationId IS NULL"
-    allowed_values: [KYC, KYB]
-  - name: verification_status
-    type: STRING
-    required: true
-    nullable: false
-    classification: INTERNAL
-    is_pii: false
-    logical_type: category
-    allowed_values: [VERIFIED, PENDING, FAILED]
-  - name: verification_date
-    type: DATE
-    required: false
-    nullable: true
-    classification: INTERNAL
-    is_pii: false
-    logical_type: date
-  - name: verification_method
-    type: STRING
-    required: false
-    nullable: true
-    classification: INTERNAL
-    is_pii: false
-    logical_type: category
-  - name: risk_rating
-    type: STRING
-    required: true
-    nullable: false
-    classification: RESTRICTED
-    is_pii: false
-    logical_type: category
-    masking: redact
-    description: "Banker-only, redacted from AI output"
-    allowed_values: [LOW, MEDIUM, HIGH, VERY_HIGH]
-  - name: pep_status
-    type: BOOLEAN
-    required: true
-    nullable: false
-    classification: RESTRICTED
-    is_pii: false
-    logical_type: boolean_flag
-    masking: redact
-    description: "Politically Exposed Person flag, banker-only"
-  - name: sanctions_check
-    type: STRING
-    required: true
-    nullable: false
-    classification: RESTRICTED
-    is_pii: false
-    logical_type: category
-    masking: redact
-    description: "Banker-only, redacted from AI output"
-    allowed_values: [CLEAR, MATCH, PENDING]
-  - name: last_review_date
-    type: DATE
-    required: false
-    nullable: true
-    classification: INTERNAL
-    is_pii: false
-    logical_type: date
-  - name: next_review_date
-    type: DATE
-    required: false
-    nullable: true
-    classification: INTERNAL
-    is_pii: false
-    logical_type: date
-  - name: document_types
-    type: STRING
-    required: false
-    nullable: true
-    classification: INTERNAL
-    is_pii: false
-    logical_type: category
-  - name: abn_verified
-    type: BOOLEAN
-    required: false
-    nullable: true
-    classification: INTERNAL
-    is_pii: false
-    logical_type: boolean_flag
-    description: "KYB only"
-  - name: asic_check_status
-    type: STRING
-    required: false
-    nullable: true
-    classification: INTERNAL
-    is_pii: false
-    logical_type: category
-    description: "KYB only"
-  - name: beneficial_ownership_verified
-    type: BOOLEAN
-    required: false
-    nullable: true
-    classification: INTERNAL
-    is_pii: false
-    logical_type: boolean_flag
-    description: "KYB only"
-  - name: pipeline_run_id
-    type: STRING
-    required: true
-    nullable: false
-    classification: INTERNAL
-    is_pii: false
-    logical_type: uuid
-  - name: source_table
-    type: STRING
-    required: true
-    nullable: false
-    classification: INTERNAL
-    is_pii: false
-    logical_type: identifier
-  - name: processed_at
-    type: TIMESTAMP
-    required: true
-    nullable: false
-    classification: INTERNAL
-    is_pii: false
-    logical_type: timestamp
-  - name: dq_status
-    type: STRING
-    required: true
-    nullable: false
-    classification: INTERNAL
-    is_pii: false
-    logical_type: category
-    allowed_values: [PASSED, FAILED, WARNING]
-  - name: masking_status
-    type: STRING
-    required: true
-    nullable: false
-    classification: INTERNAL
-    is_pii: false
-    logical_type: category
-    allowed_values: [MASKED, CLEAN]
-
-rules:
-  hard:
-    - id: KYC_ID_NULL
-      expression: "kyc_id IS NOT NULL"
-      description: "Primary key must exist"
-    - id: GLOBAL_ID_NULL
-      expression: "global_id IS NOT NULL"
-      description: "Customer FK must exist"
-    - id: VERIFICATION_STATUS_INVALID
-      expression: "verification_status IN ('VERIFIED','PENDING','FAILED')"
-      description: "Must be a known verification status"
-    - id: RISK_RATING_INVALID
-      expression: "risk_rating IN ('LOW','MEDIUM','HIGH','VERY_HIGH')"
-      description: "Must be a known risk rating"
-    - id: SANCTIONS_CHECK_INVALID
-      expression: "sanctions_check IN ('CLEAR','MATCH','PENDING')"
-      description: "Must be a known sanctions status"
-    - id: RECORD_TYPE_INVALID
-      expression: "record_type IN ('KYC','KYB')"
-      description: "Must be KYC or KYB"
-    - id: KYC_ID_UUID_FORMAT
-      expression: "kyc_id IS NULL OR kyc_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'"
-      description: "kyc_id must be valid UUID format when present"
-    - id: GLOBAL_ID_UUID_FORMAT
-      expression: "global_id IS NULL OR global_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'"
-      description: "global_id must be valid UUID format when present"
-    - id: ORGANISATION_ID_UUID_FORMAT
-      expression: "organisation_id IS NULL OR organisation_id RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'"
-      description: "organisation_id must be valid UUID format when present"
-  warn:
-    - id: KYC_REVIEW_OVERDUE
-      expression: "next_review_date IS NULL OR next_review_date >= current_date()"
-      description: "KYC review not overdue"
-    - id: REVIEW_DATE_ORDER
-      expression: "next_review_date IS NULL OR last_review_date IS NULL OR next_review_date > last_review_date"
-      description: "Next review must follow last review"
-
-tolerances:
-  hard_failure_rate: 0.01
-  freshness_breach_rate: 0.05
-
-quality_dimensions:
-  completeness: [KYC_ID_NULL, GLOBAL_ID_NULL]
-  validity: [VERIFICATION_STATUS_INVALID, RISK_RATING_INVALID, SANCTIONS_CHECK_INVALID, RECORD_TYPE_INVALID, KYC_ID_UUID_FORMAT, GLOBAL_ID_UUID_FORMAT, ORGANISATION_ID_UUID_FORMAT]
-  timeliness: [KYC_REVIEW_OVERDUE]
-
-ai_policy:
-  allowed: [kyc_status_check, verification_summary]
-  prohibited: [display_raw_pii, credit_decision, risk_scoring, fraud_assessment,
-               display_risk_rating, display_pep_status, display_sanctions_check]
-
-zero_trust:
-  quality_status_required: true
-  source_reference_required: true
-  quarantined_excluded: true
-  stale_flagged: true
-
-parameters:
-  allowed_verification_statuses: [VERIFIED, PENDING, FAILED]
-  allowed_risk_ratings: [LOW, MEDIUM, HIGH, VERY_HIGH]
-  allowed_sanctions_statuses: [CLEAR, MATCH, PENDING]
+      supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+      ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+- property: g3:freshnessSla
+  value: 24 hours
+- property: g3:lineage
+  value:
+    l1: |
+      customer-master DB -> Debezium -> Kafka CDC topics -> landing-exporter -> S3 bronze/landing/cdc/ -> Auto Loader -> bronze.cdc_changes -> Silver
+    l2_required: true
+- property: g3:knownSourceLimitations
+  value:
+  - CDC eventual consistency — records may arrive out of order within partition
+- property: g3:lifecycle
+  value:
+    owner: customer-domain
+    producer: customer-master-platform
+    consumers:
+    - banker-assist
+    - lending-operations
+    approver: TBD
+    effective_from: null
+- property: g3:dataset
+  value:
+    canonical_key: kyc_id
+    customer_key: global_id
+    critical_data_elements:
+    - kyc_id
+    - global_id
+    - verification_status
+    - risk_rating
+    lifecycle_stage: Monitor
+- property: g3:qualityDimensions
+  value:
+    completeness:
+    - KYC_ID_NULL
+    - GLOBAL_ID_NULL
+    validity:
+    - VERIFICATION_STATUS_INVALID
+    - RISK_RATING_INVALID
+    - SANCTIONS_CHECK_INVALID
+    - RECORD_TYPE_INVALID
+    - KYC_ID_UUID_FORMAT
+    - GLOBAL_ID_UUID_FORMAT
+    - ORGANISATION_ID_UUID_FORMAT
+    - REVIEW_DATE_ORDER
+    timeliness:
+    - KYC_REVIEW_OVERDUE
+- property: g3:aiPolicy
+  value:
+    allowed:
+    - kyc_status_check
+    - verification_summary
+    prohibited:
+    - display_raw_pii
+    - credit_decision
+    - risk_scoring
+    - fraud_assessment
+    - display_risk_rating
+    - display_pep_status
+    - display_sanctions_check
+- property: g3:zeroTrust
+  value:
+    quality_status_required: true
+    source_reference_required: true
+    quarantined_excluded: true
+    stale_flagged: true
+- property: g3:parameters
+  value:
+    allowed_verification_statuses:
+    - VERIFIED
+    - PENDING
+    - FAILED
+    allowed_risk_ratings:
+    - LOW
+    - MEDIUM
+    - HIGH
+    - VERY_HIGH
+    allowed_sanctions_statuses:
+    - CLEAR
+    - MATCH
+    - PENDING
+- property: g3:notes
+  value:
+  - |
+    This contract describes the Silver output table. PII is masked, hashed, or redacted before landing in Silver. Quality rules are executable Spark SQL expressions that can be compiled via F.expr().

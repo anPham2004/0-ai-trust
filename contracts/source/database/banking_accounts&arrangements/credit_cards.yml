@@ -1,627 +1,764 @@
-# =============================================================================
-# DATA CONTRACT: credit_cards
-# =============================================================================
-# Purpose:
-# - Stores customer credit card arrangements and utilisation information.
-# - Records the masked card number, card network, credit limit, current balance,
-#   minimum payment, interest rate, annual fee, reward program, status, and
-#   issue date.
-#
-# Important distinction:
-# - organisationId is null  -> the card is treated as a personal arrangement.
-# - organisationId is set   -> the card is treated as a business arrangement.
-#
-# Quick guide:
-# - required: the source column must exist.
-# - nullable: the physical source value may be null.
-# - ERROR + QUARANTINE: do not send the record to the trusted output.
-# - WARNING + ALLOW_WITH_WARNING: keep the record but report the issue.
-# =============================================================================
-
-contract_version: "1.0.0"
-contract_id: "source.database.credit_cards"
-
-# -----------------------------------------------------------------------------
-# 1. Basic dataset information
-# -----------------------------------------------------------------------------
-dataset:
-  name: credit_cards
-  domain: BANKING
-  description: >
-    Source dataset containing customer credit card arrangements with utilisation
-    modelling. Each record stores the card network, masked card number, credit
-    limit, current balance, minimum payment, interest rate, annual fee, reward
-    program, lifecycle status, issue date, and optional organisation context.
-  expected_rows_scale_1: 1200
-  physical_schema_ref: "dev-tools/datagen/output/master-schema.json#/credit_cards"
-
-# -----------------------------------------------------------------------------
-# 2. Ownership and contract lifecycle
-# -----------------------------------------------------------------------------
-lifecycle:
-  # DRAFT -> IN_REVIEW -> APPROVED -> DEPRECATED / RETIRED
-  status: DRAFT
-  owner: TBD
-  approver: TBD
-  effective_from: null
-
-# -----------------------------------------------------------------------------
-# 3. Source and ingestion information
-# -----------------------------------------------------------------------------
-source:
-  category: DATABASE
-  system_type: POSTGRESQL
-  source_object: "public.credit_cards"
-  authoritative: true
-
-ingestion:
-  mechanism: DEBEZIUM_CDC
-  transport: APACHE_KAFKA
-
-  landing:
-    format: JSONL
-    path_template: "s3://<bucket>/bronze/landing/cdc/credit_cards/"
-    immutable: true
-
-  bronze_target: "bronze.cdc_changes"
-
-  cdc:
-    supported_operations:
-      - SNAPSHOT
-      - INSERT
-      - UPDATE
-      - DELETE
-
-    ordering_metadata:
-      - source_lsn
-      - kafka_partition
-      - kafka_offset
-
-# -----------------------------------------------------------------------------
-# 4. Keys and relationships
-# -----------------------------------------------------------------------------
-keys:
-  primary_key:
-    - creditCardId
-
-  # cardNumber is already masked, so it is not treated as a guaranteed unique
-  # alternate key.
-  alternate_keys: []
-
-  foreign_keys:
-    - columns:
-        - global_id
-      reference:
-        dataset: customers
-        columns:
-          - global_id
-      nullable: true
-
-    - columns:
-        - organisationId
-      reference:
-        dataset: organisations
-        columns:
-          - organisationId
-      nullable: true
-
-# -----------------------------------------------------------------------------
-# 5. Field-level contract
-# -----------------------------------------------------------------------------
+kind: DataContract
+apiVersion: v3.1.0
+id: source.database.credit_cards
+version: 1.0.0
+name: credit_cards
+status: draft
+domain: BANKING
+description:
+  purpose: |
+    Source dataset containing customer credit card arrangements with utilisation modelling. Each record stores the card network, masked card number, credit limit, current balance, minimum payment, interest rate, annual fee, reward program, lifecycle status, issue date, and optional organisation context.
+servers:
+- server: source-postgresql
+  type: postgresql
+  description: PostgreSQL CDC source via Debezium for credit_cards
+  environment: prod
 schema:
-  fields:
-
-    - name: global_id
-      data_type: string
-      logical_type: person_identifier
-      required: true
-      nullable: true
-      accepted:
-        format: UUID
-      example: "65df84b8-4274-4dbd-9667-6c9967ae6538"
-      sensitivity:
-        classification: INTERNAL
-        is_pii: false
-        handling: NONE
-      quality_rules:
-        - rule_id: CCD_GLOBAL_ID_UUID
-          type: FORMAT_IF_PRESENT
-          parameters:
-            format: UUID
-          severity: ERROR
-          action: QUARANTINE
-          description: "global_id must be a valid UUID when supplied."
-
-        - rule_id: CCD_GLOBAL_ID_CUSTOMER_FK
-          type: FOREIGN_KEY_IF_PRESENT
-          parameters:
-            reference_dataset: customers
-            reference_column: global_id
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            global_id must exist in customers.global_id when supplied.
-
-    - name: creditCardId
-      data_type: string
-      logical_type: credit_card_identifier
-      required: true
-      nullable: false
-      accepted:
-        format: UUID
-      example: "123eb870-24fe-4bb9-b9ab-6cb4c52f2c35"
-      sensitivity:
-        classification: INTERNAL
-        is_pii: false
-        handling: NONE
-      quality_rules:
-        - rule_id: CCD_ID_NOT_NULL
-          type: NOT_NULL
-          severity: ERROR
-          action: QUARANTINE
-          description: "creditCardId must always be present."
-
-        - rule_id: CCD_ID_UUID
-          type: FORMAT
-          parameters:
-            format: UUID
-          severity: ERROR
-          action: QUARANTINE
-          description: "creditCardId must be a valid UUID."
-
-    - name: cardNumber
-      data_type: string
-      logical_type: masked_credit_card_number
-      required: true
-      nullable: true
-      accepted:
-        regex: '^XXXX-XXXX-XXXX-\d{4}$'
-      example: "XXXX-XXXX-XXXX-4821"
-      sensitivity:
-        classification: HIGHLY_CONFIDENTIAL
-        is_pii: true
-        pii_type: FINANCIAL_IDENTIFIER
-        handling: PRESERVE_MASKED_VALUE_ONLY
-      quality_rules:
-        - rule_id: CCD_CARD_NUMBER_MASK_PATTERN
-          type: REGEX_IF_PRESENT
-          parameters:
-            regex: '^XXXX-XXXX-XXXX-\d{4}$'
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            cardNumber must contain three masked groups followed by the final
-            four digits.
-
-        - rule_id: CCD_CARD_NUMBER_ALREADY_MASKED
-          type: SENSITIVE_VALUE_MASKED
-          parameters:
-            allowed_pattern: '^XXXX-XXXX-XXXX-\d{4}$'
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            cardNumber must never contain an unmasked credit card number.
-
-    - name: cardType
-      data_type: string
-      logical_type: card_network
-      required: true
-      nullable: false
-      accepted:
-        values:
-          - VISA
-          - MASTERCARD
-          - AMEX
-      example: "VISA"
-      sensitivity:
-        classification: INTERNAL
-        is_pii: false
-        handling: NONE
-      quality_rules:
-        - rule_id: CCD_CARD_TYPE_ENUM
-          type: ACCEPTED_VALUES
-          parameters:
-            values:
-              - VISA
-              - MASTERCARD
-              - AMEX
-          severity: ERROR
-          action: QUARANTINE
-          description: "cardType must be one of the supported card networks."
-
-    - name: creditLimit
-      data_type: string
-      logical_type: decimal_amount
-      required: true
-      nullable: true
-      accepted:
-        currency: AUD
-        min_exclusive: 0
-      example: "7500.00"
-      sensitivity:
-        classification: HIGHLY_CONFIDENTIAL
-        is_pii: true
-        pii_type: FINANCIAL_INFORMATION
-        handling: RANGE_BUCKET_OR_REDACT
-      quality_rules:
-        - rule_id: CCD_CREDIT_LIMIT_DECIMAL
-          type: PARSEABLE_DECIMAL_IF_PRESENT
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            creditLimit must be parseable as a decimal amount when supplied.
-
-        - rule_id: CCD_CREDIT_LIMIT_POSITIVE
-          type: RANGE_IF_PRESENT
-          parameters:
-            min_exclusive: 0
-          severity: ERROR
-          action: QUARANTINE
-          description: "creditLimit must be greater than zero when supplied."
-
-    - name: currentBalance
-      data_type: string
-      logical_type: decimal_amount
-      required: true
-      nullable: true
-      accepted:
-        currency: AUD
-        min: 0
-      example: "2140.50"
-      sensitivity:
-        classification: HIGHLY_CONFIDENTIAL
-        is_pii: true
-        pii_type: FINANCIAL_INFORMATION
-        handling: RANGE_BUCKET_OR_REDACT
-      quality_rules:
-        - rule_id: CCD_CURRENT_BALANCE_DECIMAL
-          type: PARSEABLE_DECIMAL_IF_PRESENT
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            currentBalance must be parseable as a decimal amount when supplied.
-
-        - rule_id: CCD_CURRENT_BALANCE_NON_NEGATIVE
-          type: RANGE_IF_PRESENT
-          parameters:
-            min: 0
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            currentBalance must not be negative in the current mock-data model.
-
-    - name: minPayment
-      data_type: string
-      logical_type: decimal_amount
-      required: true
-      nullable: true
-      accepted:
-        currency: AUD
-        min: 0
-      example: "42.81"
-      sensitivity:
-        classification: HIGHLY_CONFIDENTIAL
-        is_pii: true
-        pii_type: FINANCIAL_INFORMATION
-        handling: RANGE_BUCKET_OR_REDACT
-      quality_rules:
-        - rule_id: CCD_MIN_PAYMENT_DECIMAL
-          type: PARSEABLE_DECIMAL_IF_PRESENT
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            minPayment must be parseable as a decimal amount when supplied.
-
-        - rule_id: CCD_MIN_PAYMENT_NON_NEGATIVE
-          type: RANGE_IF_PRESENT
-          parameters:
-            min: 0
-          severity: ERROR
-          action: QUARANTINE
-          description: "minPayment must not be negative when supplied."
-
-    - name: interestRate
-      data_type: string
-      logical_type: percentage
-      required: true
-      nullable: true
-      accepted:
-        min: 10.0
-      example: "19.75"
-      sensitivity:
-        classification: CONFIDENTIAL
-        is_pii: false
-        handling: RESTRICT_ACCESS
-      quality_rules:
-        - rule_id: CCD_INTEREST_RATE_DECIMAL
-          type: PARSEABLE_DECIMAL_IF_PRESENT
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            interestRate must be parseable as a decimal percentage when supplied.
-
-        - rule_id: CCD_INTEREST_RATE_MINIMUM
-          type: RANGE_IF_PRESENT
-          parameters:
-            min: 10.0
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            interestRate must be at least 10.0 percent in the current source model.
-
-    - name: annualFee
-      data_type: string
-      logical_type: decimal_amount
-      required: true
-      nullable: false
-      accepted:
-        currency: AUD
-        values:
-          - "0"
-          - "59"
-          - "99"
-          - "149"
-          - "299"
-      example: "99"
-      sensitivity:
-        classification: CONFIDENTIAL
-        is_pii: false
-        handling: RESTRICT_ACCESS
-      quality_rules:
-        - rule_id: CCD_ANNUAL_FEE_ENUM
-          type: ACCEPTED_VALUES
-          parameters:
-            values:
-              - "0"
-              - "59"
-              - "99"
-              - "149"
-              - "299"
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            annualFee must be one of the supported source fee values.
-
-    - name: rewardProgram
-      data_type: string
-      logical_type: reward_program
-      required: true
-      nullable: false
-      accepted:
-        values:
-          - NONE
-          - POINTS
-          - CASHBACK
-          - TRAVEL
-      example: "POINTS"
-      sensitivity:
-        classification: CONFIDENTIAL
-        is_pii: false
-        handling: RESTRICT_ACCESS
-      quality_rules:
-        - rule_id: CCD_REWARD_PROGRAM_ENUM
-          type: ACCEPTED_VALUES
-          parameters:
-            values:
-              - NONE
-              - POINTS
-              - CASHBACK
-              - TRAVEL
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            rewardProgram must be one of the supported source values.
-
-    - name: status
-      data_type: string
-      logical_type: credit_card_status
-      required: true
-      nullable: false
-      accepted:
-        values:
-          - ACTIVE
-          - SUSPENDED
-          - CLOSED
-      example: "ACTIVE"
-      sensitivity:
-        classification: CONFIDENTIAL
-        is_pii: false
-        handling: RESTRICT_ACCESS
-      quality_rules:
-        - rule_id: CCD_STATUS_ENUM
-          type: ACCEPTED_VALUES
-          parameters:
-            values:
-              - ACTIVE
-              - SUSPENDED
-              - CLOSED
-          severity: ERROR
-          action: QUARANTINE
-          description: "status must be one of the supported source values."
-
-    - name: issuedDate
-      data_type: string
-      logical_type: date
-      required: true
-      nullable: true
-      accepted:
-        format: ISO_8601_DATE
-      example: "2023-09-18"
-      sensitivity:
-        classification: CONFIDENTIAL
-        is_pii: false
-        handling: RESTRICT_ACCESS
-      quality_rules:
-        - rule_id: CCD_ISSUED_DATE_PARSEABLE
-          type: PARSEABLE_DATE_IF_PRESENT
-          severity: ERROR
-          action: QUARANTINE
-          description: "issuedDate must be parseable as a date when supplied."
-
-    - name: organisationId
-      data_type: string
-      logical_type: organisation_identifier
-      required: true
-      nullable: true
-      accepted:
-        regex: '^ORG-\d{5}$'
-      example: "ORG-00042"
-      sensitivity:
-        classification: INTERNAL
-        is_pii: false
-        handling: NONE
-      quality_rules:
-        - rule_id: CCD_ORGANISATION_ID_PATTERN
-          type: REGEX_IF_PRESENT
-          parameters:
-            regex: '^ORG-\d{5}$'
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            organisationId must follow the ORG-00000 pattern when supplied.
-
-        - rule_id: CCD_ORGANISATION_ID_FK
-          type: FOREIGN_KEY_IF_PRESENT
-          parameters:
-            reference_dataset: organisations
-            reference_column: organisationId
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            organisationId must exist in organisations.organisationId when supplied.
-
-# -----------------------------------------------------------------------------
-# 6. Dataset-level quality rules
-# -----------------------------------------------------------------------------
-dataset_quality_rules:
-
-  - rule_id: CCD_ID_UNIQUE
-    type: UNIQUE
-    columns:
+- name: credit_cards
+  logicalType: object
+  physicalType: table
+  physicalName: public.credit_cards
+  relationships:
+  - type: foreignKey
+    from:
+    - credit_cards.global_id
+    to:
+    - customers.global_id
+    customProperties:
+    - property: g3:nullable
+      value: true
+  - type: foreignKey
+    from:
+    - credit_cards.organisationId
+    to:
+    - organisations.organisationId
+    customProperties:
+    - property: g3:nullable
+      value: true
+  quality:
+  - id: CCD_ID_UNIQUE
+    type: library
+    metric: duplicateValues
+    mustBe: 0
+    severity: error
+    dimension: uniqueness
+    description: creditCardId must be unique across the dataset.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+    - property: g3:columns
+      value:
       - creditCardId
-    severity: ERROR
-    action: QUARANTINE
-    description: "creditCardId must be unique across the dataset."
-
-  - rule_id: CCD_CUSTOMER_LINK_PRESENT
-    type: NOT_NULL
-    columns:
+  - id: CCD_CUSTOMER_LINK_PRESENT
+    type: library
+    metric: nullValues
+    mustBe: 0
+    severity: warning
+    dimension: completeness
+    description: |
+      A credit card arrangement should identify its customer. The physical schema currently permits global_id to be null.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+    - property: g3:columns
+      value:
       - global_id
-    severity: WARNING
-    action: ALLOW_WITH_WARNING
-    description: >
-      A credit card arrangement should identify its customer. The physical
-      schema currently permits global_id to be null.
-
-  - rule_id: CCD_CURRENT_BALANCE_NOT_ABOVE_LIMIT
-    type: NUMERIC_COLUMN_COMPARISON
-    parameters:
-      left_column: currentBalance
-      operator: LESS_THAN_OR_EQUAL
-      right_column: creditLimit
-      parse_as: DECIMAL
-      ignore_nulls: true
-    severity: ERROR
-    action: QUARANTINE
-    description: >
+  - id: CCD_CURRENT_BALANCE_NOT_ABOVE_LIMIT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: NUMERIC_COLUMN_COMPARISON
+      parameters:
+        left_column: currentBalance
+        operator: LESS_THAN_OR_EQUAL
+        right_column: creditLimit
+        parse_as: DECIMAL
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
       currentBalance cannot exceed creditLimit in the current utilisation model.
-
-  - rule_id: CCD_MIN_PAYMENT_FORMULA
-    type: NUMERIC_FORMULA_MATCH
-    parameters:
-      target_column: minPayment
-      formula: "MAX(25, currentBalance * 0.02)"
-      parse_as: DECIMAL
-      tolerance: 0.01
-      ignore_nulls: true
-    severity: ERROR
-    action: QUARANTINE
-    description: >
-      minPayment must equal the greater of AUD 25 and two percent of
-      currentBalance.
-
-  - rule_id: CCD_MIN_PAYMENT_NOT_ABOVE_BALANCE
-    type: NUMERIC_COLUMN_COMPARISON
-    parameters:
-      left_column: minPayment
-      operator: LESS_THAN_OR_EQUAL
-      right_column: currentBalance
-      parse_as: DECIMAL
-      ignore_nulls: true
-    severity: WARNING
-    action: ALLOW_WITH_WARNING
-    description: >
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: CCD_MIN_PAYMENT_FORMULA
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: NUMERIC_FORMULA_MATCH
+      parameters:
+        target_column: minPayment
+        formula: MAX(25, currentBalance * 0.02)
+        parse_as: DECIMAL
+        tolerance: 0.01
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      minPayment must equal the greater of AUD 25 and two percent of currentBalance.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: CCD_MIN_PAYMENT_NOT_ABOVE_BALANCE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: NUMERIC_COLUMN_COMPARISON
+      parameters:
+        left_column: minPayment
+        operator: LESS_THAN_OR_EQUAL
+        right_column: currentBalance
+        parse_as: DECIMAL
+        ignore_nulls: true
+    severity: warning
+    dimension: consistency
+    description: |
       minPayment should not exceed currentBalance.
-
-  - rule_id: CCD_ISSUED_DATE_NOT_IN_FUTURE
-    type: DATE_NOT_IN_FUTURE
-    columns:
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: CCD_ISSUED_DATE_NOT_IN_FUTURE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: DATE_NOT_IN_FUTURE
+      columns:
       - issuedDate
-    severity: ERROR
-    action: QUARANTINE
-    description: >
+    severity: error
+    dimension: timeliness
+    description: |
       issuedDate cannot be later than the pipeline processing date.
-
-  - rule_id: CCD_ORGANISATION_CUSTOMER_CONTEXT
-    type: REFERENCE_RELATIONSHIP_EXISTS_IF_PRESENT
-    parameters:
-      when_column: organisationId
-      relationship_dataset: organisation_party_relationships
-      source_mapping:
-        global_id: global_id
-        organisationId: organisationId
-      required_relationship_status:
-        column: isActive
-        equals: true
-    severity: WARNING
-    action: ALLOW_WITH_WARNING
-    description: >
-      When organisationId is populated, the customer should normally have an
-      active relationship with that organisation.
-
-  - rule_id: CCD_CARD_NUMBER_MASKING_CHECK
-    type: SENSITIVE_COLUMN_PATTERN
-    columns:
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: CCD_ORGANISATION_CUSTOMER_CONTEXT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: REFERENCE_RELATIONSHIP_EXISTS_IF_PRESENT
+      parameters:
+        when_column: organisationId
+        relationship_dataset: organisation_party_relationships
+        source_mapping:
+          global_id: global_id
+          organisationId: organisationId
+        required_relationship_status:
+          column: isActive
+          equals: true
+    severity: warning
+    dimension: consistency
+    description: |
+      When organisationId is populated, the customer should normally have an active relationship with that organisation.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: CCD_CARD_NUMBER_MASKING_CHECK
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: SENSITIVE_COLUMN_PATTERN
+      parameters:
+        allowed_regex: ^XXXX-XXXX-XXXX-\d{4}$
+        reject_unmasked_digit_sequences: true
+      columns:
       - cardNumber
-    parameters:
-      allowed_regex: '^XXXX-XXXX-XXXX-\d{4}$'
-      reject_unmasked_digit_sequences: true
-    severity: ERROR
-    action: QUARANTINE
-    description: >
-      The source card number must remain masked and must not expose the full
-      card number.
-
-  - rule_id: CCD_REQUIRED_FINANCIAL_VALUES_PRESENT
-    type: ALL_NOT_NULL
-    columns:
+    severity: error
+    dimension: consistency
+    description: |
+      The source card number must remain masked and must not expose the full card number.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: CCD_REQUIRED_FINANCIAL_VALUES_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: ALL_NOT_NULL
+      columns:
       - creditLimit
       - currentBalance
       - minPayment
       - interestRate
-    severity: WARNING
-    action: ALLOW_WITH_WARNING
-    description: >
-      A credit card arrangement should contain the main utilisation and pricing
-      values. The physical schema currently permits these fields to be null.
-
-# -----------------------------------------------------------------------------
-# 7. Notes for the team
-# -----------------------------------------------------------------------------
-notes:
-  - >
-    This contract follows the latest master schema and includes all thirteen
-    physical fields defined for credit_cards.
-  - >
-    cardNumber is already masked in the source and must remain masked in all
-    downstream layers. Any unmasked card number is a privacy failure.
-  - >
-    creditLimit, currentBalance, and minPayment must be converted to approved
-    range buckets or removed before AI consumption.
-  - >
-    The Silver layer keeps card type, status, reward program, issued date,
-    masked card number, masked credit limit, and derived business-arrangement
-    context.
-  - >
-    organisationId is populated for approximately thirty-five percent of
-    records and identifies business credit card arrangements.
+    severity: warning
+    dimension: completeness
+    description: |
+      A credit card arrangement should contain the main utilisation and pricing values. The physical schema currently permits these fields to be null.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  properties:
+  - name: global_id
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - 65df84b8-4274-4dbd-9667-6c9967ae6538
+    quality:
+    - id: CCD_GLOBAL_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: global_id must be a valid UUID when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: CCD_GLOBAL_ID_CUSTOMER_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: customers
+          reference_column: global_id
+      severity: error
+      dimension: consistency
+      description: |
+        global_id must exist in customers.global_id when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: person_identifier
+  - name: creditCardId
+    logicalType: string
+    physicalType: string
+    required: true
+    primaryKey: true
+    primaryKeyPosition: 1
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - 123eb870-24fe-4bb9-b9ab-6cb4c52f2c35
+    quality:
+    - id: CCD_ID_NOT_NULL
+      type: library
+      metric: nullValues
+      mustBe: 0
+      severity: error
+      dimension: completeness
+      description: creditCardId must always be present.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: CCD_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: creditCardId must be a valid UUID.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: credit_card_identifier
+  - name: cardNumber
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    logicalTypeOptions:
+      pattern: ^XXXX-XXXX-XXXX-\d{4}$
+    examples:
+    - XXXX-XXXX-XXXX-4821
+    quality:
+    - id: CCD_CARD_NUMBER_MASK_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^XXXX-XXXX-XXXX-\d{4}$
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        cardNumber must contain three masked groups followed by the final four digits.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: CCD_CARD_NUMBER_ALREADY_MASKED
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: SENSITIVE_VALUE_MASKED
+        parameters:
+          allowed_pattern: ^XXXX-XXXX-XXXX-\d{4}$
+      severity: error
+      dimension: conformity
+      description: |
+        cardNumber must never contain an unmasked credit card number.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_IDENTIFIER
+        handling: PRESERVE_MASKED_VALUE_ONLY
+    - property: g3:domainType
+      value: masked_credit_card_number
+  - name: cardType
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: INTERNAL
+    examples:
+    - VISA
+    quality:
+    - id: CCD_CARD_TYPE_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - VISA
+        - MASTERCARD
+        - AMEX
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: cardType must be one of the supported card networks.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: card_network
+    - property: g3:accepted
+      value:
+        values:
+        - VISA
+        - MASTERCARD
+        - AMEX
+  - name: creditLimit
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    examples:
+    - '7500.00'
+    quality:
+    - id: CCD_CREDIT_LIMIT_DECIMAL
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DECIMAL_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        creditLimit must be parseable as a decimal amount when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: CCD_CREDIT_LIMIT_POSITIVE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: RANGE_IF_PRESENT
+        parameters:
+          min_exclusive: 0
+      severity: error
+      dimension: conformity
+      description: creditLimit must be greater than zero when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+    - property: g3:domainType
+      value: decimal_amount
+    - property: g3:accepted
+      value:
+        currency: AUD
+        min_exclusive: 0
+  - name: currentBalance
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    logicalTypeOptions:
+      minimum: 0
+    examples:
+    - '2140.50'
+    quality:
+    - id: CCD_CURRENT_BALANCE_DECIMAL
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DECIMAL_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        currentBalance must be parseable as a decimal amount when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: CCD_CURRENT_BALANCE_NON_NEGATIVE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: RANGE_IF_PRESENT
+        parameters:
+          min: 0
+      severity: error
+      dimension: conformity
+      description: |
+        currentBalance must not be negative in the current mock-data model.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+    - property: g3:domainType
+      value: decimal_amount
+    - property: g3:accepted
+      value:
+        currency: AUD
+  - name: minPayment
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    logicalTypeOptions:
+      minimum: 0
+    examples:
+    - '42.81'
+    quality:
+    - id: CCD_MIN_PAYMENT_DECIMAL
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DECIMAL_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        minPayment must be parseable as a decimal amount when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: CCD_MIN_PAYMENT_NON_NEGATIVE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: RANGE_IF_PRESENT
+        parameters:
+          min: 0
+      severity: error
+      dimension: conformity
+      description: minPayment must not be negative when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: FINANCIAL_INFORMATION
+        handling: RANGE_BUCKET_OR_REDACT
+    - property: g3:domainType
+      value: decimal_amount
+    - property: g3:accepted
+      value:
+        currency: AUD
+  - name: interestRate
+    logicalType: string
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      minimum: 10.0
+    examples:
+    - '19.75'
+    quality:
+    - id: CCD_INTEREST_RATE_DECIMAL
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DECIMAL_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        interestRate must be parseable as a decimal percentage when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: CCD_INTEREST_RATE_MINIMUM
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: RANGE_IF_PRESENT
+        parameters:
+          min: 10.0
+      severity: error
+      dimension: conformity
+      description: |
+        interestRate must be at least 10.0 percent in the current source model.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: percentage
+  - name: annualFee
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: CONFIDENTIAL
+    examples:
+    - '99'
+    quality:
+    - id: CCD_ANNUAL_FEE_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - '0'
+        - '59'
+        - '99'
+        - '149'
+        - '299'
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        annualFee must be one of the supported source fee values.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: decimal_amount
+    - property: g3:accepted
+      value:
+        currency: AUD
+        values:
+        - '0'
+        - '59'
+        - '99'
+        - '149'
+        - '299'
+  - name: rewardProgram
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: CONFIDENTIAL
+    examples:
+    - POINTS
+    quality:
+    - id: CCD_REWARD_PROGRAM_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - NONE
+        - POINTS
+        - CASHBACK
+        - TRAVEL
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        rewardProgram must be one of the supported source values.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: reward_program
+    - property: g3:accepted
+      value:
+        values:
+        - NONE
+        - POINTS
+        - CASHBACK
+        - TRAVEL
+  - name: status
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: CONFIDENTIAL
+    examples:
+    - ACTIVE
+    quality:
+    - id: CCD_STATUS_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - ACTIVE
+        - SUSPENDED
+        - CLOSED
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: status must be one of the supported source values.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: credit_card_status
+    - property: g3:accepted
+      value:
+        values:
+        - ACTIVE
+        - SUSPENDED
+        - CLOSED
+  - name: issuedDate
+    logicalType: date
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      format: ISO_8601_DATE
+    examples:
+    - '2023-09-18'
+    quality:
+    - id: CCD_ISSUED_DATE_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DATE_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: issuedDate must be parseable as a date when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: date
+  - name: organisationId
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      pattern: ^ORG-\d{5}$
+    examples:
+    - ORG-00042
+    quality:
+    - id: CCD_ORGANISATION_ID_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^ORG-\d{5}$
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        organisationId must follow the ORG-00000 pattern when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: CCD_ORGANISATION_ID_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: organisations
+          reference_column: organisationId
+      severity: error
+      dimension: consistency
+      description: |
+        organisationId must exist in organisations.organisationId when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: organisation_identifier
+customProperties:
+- property: g3:source
+  value:
+    category: DATABASE
+    system_type: POSTGRESQL
+    source_object: public.credit_cards
+    authoritative: true
+- property: g3:ingestion
+  value:
+    mechanism: DEBEZIUM_CDC
+    transport: APACHE_KAFKA
+    landing:
+      format: JSONL
+      path_template: s3://<bucket>/bronze/landing/cdc/credit_cards/
+      immutable: true
+    bronze_target: bronze.cdc_changes
+    cdc:
+      supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+      ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+- property: g3:lifecycle
+  value:
+    owner: TBD
+    approver: TBD
+    effective_from: null
+- property: g3:dataset
+  value:
+    expected_rows_scale_1: 1200
+    physical_schema_ref: dev-tools/datagen/output/master-schema.json#/credit_cards
+- property: g3:notes
+  value:
+  - |
+    This contract follows the latest master schema and includes all thirteen physical fields defined for credit_cards.
+  - |
+    cardNumber is already masked in the source and must remain masked in all downstream layers. Any unmasked card number is a privacy failure.
+  - |
+    creditLimit, currentBalance, and minPayment must be converted to approved range buckets or removed before AI consumption.
+  - |
+    The Silver layer keeps card type, status, reward program, issued date, masked card number, masked credit limit, and derived business-arrangement context.
+  - organisationId is populated for approximately thirty-five percent of records and identifies business credit card arrangements.

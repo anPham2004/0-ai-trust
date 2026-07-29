@@ -1,75 +1,816 @@
-# =============================================================================
-# DATA CONTRACT: application_stage_history
-# =============================================================================
-# Purpose:
-# - Stores the append-only stage timeline for loan applications.
-# - Records when an application entered and exited each stage, the responsible
-#   team and staff member, the stage SLA deadline, and the pending action party.
-#
-# Important event behaviour:
-# - Each row is a historical business event and must remain append-only.
-# - Transport duplicates may be removed, but valid historical stage events must
-#   never be overwritten by a later event.
-# - applicationId links the event to loan_applications.
-#
-# Quick guide:
-# - required: the event payload field must exist.
-# - nullable: the physical payload value may be null.
-# - ERROR + QUARANTINE: exclude the event from trusted outputs.
-# - WARNING + ALLOW_WITH_WARNING: retain the event and report the issue.
-# =============================================================================
-
-contract_version: "1.0.0"
-contract_id: "source.event.application_stage_history"
-
-# -----------------------------------------------------------------------------
-# 1. Basic dataset information
-# -----------------------------------------------------------------------------
-dataset:
-  name: application_stage_history
-  domain: LENDING_ORIGINATION
-  description: >
-    Append-only application lifecycle events. Each record represents one stage
-    occurrence for a loan application and includes stage timing, ownership,
-    SLA, and pending-action responsibility.
-  expected_rows_scale_1: 2500
-  physical_schema_ref: "dev-tools/datagen/output/master-schema.json#/application_stage_history"
-
-# -----------------------------------------------------------------------------
-# 2. Ownership and contract lifecycle
-# -----------------------------------------------------------------------------
-lifecycle:
-  # DRAFT -> IN_REVIEW -> APPROVED -> DEPRECATED / RETIRED
-  status: DRAFT
-  owner: TBD
-  approver: TBD
-  effective_from: null
-
-# -----------------------------------------------------------------------------
-# 3. Event source and ingestion information
-# -----------------------------------------------------------------------------
-source:
-  category: EVENT
-  system_type: BUSINESS_EVENT_STREAM
-  event_name: application_stage_history
-  topic_name: TBD
-  authoritative: true
-  append_only: true
-
-ingestion:
-  mechanism: KAFKA_EVENT
-  transport: APACHE_KAFKA
-
-  landing:
-    format: JSONL
-    path_template: "s3://<bucket>/bronze/landing/event/application_stage_history/"
-    immutable: true
-
-  bronze_target: "bronze.kafka_events"
-  deduplicated_bronze_target: "bronze.kafka_events_deduplicated"
-
-  event_envelope:
-    retained_metadata:
+kind: DataContract
+apiVersion: v3.1.0
+id: source.event.application_stage_history
+version: 1.0.0
+name: application_stage_history
+status: draft
+domain: LENDING_ORIGINATION
+description:
+  purpose: |
+    Append-only application lifecycle events. Each record represents one stage occurrence for a loan application and includes stage timing, ownership, SLA, and pending-action responsibility.
+servers:
+- server: source-kafka
+  type: kafka
+  description: Kafka event stream for application_stage_history
+  environment: prod
+schema:
+- name: application_stage_history
+  logicalType: object
+  physicalType: table
+  physicalName: application_stage_history
+  relationships:
+  - type: foreignKey
+    from:
+    - application_stage_history.global_id
+    to:
+    - customers.global_id
+    customProperties:
+    - property: g3:nullable
+      value: true
+  - type: foreignKey
+    from:
+    - application_stage_history.applicationId
+    to:
+    - loan_applications.applicationId
+    customProperties:
+    - property: g3:nullable
+      value: true
+  quality:
+  - id: ASH_HISTORY_ID_UNIQUE
+    type: library
+    metric: duplicateValues
+    mustBe: 0
+    severity: error
+    dimension: uniqueness
+    description: |
+      historyId must uniquely identify a stage event. Repeated historyId values are treated as transport duplicates rather than new lifecycle events.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+    - property: g3:columns
+      value:
+      - historyId
+  - id: ASH_APPLICATION_LINK_PRESENT
+    type: library
+    metric: nullValues
+    mustBe: 0
+    severity: warning
+    dimension: completeness
+    description: |
+      A stage-history event should identify its loan application. The physical schema currently permits applicationId to be null.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+    - property: g3:columns
+      value:
+      - applicationId
+  - id: ASH_CUSTOMER_LINK_PRESENT
+    type: library
+    metric: nullValues
+    mustBe: 0
+    severity: warning
+    dimension: completeness
+    description: |
+      A stage-history event should identify its customer. The physical schema currently permits global_id to be null.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+    - property: g3:columns
+      value:
+      - global_id
+  - id: ASH_APPLICATION_CUSTOMER_CONSISTENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: REFERENCE_PAIR_CONSISTENT
+      parameters:
+        reference_dataset: loan_applications
+        source_columns:
+        - applicationId
+        - global_id
+        reference_columns:
+        - applicationId
+        - global_id
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      applicationId and global_id must refer to the same loan application.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: ASH_CORE_EVENT_FIELDS_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: ALL_NOT_NULL
+      columns:
+      - stage
+      - enteredAt
+      - assignedTeam
+      - assignedTo
+      - slaDeadline
+    severity: warning
+    dimension: completeness
+    description: |
+      A usable stage-history event should contain its stage, timing, ownership, and SLA fields. The physical schema currently permits null values.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: ASH_ENTERED_NOT_BEFORE_APPLICATION_SUBMISSION
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: REFERENCE_TIMESTAMP_COMPARISON
+      parameters:
+        reference_dataset: loan_applications
+        source_key:
+          applicationId: applicationId
+        source_timestamp_column: enteredAt
+        operator: GREATER_THAN_OR_EQUAL
+        reference_timestamp_column: submittedAt
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      enteredAt cannot be earlier than the application's submittedAt timestamp.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: ASH_EXIT_NOT_BEFORE_ENTRY
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: TIMESTAMP_COLUMN_COMPARISON
+      parameters:
+        left_column: exitedAt
+        operator: GREATER_THAN_OR_EQUAL
+        right_column: enteredAt
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: exitedAt cannot be earlier than enteredAt.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: ASH_SLA_AFTER_ENTRY
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: TIMESTAMP_COLUMN_COMPARISON
+      parameters:
+        left_column: slaDeadline
+        operator: GREATER_THAN
+        right_column: enteredAt
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: slaDeadline must be later than enteredAt.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: ASH_DOCUMENTED_SLA_FORMULA
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_TIMESTAMP_OFFSET_MATCH
+      parameters:
+        start_column: enteredAt
+        target_column: slaDeadline
+        selector_column: stage
+        offset_days:
+          Submitted: 2
+          Document_Verification: 7
+          Assessment: 5
+          Credit_Check: 3
+          Approved: 1
+          Denied: 1
+          Withdrawn: 1
+          Cancelled: 1
+        excluded_selector_values:
+        - Conditionally_Approved
+        tolerance_seconds: 1
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      slaDeadline must match the documented stage-specific SLA. The source does not state the exact SLA for Conditionally_Approved, so that stage is excluded until the generator configuration is reviewed.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: ASH_EXIT_MATCHES_SLA_WHEN_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: TIMESTAMP_EQUALITY
+      columns:
+      - exitedAt
+      - slaDeadline
+    severity: error
+    dimension: consistency
+    description: |
+      When exitedAt is populated, it must equal slaDeadline in the current source generator model.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: ASH_MAX_ONE_CURRENT_STAGE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_UNIQUE_PER_GROUP
+      parameters:
+        group_columns:
+        - applicationId
+        condition:
+          column: exitedAt
+          operator: IS_NULL
+        comparison_scope: COMPLETE_SNAPSHOT
+        ignore_null_group: true
+    severity: error
+    dimension: consistency
+    description: |
+      An application may have at most one current stage with exitedAt equal to null.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: ASH_STAGE_EVENT_ORDER
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: NON_OVERLAPPING_INTERVALS_PER_GROUP
+      parameters:
+        group_columns:
+        - applicationId
+        start_column: enteredAt
+        end_column: exitedAt
+        order_by:
+        - enteredAt
+        - historyId
+        allow_touching_boundaries: true
+        comparison_scope: COMPLETE_SNAPSHOT
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      Stage intervals for the same application must follow chronological order without overlapping.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: ASH_ALLOWED_STAGE_TRANSITIONS
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: ORDERED_TRANSITION_GRAPH
+      parameters:
+        group_column: applicationId
+        value_column: stage
+        timestamp_column: enteredAt
+        allowed_transitions:
+          Submitted:
+          - Document_Verification
+          Document_Verification:
+          - Assessment
+          Assessment:
+          - Credit_Check
+          - Conditionally_Approved
+          - Withdrawn
+          - Cancelled
+          Credit_Check:
+          - Approved
+          - Denied
+          Conditionally_Approved:
+          - Document_Verification
+          Approved: []
+          Denied: []
+          Withdrawn: []
+          Cancelled: []
+        comparison_scope: COMPLETE_SNAPSHOT
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      Stage events must follow one of the documented lifecycle transitions.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: ASH_EARLY_STAGE_PENDING_PARTY
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_ACCEPTED_VALUES
+      parameters:
+        source_column: stage
+        mappings:
+          Submitted:
+          - CUSTOMER
+          - ORGANISATION
+          - AUTHORISED_REPRESENTATIVE
+          - DIRECTOR
+          - GUARANTOR
+          - THIRD_PARTY
+          Document_Verification:
+          - CUSTOMER
+          - ORGANISATION
+          - AUTHORISED_REPRESENTATIVE
+          - DIRECTOR
+          - GUARANTOR
+          - THIRD_PARTY
+        target_column: pendingActionParty
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      Submitted and Document_Verification stages must use a documented customer, organisation, representative, guarantor, or third-party action party.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: ASH_ASSESSMENT_STAGE_PENDING_PARTY
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_ACCEPTED_VALUES
+      parameters:
+        source_column: stage
+        mappings:
+          Assessment:
+          - INTERNAL_TEAM
+          - THIRD_PARTY
+          - CUSTOMER
+          Credit_Check:
+          - INTERNAL_TEAM
+          - THIRD_PARTY
+          - CUSTOMER
+        target_column: pendingActionParty
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      Assessment and Credit_Check stages must use the documented internal-team, third-party, or customer action parties.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: ASH_TERMINAL_STAGE_PENDING_PARTY_NULL
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_NULL_FOR_VALUES
+      parameters:
+        source_column: stage
+        source_values:
+        - Approved
+        - Denied
+        - Withdrawn
+        - Cancelled
+        target_column: pendingActionParty
+    severity: error
+    dimension: consistency
+    description: |
+      pendingActionParty must be null at terminal stages.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: ASH_PARENT_OUTCOME_ALIGNMENT_REVIEW
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: DOCUMENTED_CROSS_SOURCE_ALIGNMENT
+      parameters:
+        parent_dataset: loan_applications
+        parent_column: finalOutcome
+        stage_sequence_source_outcomes:
+        - Accepted
+        - Denied
+        - Conditionally Approved
+        - Withdrawn
+        - Cancelled
+        parent_contract_outcomes:
+        - Accepted
+        - Denied
+        - Cancelled
+        - Incomplete
+        - Pending
+        status: TBD_CROSS_SOURCE_ALIGNMENT
+    severity: warning
+    dimension: consistency
+    description: |
+      The source documentation uses Conditionally Approved and Withdrawn for stage-sequence outcomes, while loan_applications uses Incomplete and Pending instead. The team must resolve this documented mismatch before enforcing a final-outcome-to-stage-sequence rule.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  properties:
+  - name: historyId
+    logicalType: string
+    physicalType: string
+    required: true
+    primaryKey: true
+    primaryKeyPosition: 1
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - c7021808-c668-4c45-8310-c2f826d88aa9
+    quality:
+    - id: ASH_HISTORY_ID_NOT_NULL
+      type: library
+      metric: nullValues
+      mustBe: 0
+      severity: error
+      dimension: completeness
+      description: historyId must always be present.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: ASH_HISTORY_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: historyId must be a valid UUID.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: application_stage_event_identifier
+  - name: global_id
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - 65df84b8-4274-4dbd-9667-6c9967ae6538
+    quality:
+    - id: ASH_GLOBAL_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: global_id must be a valid UUID when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: ASH_GLOBAL_ID_CUSTOMER_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: customers
+          reference_column: global_id
+      severity: error
+      dimension: consistency
+      description: |
+        global_id must exist in customers.global_id when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: person_identifier
+  - name: applicationId
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      pattern: ^Application_\d{9}$
+    examples:
+    - Application_000000042
+    quality:
+    - id: ASH_APPLICATION_ID_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^Application_\d{9}$
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        applicationId must follow the Application_000000000 pattern when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: ASH_APPLICATION_ID_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: loan_applications
+          reference_column: applicationId
+      severity: error
+      dimension: consistency
+      description: |
+        applicationId must exist in loan_applications.applicationId when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: loan_application_identifier
+  - name: stage
+    logicalType: string
+    physicalType: string
+    classification: CONFIDENTIAL
+    examples:
+    - Document_Verification
+    quality:
+    - id: ASH_STAGE_ENUM_IF_PRESENT
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - Submitted
+        - Document_Verification
+        - Assessment
+        - Credit_Check
+        - Conditionally_Approved
+        - Approved
+        - Denied
+        - Withdrawn
+        - Cancelled
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: stage must be one of the documented lifecycle stages.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: APPROVED_CONTEXT_ONLY
+    - property: g3:domainType
+      value: application_stage
+    - property: g3:accepted
+      value:
+        values:
+        - Submitted
+        - Document_Verification
+        - Assessment
+        - Credit_Check
+        - Conditionally_Approved
+        - Approved
+        - Denied
+        - Withdrawn
+        - Cancelled
+  - name: enteredAt
+    logicalType: timestamp
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      format: ISO_8601_TIMESTAMP
+    examples:
+    - '2026-02-16T09:00:00Z'
+    quality:
+    - id: ASH_ENTERED_AT_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_TIMESTAMP_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: enteredAt must be parseable as a timestamp.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: APPLICATION_ACTIVITY_METADATA
+        handling: RESTRICT_OR_GENERALISE
+    - property: g3:domainType
+      value: timestamp
+  - name: exitedAt
+    logicalType: timestamp
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      format: ISO_8601_TIMESTAMP
+    examples:
+    - '2026-02-23T09:00:00Z'
+    quality:
+    - id: ASH_EXITED_AT_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_TIMESTAMP_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: exitedAt must be parseable as a timestamp.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: APPLICATION_ACTIVITY_METADATA
+        handling: RESTRICT_OR_GENERALISE
+    - property: g3:domainType
+      value: timestamp
+  - name: assignedTeam
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    examples:
+    - Review
+    quality:
+    - id: ASH_ASSIGNED_TEAM_ENUM_IF_PRESENT
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - Intake
+        - Review
+        - Underwriting
+        - Compliance
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        assignedTeam must be one of the documented source teams.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: BANKER_ONLY
+    - property: g3:domainType
+      value: application_ownership_team
+    - property: g3:accepted
+      value:
+        values:
+        - Intake
+        - Review
+        - Underwriting
+        - Compliance
+        exact_stage_mapping_status: TBD_FROM_GENERATOR_CONFIG
+  - name: assignedTo
+    logicalType: string
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      pattern: ^STAFF-\d{3}$
+    examples:
+    - STAFF-027
+    quality:
+    - id: ASH_ASSIGNED_TO_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^STAFF-\d{3}$
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        assignedTo must follow the STAFF-000 pattern when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: ASH_ASSIGNED_TO_RANGE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: REGEX_NUMERIC_COMPONENT_RANGE_IF_PRESENT
+        parameters:
+          regex: ^STAFF-(\d{3})$
+          capture_group: 1
+          min: 1
+          max: 60
+      severity: error
+      dimension: conformity
+      description: |
+        assignedTo must identify a source staff number from 001 through 060.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: true
+        pii_type: EMPLOYEE_IDENTIFIER
+        handling: REDACT_FROM_CUSTOMER_AI
+    - property: g3:domainType
+      value: internal_staff_identifier
+    - property: g3:accepted
+      value:
+        numeric_suffix_min: 1
+        numeric_suffix_max: 60
+  - name: slaDeadline
+    logicalType: timestamp
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: ISO_8601_TIMESTAMP
+    examples:
+    - '2026-02-23T09:00:00Z'
+    quality:
+    - id: ASH_SLA_DEADLINE_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_TIMESTAMP_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: slaDeadline must be parseable as a timestamp.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: APPROVED_CONTEXT_ONLY
+    - property: g3:domainType
+      value: timestamp
+  - name: pendingActionParty
+    logicalType: string
+    physicalType: string
+    classification: CONFIDENTIAL
+    examples:
+    - CUSTOMER
+    quality:
+    - id: ASH_PENDING_ACTION_PARTY_ENUM_IF_PRESENT
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - CUSTOMER
+        - ORGANISATION
+        - AUTHORISED_REPRESENTATIVE
+        - DIRECTOR
+        - GUARANTOR
+        - THIRD_PARTY
+        - INTERNAL_TEAM
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        pendingActionParty must be one of the documented responsible parties.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: APPROVED_CONTEXT_ONLY
+    - property: g3:domainType
+      value: pending_action_party
+    - property: g3:accepted
+      value:
+        values:
+        - CUSTOMER
+        - ORGANISATION
+        - AUTHORISED_REPRESENTATIVE
+        - DIRECTOR
+        - GUARANTOR
+        - THIRD_PARTY
+        - INTERNAL_TEAM
+customProperties:
+- property: g3:source
+  value:
+    category: EVENT
+    system_type: BUSINESS_EVENT_STREAM
+    authoritative: true
+    event_name: application_stage_history
+    topic_name: TBD
+    append_only: true
+- property: g3:ingestion
+  value:
+    mechanism: KAFKA_EVENT
+    transport: APACHE_KAFKA
+    landing:
+      format: JSONL
+      path_template: s3://<bucket>/bronze/landing/event/application_stage_history/
+      immutable: true
+    bronze_target: bronze.kafka_events
+    deduplicated_bronze_target: bronze.kafka_events_deduplicated
+    event_envelope:
+      retained_metadata:
       - topic
       - key
       - partition
@@ -77,737 +818,111 @@ ingestion:
       - timestamp
       - event_type
       - raw_payload
-
-  append_only_policy:
-    allowed_operations:
+    append_only_policy:
+      allowed_operations:
       - APPEND
-    prohibited_operations:
+      prohibited_operations:
       - UPDATE_EXISTING_EVENT
       - DELETE_HISTORICAL_EVENT
-    description: >
-      Transport-level duplicates may be deduplicated, but valid lifecycle events
-      must remain immutable and append-only.
-
-# -----------------------------------------------------------------------------
-# 4. Keys and relationships
-# -----------------------------------------------------------------------------
-keys:
-  primary_key:
-    - historyId
-
-  event_deduplication_key:
-    - historyId
-
-  foreign_keys:
-    - columns:
-        - global_id
-      reference:
-        dataset: customers
-        columns:
-          - global_id
-      nullable: true
-
-    - columns:
-        - applicationId
-      reference:
-        dataset: loan_applications
-        columns:
-          - applicationId
-      nullable: true
-
-# -----------------------------------------------------------------------------
-# 5. Field-level contract
-# -----------------------------------------------------------------------------
-schema:
-  fields:
-
-    - name: historyId
-      data_type: string
-      logical_type: application_stage_event_identifier
-      required: true
-      nullable: false
-      accepted:
-        format: UUID
-      example: "c7021808-c668-4c45-8310-c2f826d88aa9"
-      sensitivity:
-        classification: INTERNAL
-        is_pii: false
-        handling: NONE
-      quality_rules:
-        - rule_id: ASH_HISTORY_ID_NOT_NULL
-          type: NOT_NULL
-          severity: ERROR
-          action: QUARANTINE
-          description: "historyId must always be present."
-
-        - rule_id: ASH_HISTORY_ID_UUID
-          type: FORMAT
-          parameters:
-            format: UUID
-          severity: ERROR
-          action: QUARANTINE
-          description: "historyId must be a valid UUID."
-
-    - name: global_id
-      data_type: string
-      logical_type: person_identifier
-      required: true
-      nullable: true
-      accepted:
-        format: UUID
-      example: "65df84b8-4274-4dbd-9667-6c9967ae6538"
-      sensitivity:
-        classification: INTERNAL
-        is_pii: false
-        handling: NONE
-      quality_rules:
-        - rule_id: ASH_GLOBAL_ID_UUID
-          type: FORMAT_IF_PRESENT
-          parameters:
-            format: UUID
-          severity: ERROR
-          action: QUARANTINE
-          description: "global_id must be a valid UUID when supplied."
-
-        - rule_id: ASH_GLOBAL_ID_CUSTOMER_FK
-          type: FOREIGN_KEY_IF_PRESENT
-          parameters:
-            reference_dataset: customers
-            reference_column: global_id
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            global_id must exist in customers.global_id when supplied.
-
-    - name: applicationId
-      data_type: string
-      logical_type: loan_application_identifier
-      required: true
-      nullable: true
-      accepted:
-        regex: '^Application_\d{9}$'
-      example: "Application_000000042"
-      sensitivity:
-        classification: INTERNAL
-        is_pii: false
-        handling: NONE
-      quality_rules:
-        - rule_id: ASH_APPLICATION_ID_PATTERN
-          type: REGEX_IF_PRESENT
-          parameters:
-            regex: '^Application_\d{9}$'
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            applicationId must follow the Application_000000000 pattern when supplied.
-
-        - rule_id: ASH_APPLICATION_ID_FK
-          type: FOREIGN_KEY_IF_PRESENT
-          parameters:
-            reference_dataset: loan_applications
-            reference_column: applicationId
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            applicationId must exist in loan_applications.applicationId when supplied.
-
-    - name: stage
-      data_type: string
-      logical_type: application_stage
-      required: true
-      nullable: true
-      accepted:
-        values:
-          - Submitted
-          - Document_Verification
-          - Assessment
-          - Credit_Check
-          - Conditionally_Approved
-          - Approved
-          - Denied
-          - Withdrawn
-          - Cancelled
-      example: "Document_Verification"
-      sensitivity:
-        classification: CONFIDENTIAL
-        is_pii: false
-        handling: APPROVED_CONTEXT_ONLY
-      quality_rules:
-        - rule_id: ASH_STAGE_ENUM_IF_PRESENT
-          type: ACCEPTED_VALUES_IF_PRESENT
-          parameters:
-            values:
-              - Submitted
-              - Document_Verification
-              - Assessment
-              - Credit_Check
-              - Conditionally_Approved
-              - Approved
-              - Denied
-              - Withdrawn
-              - Cancelled
-          severity: ERROR
-          action: QUARANTINE
-          description: "stage must be one of the documented lifecycle stages."
-
-    - name: enteredAt
-      data_type: string
-      logical_type: timestamp
-      required: true
-      nullable: true
-      accepted:
-        format: ISO_8601_TIMESTAMP
-      example: "2026-02-16T09:00:00Z"
-      sensitivity:
-        classification: CONFIDENTIAL
-        is_pii: true
-        pii_type: APPLICATION_ACTIVITY_METADATA
-        handling: RESTRICT_OR_GENERALISE
-      quality_rules:
-        - rule_id: ASH_ENTERED_AT_PARSEABLE
-          type: PARSEABLE_TIMESTAMP_IF_PRESENT
-          severity: ERROR
-          action: QUARANTINE
-          description: "enteredAt must be parseable as a timestamp."
-
-    - name: exitedAt
-      data_type: string
-      logical_type: timestamp
-      required: true
-      nullable: true
-      accepted:
-        format: ISO_8601_TIMESTAMP
-      example: "2026-02-23T09:00:00Z"
-      sensitivity:
-        classification: CONFIDENTIAL
-        is_pii: true
-        pii_type: APPLICATION_ACTIVITY_METADATA
-        handling: RESTRICT_OR_GENERALISE
-      quality_rules:
-        - rule_id: ASH_EXITED_AT_PARSEABLE
-          type: PARSEABLE_TIMESTAMP_IF_PRESENT
-          severity: ERROR
-          action: QUARANTINE
-          description: "exitedAt must be parseable as a timestamp."
-
-    - name: assignedTeam
-      data_type: string
-      logical_type: application_ownership_team
-      required: true
-      nullable: true
-      accepted:
-        values:
-          - Intake
-          - Review
-          - Underwriting
-          - Compliance
-        exact_stage_mapping_status: TBD_FROM_GENERATOR_CONFIG
-      example: "Review"
-      sensitivity:
-        classification: INTERNAL
-        is_pii: false
-        handling: BANKER_ONLY
-      quality_rules:
-        - rule_id: ASH_ASSIGNED_TEAM_ENUM_IF_PRESENT
-          type: ACCEPTED_VALUES_IF_PRESENT
-          parameters:
-            values:
-              - Intake
-              - Review
-              - Underwriting
-              - Compliance
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            assignedTeam must be one of the documented source teams.
-
-    - name: assignedTo
-      data_type: string
-      logical_type: internal_staff_identifier
-      required: true
-      nullable: true
-      accepted:
-        regex: '^STAFF-\d{3}$'
-        numeric_suffix_min: 1
-        numeric_suffix_max: 60
-      example: "STAFF-027"
-      sensitivity:
-        classification: CONFIDENTIAL
-        is_pii: true
-        pii_type: EMPLOYEE_IDENTIFIER
-        handling: REDACT_FROM_CUSTOMER_AI
-      quality_rules:
-        - rule_id: ASH_ASSIGNED_TO_PATTERN
-          type: REGEX_IF_PRESENT
-          parameters:
-            regex: '^STAFF-\d{3}$'
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            assignedTo must follow the STAFF-000 pattern when supplied.
-
-        - rule_id: ASH_ASSIGNED_TO_RANGE
-          type: REGEX_NUMERIC_COMPONENT_RANGE_IF_PRESENT
-          parameters:
-            regex: '^STAFF-(\d{3})$'
-            capture_group: 1
-            min: 1
-            max: 60
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            assignedTo must identify a source staff number from 001 through 060.
-
-    - name: slaDeadline
-      data_type: string
-      logical_type: timestamp
-      required: true
-      nullable: true
-      accepted:
-        format: ISO_8601_TIMESTAMP
-      example: "2026-02-23T09:00:00Z"
-      sensitivity:
-        classification: INTERNAL
-        is_pii: false
-        handling: APPROVED_CONTEXT_ONLY
-      quality_rules:
-        - rule_id: ASH_SLA_DEADLINE_PARSEABLE
-          type: PARSEABLE_TIMESTAMP_IF_PRESENT
-          severity: ERROR
-          action: QUARANTINE
-          description: "slaDeadline must be parseable as a timestamp."
-
-    - name: pendingActionParty
-      data_type: string
-      logical_type: pending_action_party
-      required: true
-      nullable: true
-      accepted:
-        values:
-          - CUSTOMER
-          - ORGANISATION
-          - AUTHORISED_REPRESENTATIVE
-          - DIRECTOR
-          - GUARANTOR
-          - THIRD_PARTY
-          - INTERNAL_TEAM
-      example: "CUSTOMER"
-      sensitivity:
-        classification: CONFIDENTIAL
-        is_pii: false
-        handling: APPROVED_CONTEXT_ONLY
-      quality_rules:
-        - rule_id: ASH_PENDING_ACTION_PARTY_ENUM_IF_PRESENT
-          type: ACCEPTED_VALUES_IF_PRESENT
-          parameters:
-            values:
-              - CUSTOMER
-              - ORGANISATION
-              - AUTHORISED_REPRESENTATIVE
-              - DIRECTOR
-              - GUARANTOR
-              - THIRD_PARTY
-              - INTERNAL_TEAM
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            pendingActionParty must be one of the documented responsible parties.
-
-# -----------------------------------------------------------------------------
-# 6. Dataset-level quality rules
-# -----------------------------------------------------------------------------
-dataset_quality_rules:
-
-  - rule_id: ASH_HISTORY_ID_UNIQUE
-    type: UNIQUE
-    columns:
-      - historyId
-    severity: ERROR
-    action: QUARANTINE
-    description: >
-      historyId must uniquely identify a stage event. Repeated historyId values
-      are treated as transport duplicates rather than new lifecycle events.
-
-  - rule_id: ASH_APPLICATION_LINK_PRESENT
-    type: NOT_NULL
-    columns:
-      - applicationId
-    severity: WARNING
-    action: ALLOW_WITH_WARNING
-    description: >
-      A stage-history event should identify its loan application. The physical
-      schema currently permits applicationId to be null.
-
-  - rule_id: ASH_CUSTOMER_LINK_PRESENT
-    type: NOT_NULL
-    columns:
-      - global_id
-    severity: WARNING
-    action: ALLOW_WITH_WARNING
-    description: >
-      A stage-history event should identify its customer. The physical schema
-      currently permits global_id to be null.
-
-  - rule_id: ASH_APPLICATION_CUSTOMER_CONSISTENT
-    type: REFERENCE_PAIR_CONSISTENT
-    parameters:
-      reference_dataset: loan_applications
-      source_columns:
-        - applicationId
-        - global_id
-      reference_columns:
-        - applicationId
-        - global_id
-      ignore_nulls: true
-    severity: ERROR
-    action: QUARANTINE
-    description: >
-      applicationId and global_id must refer to the same loan application.
-
-  - rule_id: ASH_CORE_EVENT_FIELDS_PRESENT
-    type: ALL_NOT_NULL
-    columns:
-      - stage
-      - enteredAt
-      - assignedTeam
-      - assignedTo
-      - slaDeadline
-    severity: WARNING
-    action: ALLOW_WITH_WARNING
-    description: >
-      A usable stage-history event should contain its stage, timing, ownership,
-      and SLA fields. The physical schema currently permits null values.
-
-  - rule_id: ASH_ENTERED_NOT_BEFORE_APPLICATION_SUBMISSION
-    type: REFERENCE_TIMESTAMP_COMPARISON
-    parameters:
-      reference_dataset: loan_applications
-      source_key:
-        applicationId: applicationId
-      source_timestamp_column: enteredAt
-      operator: GREATER_THAN_OR_EQUAL
-      reference_timestamp_column: submittedAt
-      ignore_nulls: true
-    severity: ERROR
-    action: QUARANTINE
-    description: >
-      enteredAt cannot be earlier than the application's submittedAt timestamp.
-
-  - rule_id: ASH_EXIT_NOT_BEFORE_ENTRY
-    type: TIMESTAMP_COLUMN_COMPARISON
-    parameters:
-      left_column: exitedAt
-      operator: GREATER_THAN_OR_EQUAL
-      right_column: enteredAt
-      ignore_nulls: true
-    severity: ERROR
-    action: QUARANTINE
-    description: "exitedAt cannot be earlier than enteredAt."
-
-  - rule_id: ASH_SLA_AFTER_ENTRY
-    type: TIMESTAMP_COLUMN_COMPARISON
-    parameters:
-      left_column: slaDeadline
-      operator: GREATER_THAN
-      right_column: enteredAt
-      ignore_nulls: true
-    severity: ERROR
-    action: QUARANTINE
-    description: "slaDeadline must be later than enteredAt."
-
-  - rule_id: ASH_DOCUMENTED_SLA_FORMULA
-    type: CONDITIONAL_TIMESTAMP_OFFSET_MATCH
-    parameters:
-      start_column: enteredAt
-      target_column: slaDeadline
-      selector_column: stage
-      offset_days:
-        Submitted: 2
-        Document_Verification: 7
-        Assessment: 5
-        Credit_Check: 3
-        Approved: 1
-        Denied: 1
-        Withdrawn: 1
-        Cancelled: 1
-      excluded_selector_values:
-        - Conditionally_Approved
-      tolerance_seconds: 1
-      ignore_nulls: true
-    severity: ERROR
-    action: QUARANTINE
-    description: >
-      slaDeadline must match the documented stage-specific SLA. The source does
-      not state the exact SLA for Conditionally_Approved, so that stage is
-      excluded until the generator configuration is reviewed.
-
-  - rule_id: ASH_EXIT_MATCHES_SLA_WHEN_PRESENT
-    type: TIMESTAMP_EQUALITY
-    columns:
-      - exitedAt
-      - slaDeadline
-    ignore_nulls: true
-    severity: ERROR
-    action: QUARANTINE
-    description: >
-      When exitedAt is populated, it must equal slaDeadline in the current
-      source generator model.
-
-  - rule_id: ASH_MAX_ONE_CURRENT_STAGE
-    type: CONDITIONAL_UNIQUE_PER_GROUP
-    parameters:
-      group_columns:
-        - applicationId
-      condition:
-        column: exitedAt
-        operator: IS_NULL
-      comparison_scope: COMPLETE_SNAPSHOT
-      ignore_null_group: true
-    severity: ERROR
-    action: QUARANTINE
-    description: >
-      An application may have at most one current stage with exitedAt equal to null.
-
-  - rule_id: ASH_STAGE_EVENT_ORDER
-    type: NON_OVERLAPPING_INTERVALS_PER_GROUP
-    parameters:
-      group_columns:
-        - applicationId
-      start_column: enteredAt
-      end_column: exitedAt
-      order_by:
-        - enteredAt
-        - historyId
-      allow_touching_boundaries: true
-      comparison_scope: COMPLETE_SNAPSHOT
-      ignore_nulls: true
-    severity: ERROR
-    action: QUARANTINE
-    description: >
-      Stage intervals for the same application must follow chronological order
-      without overlapping.
-
-  - rule_id: ASH_ALLOWED_STAGE_TRANSITIONS
-    type: ORDERED_TRANSITION_GRAPH
-    parameters:
-      group_column: applicationId
-      value_column: stage
-      timestamp_column: enteredAt
-      allowed_transitions:
-        Submitted:
-          - Document_Verification
-        Document_Verification:
-          - Assessment
-        Assessment:
-          - Credit_Check
-          - Conditionally_Approved
-          - Withdrawn
-          - Cancelled
-        Credit_Check:
-          - Approved
-          - Denied
-        Conditionally_Approved:
-          - Document_Verification
-        Approved: []
-        Denied: []
-        Withdrawn: []
-        Cancelled: []
-      comparison_scope: COMPLETE_SNAPSHOT
-      ignore_nulls: true
-    severity: ERROR
-    action: QUARANTINE
-    description: >
-      Stage events must follow one of the documented lifecycle transitions.
-
-  - rule_id: ASH_EARLY_STAGE_PENDING_PARTY
-    type: CONDITIONAL_ACCEPTED_VALUES
-    parameters:
-      source_column: stage
-      mappings:
-        Submitted:
-          - CUSTOMER
-          - ORGANISATION
-          - AUTHORISED_REPRESENTATIVE
-          - DIRECTOR
-          - GUARANTOR
-          - THIRD_PARTY
-        Document_Verification:
-          - CUSTOMER
-          - ORGANISATION
-          - AUTHORISED_REPRESENTATIVE
-          - DIRECTOR
-          - GUARANTOR
-          - THIRD_PARTY
-      target_column: pendingActionParty
-      ignore_nulls: true
-    severity: ERROR
-    action: QUARANTINE
-    description: >
-      Submitted and Document_Verification stages must use a documented
-      customer, organisation, representative, guarantor, or third-party action party.
-
-  - rule_id: ASH_ASSESSMENT_STAGE_PENDING_PARTY
-    type: CONDITIONAL_ACCEPTED_VALUES
-    parameters:
-      source_column: stage
-      mappings:
-        Assessment:
-          - INTERNAL_TEAM
-          - THIRD_PARTY
-          - CUSTOMER
-        Credit_Check:
-          - INTERNAL_TEAM
-          - THIRD_PARTY
-          - CUSTOMER
-      target_column: pendingActionParty
-      ignore_nulls: true
-    severity: ERROR
-    action: QUARANTINE
-    description: >
-      Assessment and Credit_Check stages must use the documented internal-team,
-      third-party, or customer action parties.
-
-  - rule_id: ASH_TERMINAL_STAGE_PENDING_PARTY_NULL
-    type: CONDITIONAL_NULL_FOR_VALUES
-    parameters:
-      source_column: stage
-      source_values:
-        - Approved
-        - Denied
-        - Withdrawn
-        - Cancelled
-      target_column: pendingActionParty
-    severity: ERROR
-    action: QUARANTINE
-    description: >
-      pendingActionParty must be null at terminal stages.
-
-  - rule_id: ASH_PARENT_OUTCOME_ALIGNMENT_REVIEW
-    type: DOCUMENTED_CROSS_SOURCE_ALIGNMENT
-    parameters:
-      parent_dataset: loan_applications
-      parent_column: finalOutcome
-      stage_sequence_source_outcomes:
-        - Accepted
-        - Denied
-        - Conditionally Approved
-        - Withdrawn
-        - Cancelled
-      parent_contract_outcomes:
-        - Accepted
-        - Denied
-        - Cancelled
-        - Incomplete
-        - Pending
-      status: TBD_CROSS_SOURCE_ALIGNMENT
-    severity: WARNING
-    action: ALLOW_WITH_WARNING
-    description: >
-      The source documentation uses Conditionally Approved and Withdrawn for
-      stage-sequence outcomes, while loan_applications uses Incomplete and
-      Pending instead. The team must resolve this documented mismatch before
-      enforcing a final-outcome-to-stage-sequence rule.
-
-# -----------------------------------------------------------------------------
-# 7. Event transport quality rules
-# -----------------------------------------------------------------------------
-event_quality_rules:
-
-  - rule_id: ASH_KAFKA_POSITION_UNIQUE
-    type: UNIQUE_EVENT_ENVELOPE_POSITION
-    columns:
+      description: |
+        Transport-level duplicates may be deduplicated, but valid lifecycle events must remain immutable and append-only.
+- property: g3:lifecycle
+  value:
+    owner: TBD
+    approver: TBD
+    effective_from: null
+- property: g3:dataset
+  value:
+    expected_rows_scale_1: 2500
+    physical_schema_ref: dev-tools/datagen/output/master-schema.json#/application_stage_history
+- property: g3:eventDeduplicationKey
+  value:
+  - historyId
+- property: g3:eventQualityRules
+  value:
+  - id: ASH_KAFKA_POSITION_UNIQUE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: UNIQUE_EVENT_ENVELOPE_POSITION
+      columns:
       - topic
       - partition
       - offset
-    severity: ERROR
-    action: DEDUPLICATE_TRANSPORT_COPY
-    description: >
-      A Kafka topic, partition, and offset combination must identify one landed
-      transport record.
-
-  - rule_id: ASH_EVENT_KEY_PRESENT
-    type: ENVELOPE_FIELD_NOT_NULL
-    field: key
-    severity: WARNING
-    action: ALLOW_WITH_WARNING
-    description: >
-      The Kafka event key should be present to support deterministic partitioning
-      and replay.
-
-  - rule_id: ASH_EVENT_TIMESTAMP_PRESENT
-    type: ENVELOPE_FIELD_NOT_NULL
-    field: timestamp
-    severity: WARNING
-    action: ALLOW_WITH_WARNING
-    description: >
+    severity: error
+    dimension: uniqueness
+    description: |
+      A Kafka topic, partition, and offset combination must identify one landed transport record.
+    customProperties:
+    - property: g3:action
+      value: DEDUPLICATE_TRANSPORT_COPY
+  - id: ASH_EVENT_KEY_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: ENVELOPE_FIELD_NOT_NULL
+    severity: warning
+    dimension: completeness
+    description: |
+      The Kafka event key should be present to support deterministic partitioning and replay.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: ASH_EVENT_TIMESTAMP_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: ENVELOPE_FIELD_NOT_NULL
+    severity: warning
+    dimension: completeness
+    description: |
       The Kafka envelope should retain the broker event timestamp.
-
-# -----------------------------------------------------------------------------
-# 8. Derived checks for Silver and AI-ready context
-# -----------------------------------------------------------------------------
-derived_quality_checks:
-
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+- property: g3:derivedQualityChecks
+  value:
   - rule_id: ASH_DURATION_DAYS_DERIVATION
     type: DERIVED_INTEGER
-    expression: "DATEDIFF(COALESCE(exitedAt, CURRENT_TIMESTAMP), enteredAt)"
+    expression: DATEDIFF(COALESCE(exitedAt, CURRENT_TIMESTAMP), enteredAt)
     output_field: duration_days
-    description: >
+    description: |
       Silver may derive the number of days spent in the stage.
-
   - rule_id: ASH_CURRENT_STAGE_DERIVATION
     type: DERIVED_BOOLEAN
-    expression: "exitedAt IS NULL"
+    expression: exitedAt IS NULL
     output_field: is_current_stage
-    description: "Silver may derive is_current_stage from exitedAt."
-
+    description: Silver may derive is_current_stage from exitedAt.
   - rule_id: ASH_SLA_BREACH_DERIVATION
     type: DERIVED_BOOLEAN
-    expression: >
-      exitedAt IS NULL
-      AND CURRENT_TIMESTAMP > slaDeadline
+    expression: |
+      exitedAt IS NULL AND CURRENT_TIMESTAMP > slaDeadline
     output_field: is_sla_breached
-    description: >
-      Silver may derive is_sla_breached for a current stage whose SLA deadline
-      has passed.
-
+    description: |
+      Silver may derive is_sla_breached for a current stage whose SLA deadline has passed.
   - rule_id: ASH_CUSTOMER_AI_PROJECTION
     type: APPROVED_CONTEXT_PROJECTION
     approved_fields:
-      - stage
-      - enteredAt
-      - pendingActionParty
+    - stage
+    - enteredAt
+    - pendingActionParty
     prohibited_fields:
-      - assignedTo
-    description: >
-      Customer-facing context may expose an approved stage summary and next
-      action, but must not expose the internal staff identifier.
-
-# -----------------------------------------------------------------------------
-# 9. Notes for the team
-# -----------------------------------------------------------------------------
-notes:
-  - >
-    This contract follows the authoritative physical source schema and includes
-    all ten fields defined for application_stage_history.
-  - >
-    application_stage_history is an EVENT source. It must remain append-only;
-    updates and deletes are prohibited even though transport duplicates may be
-    removed in bronze.kafka_events_deduplicated.
-  - >
-    The exact Kafka topic name and event-key convention are not documented and
-    remain TBD until the exporter configuration is inspected.
-  - >
-    The source documents assignedTeam as stage-correlated but does not provide
-    the exact stage-to-team mapping. The contract validates the team enum without
-    inventing a mapping.
-  - >
-    The source does not document the exact SLA for Conditionally_Approved, so
-    the hard SLA formula excludes that stage until the generator is reviewed.
-  - >
-    There is a documented outcome mismatch between application-stage sequences
-    and loan_applications.finalOutcome. The contract records the mismatch as a
-    warning instead of silently reconciling it.
-  - >
-    assignedTo is an internal employee identifier and must never be exposed to
-    Customer.AI. Stage, enteredAt, SLA status, and pendingActionParty support
-    approved application-status questions after access checks.
+    - assignedTo
+    description: |
+      Customer-facing context may expose an approved stage summary and next action, but must not expose the internal staff identifier.
+- property: g3:notes
+  value:
+  - |
+    This contract follows the authoritative physical source schema and includes all ten fields defined for application_stage_history.
+  - |
+    application_stage_history is an EVENT source. It must remain append-only; updates and deletes are prohibited even though transport duplicates may be removed in bronze.kafka_events_deduplicated.
+  - |
+    The exact Kafka topic name and event-key convention are not documented and remain TBD until the exporter configuration is inspected.
+  - |
+    The source documents assignedTeam as stage-correlated but does not provide the exact stage-to-team mapping. The contract validates the team enum without inventing a mapping.
+  - |
+    The source does not document the exact SLA for Conditionally_Approved, so the hard SLA formula excludes that stage until the generator is reviewed.
+  - |
+    There is a documented outcome mismatch between application-stage sequences and loan_applications.finalOutcome. The contract records the mismatch as a warning instead of silently reconciling it.
+  - assignedTo is an internal employee identifier and must never be exposed to Customer.AI. Stage, enteredAt, SLA status,
+    and pendingActionParty support approved application-status questions after access checks.

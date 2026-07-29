@@ -1,398 +1,487 @@
-# =============================================================================
-# DATA CONTRACT: organisation_party_relationships
-# =============================================================================
-# Purpose:
-# - Links one person from customers to one organisation.
-# - Describes the person's role and authority within that organisation.
-# - Tracks whether the relationship is active and its validity period.
-#
-# Important examples:
-# - DIRECTOR with FULL authority
-# - AUTHORISED_REPRESENTATIVE with LIMITED authority
-# - SIGNATORY with VIEW_ONLY authority
-#
-# Quick guide:
-# - required: the source column must exist.
-# - nullable: the field value may be null.
-# - ERROR + QUARANTINE: do not send the record to the trusted output.
-# - WARNING + ALLOW_WITH_WARNING: keep the record but report the issue.
-# =============================================================================
-
-contract_version: "1.0.0"
-contract_id: "source.database.organisation_party_relationships"
-
-dataset:
-  name: organisation_party_relationships
-  domain: ORGANISATION
-  description: >
-    Source dataset that links people in customers to organisations and records
-    each person's role, authority level, and active period.
-  expected_rows_scale_1: 1500
-  physical_schema_ref: >-
-    dev-tools/datagen/output/master-schema.json#/organisation_party_relationships
-
-lifecycle:
-  # DRAFT -> IN_REVIEW -> APPROVED -> DEPRECATED / RETIRED
-  status: DRAFT
-  owner: TBD
-  approver: TBD
-  effective_from: null
-
-source:
-  category: DATABASE
-  system_type: POSTGRESQL
-  source_object: "public.organisation_party_relationships"
-  authoritative: true
-
-ingestion:
-  mechanism: DEBEZIUM_CDC
-  transport: APACHE_KAFKA
-
-  landing:
-    format: JSONL
-    path_template: >-
-      s3://<bucket>/bronze/landing/cdc/organisation_party_relationships/
-    immutable: true
-
-  bronze_target: "bronze.cdc_changes"
-
-  cdc:
-    supported_operations:
+kind: DataContract
+apiVersion: v3.1.0
+id: source.database.organisation_party_relationships
+version: 1.0.0
+name: organisation_party_relationships
+status: draft
+domain: ORGANISATION
+description:
+  purpose: |
+    Source dataset that links people in customers to organisations and records each person's role, authority level, and active period.
+servers:
+- server: source-postgresql
+  type: postgresql
+  description: PostgreSQL CDC source via Debezium for organisation_party_relationships
+  environment: prod
+schema:
+- name: organisation_party_relationships
+  logicalType: object
+  physicalType: table
+  physicalName: public.organisation_party_relationships
+  relationships:
+  - type: foreignKey
+    from:
+    - organisation_party_relationships.global_id
+    to:
+    - customers.global_id
+    customProperties:
+    - property: g3:nullable
+      value: true
+  - type: foreignKey
+    from:
+    - organisation_party_relationships.organisationId
+    to:
+    - organisations.organisationId
+    customProperties:
+    - property: g3:nullable
+      value: true
+  quality:
+  - id: OPR_RELATIONSHIP_ID_UNIQUE
+    type: library
+    metric: duplicateValues
+    mustBe: 0
+    severity: error
+    dimension: uniqueness
+    description: |
+      relationshipId must be unique across the dataset.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+    - property: g3:columns
+      value:
+      - relationshipId
+  - id: OPR_PERSON_LINK_PRESENT
+    type: library
+    metric: nullValues
+    mustBe: 0
+    severity: warning
+    dimension: completeness
+    description: |
+      A relationship should identify the person linked to the organisation. The physical schema currently permits null.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+    - property: g3:columns
+      value:
+      - global_id
+  - id: OPR_ORGANISATION_LINK_PRESENT
+    type: library
+    metric: nullValues
+    mustBe: 0
+    severity: warning
+    dimension: completeness
+    description: |
+      A relationship should identify the organisation. The physical schema currently permits null.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+    - property: g3:columns
+      value:
+      - organisationId
+  - id: OPR_END_DATE_AFTER_START_DATE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: COLUMN_COMPARISON
+      parameters:
+        left_column: endDate
+        operator: GREATER_THAN_OR_EQUAL
+        right_column: startDate
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: endDate cannot be earlier than startDate.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: OPR_ACTIVE_RELATIONSHIP_END_DATE_NULL
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_NULL
+      parameters:
+        when:
+          column: isActive
+          equals: true
+        target_column: endDate
+    severity: error
+    dimension: consistency
+    description: An active relationship must not have an endDate.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: OPR_INACTIVE_RELATIONSHIP_END_DATE_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: CONDITIONAL_NOT_NULL
+      parameters:
+        when:
+          column: isActive
+          equals: false
+        target_column: endDate
+    severity: error
+    dimension: consistency
+    description: An inactive relationship must have an endDate.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: OPR_ACTIVE_ROLE_UNIQUE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: COMPOSITE_UNIQUE_WHEN
+      parameters:
+        when:
+          column: isActive
+          equals: true
+      columns:
+      - global_id
+      - organisationId
+      - partyRole
+    severity: warning
+    dimension: consistency
+    description: |
+      A person should not have duplicate active records for the same role in the same organisation.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  properties:
+  - name: global_id
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - 65df84b8-4274-4dbd-9667-6c9967ae6538
+    quality:
+    - id: OPR_GLOBAL_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: global_id must be a valid UUID when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: OPR_GLOBAL_ID_CUSTOMER_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: customers
+          reference_column: global_id
+      severity: error
+      dimension: consistency
+      description: |
+        global_id must exist in customers.global_id when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: person_identifier
+  - name: relationshipId
+    logicalType: string
+    physicalType: string
+    required: true
+    primaryKey: true
+    primaryKeyPosition: 1
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - d909f459-d907-47c4-a6d8-bc583ae87d65
+    quality:
+    - id: OPR_RELATIONSHIP_ID_NOT_NULL
+      type: library
+      metric: nullValues
+      mustBe: 0
+      severity: error
+      dimension: completeness
+      description: relationshipId must always be present.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: OPR_RELATIONSHIP_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
+        format: UUID
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: relationshipId must be a valid UUID.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: relationship_identifier
+  - name: organisationId
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      pattern: ^ORG-\d{5}$
+    examples:
+    - ORG-00042
+    quality:
+    - id: OPR_ORGANISATION_ID_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^ORG-\d{5}$
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        organisationId must follow the ORG-00000 pattern when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: OPR_ORGANISATION_ID_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: organisations
+          reference_column: organisationId
+      severity: error
+      dimension: consistency
+      description: |
+        organisationId must exist in organisations.organisationId when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: organisation_identifier
+  - name: partyRole
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: INTERNAL
+    examples:
+    - AUTHORISED_REPRESENTATIVE
+    quality:
+    - id: OPR_PARTY_ROLE_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - DIRECTOR
+        - AUTHORISED_REPRESENTATIVE
+        - BENEFICIAL_OWNER
+        - SIGNATORY
+        - GUARANTOR
+        - SECRETARY
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        partyRole must be one of the supported organisation role values.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: organisation_party_role
+    - property: g3:accepted
+      value:
+        values:
+        - DIRECTOR
+        - AUTHORISED_REPRESENTATIVE
+        - BENEFICIAL_OWNER
+        - SIGNATORY
+        - GUARANTOR
+        - SECRETARY
+  - name: isActive
+    logicalType: boolean
+    physicalType: bool
+    required: true
+    classification: INTERNAL
+    examples:
+    - true
+    quality:
+    - id: OPR_IS_ACTIVE_BOOLEAN
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: BOOLEAN
+      severity: error
+      dimension: conformity
+      description: isActive must be a boolean value.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: boolean
+    - property: g3:accepted
+      value:
+        values:
+        - true
+        - false
+  - name: startDate
+    logicalType: date
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: ISO_8601_DATE
+    examples:
+    - '2024-02-12'
+    quality:
+    - id: OPR_START_DATE_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DATE_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: startDate must be parseable as a date.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: date
+  - name: endDate
+    logicalType: date
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: ISO_8601_DATE
+    examples:
+    - '2025-08-30'
+    quality:
+    - id: OPR_END_DATE_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DATE_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: endDate must be parseable as a date.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: date
+  - name: authorityLevel
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: INTERNAL
+    examples:
+    - FULL
+    quality:
+    - id: OPR_AUTHORITY_LEVEL_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - FULL
+        - LIMITED
+        - VIEW_ONLY
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        authorityLevel must be one of the supported authority values.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: RESTRICT_ACCESS
+    - property: g3:domainType
+      value: authority_level
+    - property: g3:accepted
+      value:
+        values:
+        - FULL
+        - LIMITED
+        - VIEW_ONLY
+customProperties:
+- property: g3:source
+  value:
+    category: DATABASE
+    system_type: POSTGRESQL
+    source_object: public.organisation_party_relationships
+    authoritative: true
+- property: g3:ingestion
+  value:
+    mechanism: DEBEZIUM_CDC
+    transport: APACHE_KAFKA
+    landing:
+      format: JSONL
+      path_template: s3://<bucket>/bronze/landing/cdc/organisation_party_relationships/
+      immutable: true
+    bronze_target: bronze.cdc_changes
+    cdc:
+      supported_operations:
       - SNAPSHOT
       - INSERT
       - UPDATE
       - DELETE
-
-    ordering_metadata:
+      ordering_metadata:
       - source_lsn
       - kafka_partition
       - kafka_offset
-
-keys:
-  primary_key:
-    - relationshipId
-
-  alternate_keys: []
-
-  foreign_keys:
-    - columns:
-        - global_id
-      reference:
-        dataset: customers
-        columns:
-          - global_id
-      nullable: true
-
-    - columns:
-        - organisationId
-      reference:
-        dataset: organisations
-        columns:
-          - organisationId
-      nullable: true
-
-schema:
-  fields:
-    - name: global_id
-      data_type: string
-      logical_type: person_identifier
-      required: true
-      nullable: true
-      accepted:
-        format: UUID
-      example: "65df84b8-4274-4dbd-9667-6c9967ae6538"
-      sensitivity:
-        classification: INTERNAL
-        is_pii: false
-        handling: NONE
-      quality_rules:
-        - rule_id: OPR_GLOBAL_ID_UUID
-          type: FORMAT_IF_PRESENT
-          parameters:
-            format: UUID
-          severity: ERROR
-          action: QUARANTINE
-          description: "global_id must be a valid UUID when supplied."
-
-        - rule_id: OPR_GLOBAL_ID_CUSTOMER_FK
-          type: FOREIGN_KEY_IF_PRESENT
-          parameters:
-            reference_dataset: customers
-            reference_column: global_id
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            global_id must exist in customers.global_id when supplied.
-
-    - name: relationshipId
-      data_type: string
-      logical_type: relationship_identifier
-      required: true
-      nullable: false
-      accepted:
-        format: UUID
-      example: "d909f459-d907-47c4-a6d8-bc583ae87d65"
-      sensitivity:
-        classification: INTERNAL
-        is_pii: false
-        handling: NONE
-      quality_rules:
-        - rule_id: OPR_RELATIONSHIP_ID_NOT_NULL
-          type: NOT_NULL
-          severity: ERROR
-          action: QUARANTINE
-          description: "relationshipId must always be present."
-
-        - rule_id: OPR_RELATIONSHIP_ID_UUID
-          type: FORMAT
-          parameters:
-            format: UUID
-          severity: ERROR
-          action: QUARANTINE
-          description: "relationshipId must be a valid UUID."
-
-    - name: organisationId
-      data_type: string
-      logical_type: organisation_identifier
-      required: true
-      nullable: true
-      accepted:
-        regex: '^ORG-\d{5}$'
-      example: "ORG-00042"
-      sensitivity:
-        classification: INTERNAL
-        is_pii: false
-        handling: NONE
-      quality_rules:
-        - rule_id: OPR_ORGANISATION_ID_PATTERN
-          type: REGEX_IF_PRESENT
-          parameters:
-            regex: '^ORG-\d{5}$'
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            organisationId must follow the ORG-00000 pattern when supplied.
-
-        - rule_id: OPR_ORGANISATION_ID_FK
-          type: FOREIGN_KEY_IF_PRESENT
-          parameters:
-            reference_dataset: organisations
-            reference_column: organisationId
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            organisationId must exist in organisations.organisationId when supplied.
-
-    - name: partyRole
-      data_type: string
-      logical_type: organisation_party_role
-      required: true
-      nullable: false
-      accepted:
-        values:
-          - DIRECTOR
-          - AUTHORISED_REPRESENTATIVE
-          - BENEFICIAL_OWNER
-          - SIGNATORY
-          - GUARANTOR
-          - SECRETARY
-      example: "AUTHORISED_REPRESENTATIVE"
-      sensitivity:
-        classification: INTERNAL
-        is_pii: false
-        handling: NONE
-      quality_rules:
-        - rule_id: OPR_PARTY_ROLE_ENUM
-          type: ACCEPTED_VALUES
-          parameters:
-            values:
-              - DIRECTOR
-              - AUTHORISED_REPRESENTATIVE
-              - BENEFICIAL_OWNER
-              - SIGNATORY
-              - GUARANTOR
-              - SECRETARY
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            partyRole must be one of the supported organisation role values.
-
-    - name: isActive
-      data_type: bool
-      logical_type: boolean
-      required: true
-      nullable: false
-      accepted:
-        values:
-          - true
-          - false
-      example: true
-      sensitivity:
-        classification: INTERNAL
-        is_pii: false
-        handling: NONE
-      quality_rules:
-        - rule_id: OPR_IS_ACTIVE_BOOLEAN
-          type: BOOLEAN
-          severity: ERROR
-          action: QUARANTINE
-          description: "isActive must be a boolean value."
-
-    - name: startDate
-      data_type: string
-      logical_type: date
-      required: true
-      nullable: true
-      accepted:
-        format: ISO_8601_DATE
-      example: "2024-02-12"
-      sensitivity:
-        classification: INTERNAL
-        is_pii: false
-        handling: NONE
-      quality_rules:
-        - rule_id: OPR_START_DATE_PARSEABLE
-          type: PARSEABLE_DATE_IF_PRESENT
-          severity: ERROR
-          action: QUARANTINE
-          description: "startDate must be parseable as a date."
-
-    - name: endDate
-      data_type: string
-      logical_type: date
-      required: true
-      nullable: true
-      accepted:
-        format: ISO_8601_DATE
-      example: "2025-08-30"
-      sensitivity:
-        classification: INTERNAL
-        is_pii: false
-        handling: NONE
-      quality_rules:
-        - rule_id: OPR_END_DATE_PARSEABLE
-          type: PARSEABLE_DATE_IF_PRESENT
-          severity: ERROR
-          action: QUARANTINE
-          description: "endDate must be parseable as a date."
-
-    - name: authorityLevel
-      data_type: string
-      logical_type: authority_level
-      required: true
-      nullable: false
-      accepted:
-        values:
-          - FULL
-          - LIMITED
-          - VIEW_ONLY
-      example: "FULL"
-      sensitivity:
-        classification: INTERNAL
-        is_pii: false
-        handling: RESTRICT_ACCESS
-      quality_rules:
-        - rule_id: OPR_AUTHORITY_LEVEL_ENUM
-          type: ACCEPTED_VALUES
-          parameters:
-            values:
-              - FULL
-              - LIMITED
-              - VIEW_ONLY
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            authorityLevel must be one of the supported authority values.
-
-dataset_quality_rules:
-  - rule_id: OPR_RELATIONSHIP_ID_UNIQUE
-    type: UNIQUE
-    columns:
-      - relationshipId
-    severity: ERROR
-    action: QUARANTINE
-    description: >
-      relationshipId must be unique across the dataset.
-
-  - rule_id: OPR_PERSON_LINK_PRESENT
-    type: NOT_NULL
-    columns:
-      - global_id
-    severity: WARNING
-    action: ALLOW_WITH_WARNING
-    description: >
-      A relationship should identify the person linked to the organisation.
-      The physical schema currently permits null.
-
-  - rule_id: OPR_ORGANISATION_LINK_PRESENT
-    type: NOT_NULL
-    columns:
-      - organisationId
-    severity: WARNING
-    action: ALLOW_WITH_WARNING
-    description: >
-      A relationship should identify the organisation. The physical schema
-      currently permits null.
-
-  - rule_id: OPR_END_DATE_AFTER_START_DATE
-    type: COLUMN_COMPARISON
-    parameters:
-      left_column: endDate
-      operator: GREATER_THAN_OR_EQUAL
-      right_column: startDate
-      ignore_nulls: true
-    severity: ERROR
-    action: QUARANTINE
-    description: "endDate cannot be earlier than startDate."
-
-  - rule_id: OPR_ACTIVE_RELATIONSHIP_END_DATE_NULL
-    type: CONDITIONAL_NULL
-    parameters:
-      when:
-        column: isActive
-        equals: true
-      target_column: endDate
-    severity: ERROR
-    action: QUARANTINE
-    description: "An active relationship must not have an endDate."
-
-  - rule_id: OPR_INACTIVE_RELATIONSHIP_END_DATE_PRESENT
-    type: CONDITIONAL_NOT_NULL
-    parameters:
-      when:
-        column: isActive
-        equals: false
-      target_column: endDate
-    severity: ERROR
-    action: QUARANTINE
-    description: "An inactive relationship must have an endDate."
-
-  - rule_id: OPR_ACTIVE_ROLE_UNIQUE
-    type: COMPOSITE_UNIQUE_WHEN
-    columns:
-      - global_id
-      - organisationId
-      - partyRole
-    parameters:
-      when:
-        column: isActive
-        equals: true
-    severity: WARNING
-    action: ALLOW_WITH_WARNING
-    description: >
-      A person should not have duplicate active records for the same role in
-      the same organisation.
-
-notes:
-  - >
-    This contract describes the raw source relationship dataset. It does not
-    grant a person permission to access organisation data.
-  - >
-    authorityLevel is operationally sensitive and should only be exposed to
-    approved banker-facing or pipeline consumers.
-  - >
-    The person-link and organisation-link completeness rules are warnings
-    because the physical schema marks both foreign-key fields as nullable.
-  - >
-    The team may promote these two warnings to errors after confirming that
-    every relationship record must always contain both links.
+- property: g3:lifecycle
+  value:
+    owner: TBD
+    approver: TBD
+    effective_from: null
+- property: g3:dataset
+  value:
+    expected_rows_scale_1: 1500
+    physical_schema_ref: dev-tools/datagen/output/master-schema.json#/organisation_party_relationships
+- property: g3:notes
+  value:
+  - |
+    This contract describes the raw source relationship dataset. It does not grant a person permission to access organisation data.
+  - |
+    authorityLevel is operationally sensitive and should only be exposed to approved banker-facing or pipeline consumers.
+  - |
+    The person-link and organisation-link completeness rules are warnings because the physical schema marks both foreign-key fields as nullable.
+  - The team may promote these two warnings to errors after confirming that every relationship record must always contain
+    both links.

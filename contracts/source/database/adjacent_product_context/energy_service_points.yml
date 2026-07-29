@@ -1,851 +1,1038 @@
-# =============================================================================
-# DATA CONTRACT: energy_service_points
-# =============================================================================
-# Purpose:
-# - Stores physical energy metering and connection points.
-# - Links each service point to an energy account and customer.
-# - Preserves CDR EnergyServicePoint nested objects for location, distribution
-#   loss factors, related market participants, consumer profile, and meters.
-#
-# Important relationships:
-# - One energy account may have multiple service points.
-# - energyAccountId links each service point to energy_accounts.
-# - global_id must identify the same customer as the parent energy account.
-#
-# Quick guide:
-# - required: the source column must exist.
-# - nullable: the physical source value may be null.
-# - ERROR + QUARANTINE: do not send the record to the trusted output.
-# - WARNING + ALLOW_WITH_WARNING: keep the record but report the issue.
-# =============================================================================
-
-contract_version: "1.0.0"
-contract_id: "source.database.energy_service_points"
-
-# -----------------------------------------------------------------------------
-# 1. Basic dataset information
-# -----------------------------------------------------------------------------
-dataset:
-  name: energy_service_points
-  domain: ENERGY
-  description: >
-    Source dataset containing CDR EnergyServicePoint records for physical
-    metering and connection points. Each record is linked to an energy account
-    and includes jurisdiction, classification, lifecycle status, generator
-    status, dates, location, distribution loss factor, related market
-    participants, consumer profile, and meter details.
-  expected_rows_scale_1: 3000
-  physical_schema_ref: "dev-tools/datagen/output/master-schema.json#/energy_service_points"
-
-# -----------------------------------------------------------------------------
-# 2. Ownership and contract lifecycle
-# -----------------------------------------------------------------------------
-lifecycle:
-  # DRAFT -> IN_REVIEW -> APPROVED -> DEPRECATED / RETIRED
-  status: DRAFT
-  owner: TBD
-  approver: TBD
-  effective_from: null
-
-# -----------------------------------------------------------------------------
-# 3. Source and ingestion information
-# -----------------------------------------------------------------------------
-source:
-  category: DATABASE
-  system_type: POSTGRESQL
-  source_object: "public.energy_service_points"
-  authoritative: true
-
-ingestion:
-  mechanism: DEBEZIUM_CDC
-  transport: APACHE_KAFKA
-
-  landing:
-    format: JSONL
-    path_template: "s3://<bucket>/bronze/landing/cdc/energy_service_points/"
-    immutable: true
-
-  bronze_target: "bronze.cdc_changes"
-
-  cdc:
-    supported_operations:
-      - SNAPSHOT
-      - INSERT
-      - UPDATE
-      - DELETE
-
-    ordering_metadata:
-      - source_lsn
-      - kafka_partition
-      - kafka_offset
-
-# -----------------------------------------------------------------------------
-# 4. Keys and relationships
-# -----------------------------------------------------------------------------
-keys:
-  primary_key:
-    - servicePointId
-
-  alternate_keys:
-    - nationalMeteringId
-
-  foreign_keys:
-    - columns:
-        - global_id
-      reference:
-        dataset: customers
-        columns:
-          - global_id
-      nullable: true
-
-    - columns:
-        - energyAccountId
-      reference:
-        dataset: energy_accounts
-        columns:
-          - energyAccountId
-      nullable: true
-
-# -----------------------------------------------------------------------------
-# 5. Field-level contract
-# -----------------------------------------------------------------------------
+kind: DataContract
+apiVersion: v3.1.0
+id: source.database.energy_service_points
+version: 1.0.0
+name: energy_service_points
+status: draft
+domain: ENERGY
+description:
+  purpose: |
+    Source dataset containing CDR EnergyServicePoint records for physical metering and connection points. Each record is linked to an energy account and includes jurisdiction, classification, lifecycle status, generator status, dates, location, distribution loss factor, related market participants, consumer profile, and meter details.
+servers:
+- server: source-postgresql
+  type: postgresql
+  description: PostgreSQL CDC source via Debezium for energy_service_points
+  environment: prod
 schema:
-  fields:
-
-    - name: global_id
-      data_type: string
-      logical_type: person_identifier
-      required: true
-      nullable: true
-      accepted:
+- name: energy_service_points
+  logicalType: object
+  physicalType: table
+  physicalName: public.energy_service_points
+  relationships:
+  - type: foreignKey
+    from:
+    - energy_service_points.global_id
+    to:
+    - customers.global_id
+    customProperties:
+    - property: g3:nullable
+      value: true
+  - type: foreignKey
+    from:
+    - energy_service_points.energyAccountId
+    to:
+    - energy_accounts.energyAccountId
+    customProperties:
+    - property: g3:nullable
+      value: true
+  quality:
+  - id: ESP_SERVICE_POINT_ID_UNIQUE
+    type: library
+    metric: duplicateValues
+    mustBe: 0
+    severity: error
+    dimension: uniqueness
+    description: servicePointId must be unique across the dataset.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+    - property: g3:columns
+      value:
+      - servicePointId
+  - id: ESP_NATIONAL_METERING_ID_UNIQUE_IF_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: UNIQUE_IF_PRESENT
+      columns:
+      - nationalMeteringId
+    severity: error
+    dimension: consistency
+    description: |
+      A populated nationalMeteringId must not be shared by multiple service points.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: ESP_ACCOUNT_LINK_PRESENT
+    type: library
+    metric: nullValues
+    mustBe: 0
+    severity: warning
+    dimension: completeness
+    description: |
+      A service point should identify its energy account. The physical schema currently permits energyAccountId to be null.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+    - property: g3:columns
+      value:
+      - energyAccountId
+  - id: ESP_CUSTOMER_LINK_PRESENT
+    type: library
+    metric: nullValues
+    mustBe: 0
+    severity: warning
+    dimension: completeness
+    description: |
+      A service point should identify its customer. The physical schema currently permits global_id to be null.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+    - property: g3:columns
+      value:
+      - global_id
+  - id: ESP_ACCOUNT_CUSTOMER_CONSISTENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: REFERENCE_PAIR_CONSISTENT
+      parameters:
+        reference_dataset: energy_accounts
+        source_columns:
+        - energyAccountId
+        - global_id
+        reference_columns:
+        - energyAccountId
+        - global_id
+        ignore_nulls: true
+    severity: error
+    dimension: consistency
+    description: |
+      energyAccountId and global_id must refer to the same energy account record.
+    customProperties:
+    - property: g3:action
+      value: QUARANTINE
+  - id: ESP_VALID_FROM_NOT_IN_FUTURE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: DATE_NOT_IN_FUTURE
+      columns:
+      - validFromDate
+    severity: warning
+    dimension: timeliness
+    description: |
+      validFromDate should not be later than the pipeline processing date.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: ESP_LAST_UPDATE_NOT_IN_FUTURE
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: TIMESTAMP_NOT_IN_FUTURE
+      columns:
+      - lastUpdateDateTime
+    severity: warning
+    dimension: timeliness
+    description: |
+      lastUpdateDateTime should not be later than the pipeline processing timestamp.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: ESP_LAST_UPDATE_NOT_BEFORE_VALID_FROM
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: TIMESTAMP_NOT_BEFORE_DATE
+      parameters:
+        timestamp_column: lastUpdateDateTime
+        date_column: validFromDate
+        ignore_nulls: true
+    severity: warning
+    dimension: consistency
+    description: |
+      lastUpdateDateTime should not be earlier than validFromDate.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: ESP_ACTIVE_ACCOUNT_EXPECTED
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: REFERENCE_CONDITION_FOR_VALUES
+      parameters:
+        reference_dataset: energy_accounts
+        source_key:
+          energyAccountId: energyAccountId
+        source_column: servicePointStatus
+        source_values:
+        - ACTIVE
+        expected_condition:
+          column: openStatus
+          equals: OPEN
+        ignore_missing_reference: false
+    severity: warning
+    dimension: consistency
+    description: |
+      An ACTIVE service point is normally expected to belong to an OPEN energy account.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: ESP_GENERATOR_RATIO_MONITORING
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: POPULATION_RATIO_RANGE
+      parameters:
+        column: isGenerator
+        condition:
+          equals: true
+        min_ratio: 0.02
+        max_ratio: 0.1
+        comparison_scope: COMPLETE_SNAPSHOT
+    severity: warning
+    dimension: consistency
+    description: |
+      The source generator produces approximately five percent generator service points; a complete-snapshot ratio outside two to ten percent should be investigated.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  - id: ESP_NESTED_CONTEXT_PRESENT
+    type: custom
+    engine: g3-pipeline
+    implementation:
+      ruleType: ANY_NOT_NULL
+      columns:
+      - location
+      - distributionLossFactor
+      - relatedParticipants
+      - consumerProfile
+      - meters
+    severity: warning
+    dimension: consistency
+    description: |
+      At least one nested CDR context object should normally be present.
+    customProperties:
+    - property: g3:action
+      value: ALLOW_WITH_WARNING
+  properties:
+  - name: global_id
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - 65df84b8-4274-4dbd-9667-6c9967ae6538
+    quality:
+    - id: ESP_GLOBAL_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
         format: UUID
-      example: "65df84b8-4274-4dbd-9667-6c9967ae6538"
-      sensitivity:
-        classification: INTERNAL
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: global_id must be a valid UUID when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: ESP_GLOBAL_ID_CUSTOMER_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: customers
+          reference_column: global_id
+      severity: error
+      dimension: consistency
+      description: |
+        global_id must exist in customers.global_id when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
         is_pii: false
         handling: NONE
-      quality_rules:
-        - rule_id: ESP_GLOBAL_ID_UUID
-          type: FORMAT_IF_PRESENT
-          parameters:
-            format: UUID
-          severity: ERROR
-          action: QUARANTINE
-          description: "global_id must be a valid UUID when supplied."
-
-        - rule_id: ESP_GLOBAL_ID_CUSTOMER_FK
-          type: FOREIGN_KEY_IF_PRESENT
-          parameters:
-            reference_dataset: customers
-            reference_column: global_id
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            global_id must exist in customers.global_id when supplied.
-
-    - name: energyAccountId
-      data_type: string
-      logical_type: energy_account_identifier
-      required: true
-      nullable: true
-      accepted:
+    - property: g3:domainType
+      value: person_identifier
+  - name: energyAccountId
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: uuid
+    examples:
+    - 55bf44d5-f544-468c-a822-eb5e26bd2924
+    quality:
+    - id: ESP_ENERGY_ACCOUNT_ID_UUID
+      type: library
+      metric: invalidValues
+      arguments:
         format: UUID
-      example: "55bf44d5-f544-468c-a822-eb5e26bd2924"
-      sensitivity:
-        classification: INTERNAL
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        energyAccountId must be a valid UUID when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: ESP_ENERGY_ACCOUNT_ID_FK
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: FOREIGN_KEY_IF_PRESENT
+        parameters:
+          reference_dataset: energy_accounts
+          reference_column: energyAccountId
+      severity: error
+      dimension: consistency
+      description: |
+        energyAccountId must exist in energy_accounts.energyAccountId when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
         is_pii: false
         handling: NONE
-      quality_rules:
-        - rule_id: ESP_ENERGY_ACCOUNT_ID_UUID
-          type: FORMAT_IF_PRESENT
-          parameters:
-            format: UUID
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            energyAccountId must be a valid UUID when supplied.
-
-        - rule_id: ESP_ENERGY_ACCOUNT_ID_FK
-          type: FOREIGN_KEY_IF_PRESENT
-          parameters:
-            reference_dataset: energy_accounts
-            reference_column: energyAccountId
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            energyAccountId must exist in energy_accounts.energyAccountId when supplied.
-
-    - name: servicePointId
-      data_type: string
-      logical_type: energy_service_point_identifier
-      required: true
-      nullable: false
-      accepted:
-        regex: '^NMI-\d{8}$'
-      example: "NMI-00000042"
-      sensitivity:
-        classification: CONFIDENTIAL
+    - property: g3:domainType
+      value: energy_account_identifier
+  - name: servicePointId
+    logicalType: string
+    physicalType: string
+    required: true
+    primaryKey: true
+    primaryKeyPosition: 1
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      pattern: ^NMI-\d{8}$
+    examples:
+    - NMI-00000042
+    quality:
+    - id: ESP_SERVICE_POINT_ID_NOT_NULL
+      type: library
+      metric: nullValues
+      mustBe: 0
+      severity: error
+      dimension: completeness
+      description: servicePointId must always be present.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: ESP_SERVICE_POINT_ID_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^NMI-\d{8}$
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        servicePointId must follow the NMI-00000000 pattern.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
         is_pii: true
         pii_type: ENERGY_SERVICE_POINT_IDENTIFIER
         handling: TOKENISE_OR_MASK
-      quality_rules:
-        - rule_id: ESP_SERVICE_POINT_ID_NOT_NULL
-          type: NOT_NULL
-          severity: ERROR
-          action: QUARANTINE
-          description: "servicePointId must always be present."
-
-        - rule_id: ESP_SERVICE_POINT_ID_PATTERN
-          type: REGEX
-          parameters:
-            regex: '^NMI-\d{8}$'
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            servicePointId must follow the NMI-00000000 pattern.
-
-    - name: nationalMeteringId
-      data_type: string
-      logical_type: national_metering_identifier
-      required: true
-      nullable: true
-      accepted:
-        regex: '^\d{10}$'
-      example: "1234567890"
-      sensitivity:
-        classification: HIGHLY_CONFIDENTIAL
+    - property: g3:domainType
+      value: energy_service_point_identifier
+  - name: nationalMeteringId
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    logicalTypeOptions:
+      pattern: ^\d{10}$
+    examples:
+    - '1234567890'
+    quality:
+    - id: ESP_NATIONAL_METERING_ID_PATTERN
+      type: library
+      metric: invalidValues
+      arguments:
+        pattern: ^\d{10}$
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        nationalMeteringId must contain exactly ten digits when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
         is_pii: true
         pii_type: NATIONAL_METERING_IDENTIFIER
         handling: TOKENISE_OR_MASK
-      quality_rules:
-        - rule_id: ESP_NATIONAL_METERING_ID_PATTERN
-          type: REGEX_IF_PRESENT
-          parameters:
-            regex: '^\d{10}$'
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            nationalMeteringId must contain exactly ten digits when supplied.
-
-    - name: jurisdictionCode
-      data_type: string
-      logical_type: australian_state_or_territory_code
-      required: true
-      nullable: false
-      accepted:
+    - property: g3:domainType
+      value: national_metering_identifier
+  - name: jurisdictionCode
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: INTERNAL
+    examples:
+    - VIC
+    quality:
+    - id: ESP_JURISDICTION_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
         values:
-          - NSW
-          - VIC
-          - QLD
-          - WA
-          - SA
-          - TAS
-          - ACT
-          - NT
-      example: "VIC"
-      sensitivity:
-        classification: INTERNAL
+        - NSW
+        - VIC
+        - QLD
+        - WA
+        - SA
+        - TAS
+        - ACT
+        - NT
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        jurisdictionCode must be a supported Australian state or territory code.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
         is_pii: false
         handling: NONE
-      quality_rules:
-        - rule_id: ESP_JURISDICTION_ENUM
-          type: ACCEPTED_VALUES
-          parameters:
-            values:
-              - NSW
-              - VIC
-              - QLD
-              - WA
-              - SA
-              - TAS
-              - ACT
-              - NT
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            jurisdictionCode must be a supported Australian state or territory code.
-
-    - name: servicePointClassification
-      data_type: string
-      logical_type: energy_service_point_classification
-      required: true
-      nullable: false
-      accepted:
+    - property: g3:domainType
+      value: australian_state_or_territory_code
+    - property: g3:accepted
+      value:
         values:
-          - SMALL
-          - LARGE
-          - GENERATOR
-          - WHOLESALE
-          - NON_CONTEST_UNMETERED_LOAD
-          - NON_REGISTERED_EMBEDDED_GENERATOR
-          - DISTRIBUTION_WHOLESALE
-          - EXTERNAL_PROFILE
-      example: "SMALL"
-      sensitivity:
-        classification: CONFIDENTIAL
+        - NSW
+        - VIC
+        - QLD
+        - WA
+        - SA
+        - TAS
+        - ACT
+        - NT
+  - name: servicePointClassification
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: CONFIDENTIAL
+    examples:
+    - SMALL
+    quality:
+    - id: ESP_CLASSIFICATION_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - SMALL
+        - LARGE
+        - GENERATOR
+        - WHOLESALE
+        - NON_CONTEST_UNMETERED_LOAD
+        - NON_REGISTERED_EMBEDDED_GENERATOR
+        - DISTRIBUTION_WHOLESALE
+        - EXTERNAL_PROFILE
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        servicePointClassification must be one of the supported source values.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
         is_pii: false
         handling: RESTRICT_ACCESS
-      quality_rules:
-        - rule_id: ESP_CLASSIFICATION_ENUM
-          type: ACCEPTED_VALUES
-          parameters:
-            values:
-              - SMALL
-              - LARGE
-              - GENERATOR
-              - WHOLESALE
-              - NON_CONTEST_UNMETERED_LOAD
-              - NON_REGISTERED_EMBEDDED_GENERATOR
-              - DISTRIBUTION_WHOLESALE
-              - EXTERNAL_PROFILE
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            servicePointClassification must be one of the supported source values.
-
-    - name: servicePointStatus
-      data_type: string
-      logical_type: energy_service_point_status
-      required: true
-      nullable: false
-      accepted:
+    - property: g3:domainType
+      value: energy_service_point_classification
+    - property: g3:accepted
+      value:
         values:
-          - ACTIVE
-          - DE_ENERGISED
-          - GREENFIELD
-          - OFF_MARKET
-          - EXTINCT
-      example: "ACTIVE"
-      sensitivity:
-        classification: CONFIDENTIAL
+        - SMALL
+        - LARGE
+        - GENERATOR
+        - WHOLESALE
+        - NON_CONTEST_UNMETERED_LOAD
+        - NON_REGISTERED_EMBEDDED_GENERATOR
+        - DISTRIBUTION_WHOLESALE
+        - EXTERNAL_PROFILE
+  - name: servicePointStatus
+    logicalType: string
+    physicalType: string
+    required: true
+    classification: CONFIDENTIAL
+    examples:
+    - ACTIVE
+    quality:
+    - id: ESP_STATUS_ENUM
+      type: library
+      metric: invalidValues
+      arguments:
+        values:
+        - ACTIVE
+        - DE_ENERGISED
+        - GREENFIELD
+        - OFF_MARKET
+        - EXTINCT
+      mustBe: 0
+      severity: error
+      dimension: conformity
+      description: |
+        servicePointStatus must be one of the supported source values.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
         is_pii: false
         handling: RESTRICT_ACCESS
-      quality_rules:
-        - rule_id: ESP_STATUS_ENUM
-          type: ACCEPTED_VALUES
-          parameters:
-            values:
-              - ACTIVE
-              - DE_ENERGISED
-              - GREENFIELD
-              - OFF_MARKET
-              - EXTINCT
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            servicePointStatus must be one of the supported source values.
-
-    - name: validFromDate
-      data_type: string
-      logical_type: date
-      required: true
-      nullable: true
-      accepted:
-        format: ISO_8601_DATE
-      example: "2024-08-19"
-      sensitivity:
-        classification: CONFIDENTIAL
+    - property: g3:domainType
+      value: energy_service_point_status
+    - property: g3:accepted
+      value:
+        values:
+        - ACTIVE
+        - DE_ENERGISED
+        - GREENFIELD
+        - OFF_MARKET
+        - EXTINCT
+  - name: validFromDate
+    logicalType: date
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      format: ISO_8601_DATE
+    examples:
+    - '2024-08-19'
+    quality:
+    - id: ESP_VALID_FROM_DATE_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_DATE_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        validFromDate must be parseable as a date when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
         is_pii: false
         handling: RESTRICT_OR_GENERALISE
-      quality_rules:
-        - rule_id: ESP_VALID_FROM_DATE_PARSEABLE
-          type: PARSEABLE_DATE_IF_PRESENT
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            validFromDate must be parseable as a date when supplied.
-
-    - name: lastUpdateDateTime
-      data_type: string
-      logical_type: timestamp
-      required: true
-      nullable: true
-      accepted:
-        format: ISO_8601_TIMESTAMP
-      example: "2026-06-30T14:15:00Z"
-      sensitivity:
-        classification: INTERNAL
+    - property: g3:domainType
+      value: date
+  - name: lastUpdateDateTime
+    logicalType: timestamp
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: ISO_8601_TIMESTAMP
+    examples:
+    - '2026-06-30T14:15:00Z'
+    quality:
+    - id: ESP_LAST_UPDATE_TIMESTAMP_PARSEABLE
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: PARSEABLE_TIMESTAMP_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        lastUpdateDateTime must be parseable as a timestamp when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
         is_pii: false
         handling: NONE
-      quality_rules:
-        - rule_id: ESP_LAST_UPDATE_TIMESTAMP_PARSEABLE
-          type: PARSEABLE_TIMESTAMP_IF_PRESENT
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            lastUpdateDateTime must be parseable as a timestamp when supplied.
-
-    - name: isGenerator
-      data_type: bool
-      logical_type: generator_flag
-      required: true
-      nullable: false
-      accepted:
+    - property: g3:domainType
+      value: timestamp
+  - name: isGenerator
+    logicalType: boolean
+    physicalType: bool
+    required: true
+    classification: INTERNAL
+    examples:
+    - false
+    quality:
+    - id: ESP_IS_GENERATOR_BOOLEAN
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: BOOLEAN
+      severity: error
+      dimension: conformity
+      description: isGenerator must be a boolean value.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
+        is_pii: false
+        handling: NONE
+    - property: g3:domainType
+      value: generator_flag
+    - property: g3:accepted
+      value:
         values:
-          - true
-          - false
-      example: false
-      sensitivity:
-        classification: INTERNAL
-        is_pii: false
-        handling: NONE
-      quality_rules:
-        - rule_id: ESP_IS_GENERATOR_BOOLEAN
-          type: BOOLEAN
-          severity: ERROR
-          action: QUARANTINE
-          description: "isGenerator must be a boolean value."
-
-    - name: location
-      data_type: string
-      logical_type: cdr_energy_service_point_location_json
-      required: true
-      nullable: true
-      accepted:
-        format: JSON_OBJECT
-        schema_reference: CDR_EnergyServicePointLocation
-        exact_schema_status: TBD_FROM_GENERATOR_CONFIG
-      example: '{"addressUType":"simple","simple":{"addressLine1":"42 Harbour Street","city":"Melbourne","state":"VIC","postcode":"3000"}}'
-      sensitivity:
-        classification: HIGHLY_CONFIDENTIAL
+        - true
+        - false
+  - name: location
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    logicalTypeOptions:
+      format: JSON_OBJECT
+    examples:
+    - '{"addressUType":"simple","simple":{"addressLine1":"42 Harbour Street","city":"Melbourne","state":"VIC","postcode":"3000"}}'
+    quality:
+    - id: ESP_LOCATION_JSON
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: VALID_JSON_OBJECT_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        location must contain a valid JSON object when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
         is_pii: true
         pii_type: PRECISE_ADDRESS_INFORMATION
         handling: REDACT_OR_GENERALISE
-      quality_rules:
-        - rule_id: ESP_LOCATION_JSON
-          type: VALID_JSON_OBJECT_IF_PRESENT
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            location must contain a valid JSON object when supplied.
-
-    - name: distributionLossFactor
-      data_type: string
-      logical_type: cdr_distribution_loss_factor_json
-      required: true
-      nullable: true
-      accepted:
-        format: JSON_OBJECT
-        required_keys:
+    - property: g3:domainType
+      value: cdr_energy_service_point_location_json
+    - property: g3:accepted
+      value:
+        schema_reference: CDR_EnergyServicePointLocation
+        exact_schema_status: TBD_FROM_GENERATOR_CONFIG
+  - name: distributionLossFactor
+    logicalType: string
+    physicalType: string
+    classification: INTERNAL
+    logicalTypeOptions:
+      format: JSON_OBJECT
+    examples:
+    - '{"code":"DLF001","description":"Standard distribution loss factor","lossValue":"1.052"}'
+    quality:
+    - id: ESP_DLF_JSON
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: VALID_JSON_OBJECT_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        distributionLossFactor must contain a valid JSON object when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: ESP_DLF_REQUIRED_KEYS
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: JSON_REQUIRED_KEYS_IF_PRESENT
+        parameters:
+          keys:
           - code
           - description
           - lossValue
-      example: '{"code":"DLF001","description":"Standard distribution loss factor","lossValue":"1.052"}'
-      sensitivity:
-        classification: INTERNAL
+      severity: error
+      dimension: conformity
+      description: |
+        distributionLossFactor must contain code, description, and lossValue.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: ESP_DLF_LOSS_VALUE_DECIMAL
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: JSON_DECIMAL_PATH_IF_PRESENT
+        parameters:
+          path: $.lossValue
+      severity: error
+      dimension: conformity
+      description: |
+        distributionLossFactor.lossValue must be parseable as a decimal.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
         is_pii: false
         handling: NONE
-      quality_rules:
-        - rule_id: ESP_DLF_JSON
-          type: VALID_JSON_OBJECT_IF_PRESENT
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            distributionLossFactor must contain a valid JSON object when supplied.
-
-        - rule_id: ESP_DLF_REQUIRED_KEYS
-          type: JSON_REQUIRED_KEYS_IF_PRESENT
-          parameters:
-            keys:
-              - code
-              - description
-              - lossValue
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            distributionLossFactor must contain code, description, and lossValue.
-
-        - rule_id: ESP_DLF_LOSS_VALUE_DECIMAL
-          type: JSON_DECIMAL_PATH_IF_PRESENT
-          parameters:
-            path: "$.lossValue"
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            distributionLossFactor.lossValue must be parseable as a decimal.
-
-    - name: relatedParticipants
-      data_type: string
-      logical_type: cdr_related_energy_participants_json
-      required: true
-      nullable: true
-      accepted:
-        format: JSON_ARRAY
-        min_items: 1
-        max_items: 3
-        item_role_values:
+    - property: g3:domainType
+      value: cdr_distribution_loss_factor_json
+    - property: g3:accepted
+      value:
+        required_keys:
+        - code
+        - description
+        - lossValue
+  - name: relatedParticipants
+    logicalType: string
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      format: JSON_ARRAY
+    examples:
+    - '[{"role":"FRMP","participantId":"PARTICIPANT-001"}]'
+    quality:
+    - id: ESP_RELATED_PARTICIPANTS_JSON
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: VALID_JSON_ARRAY_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        relatedParticipants must contain a valid JSON array when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: ESP_RELATED_PARTICIPANTS_COUNT
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: JSON_ARRAY_SIZE_IF_PRESENT
+        parameters:
+          min_items: 1
+          max_items: 3
+      severity: error
+      dimension: conformity
+      description: |
+        relatedParticipants must contain between one and three items.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: ESP_RELATED_PARTICIPANT_ROLES
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: JSON_ARRAY_FIELD_ACCEPTED_VALUES_IF_PRESENT
+        parameters:
+          field: role
+          values:
           - FRMP
           - LR
           - DRSP
           - ENM
           - NSP
           - RECB
-        exact_item_schema_status: TBD_FROM_GENERATOR_CONFIG
-      example: '[{"role":"FRMP","participantId":"PARTICIPANT-001"}]'
-      sensitivity:
-        classification: CONFIDENTIAL
+      severity: error
+      dimension: conformity
+      description: |
+        Every related participant role must be one of the supported source roles.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
         is_pii: false
         handling: RESTRICT_ACCESS
-      quality_rules:
-        - rule_id: ESP_RELATED_PARTICIPANTS_JSON
-          type: VALID_JSON_ARRAY_IF_PRESENT
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            relatedParticipants must contain a valid JSON array when supplied.
-
-        - rule_id: ESP_RELATED_PARTICIPANTS_COUNT
-          type: JSON_ARRAY_SIZE_IF_PRESENT
-          parameters:
-            min_items: 1
-            max_items: 3
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            relatedParticipants must contain between one and three items.
-
-        - rule_id: ESP_RELATED_PARTICIPANT_ROLES
-          type: JSON_ARRAY_FIELD_ACCEPTED_VALUES_IF_PRESENT
-          parameters:
-            field: role
-            values:
-              - FRMP
-              - LR
-              - DRSP
-              - ENM
-              - NSP
-              - RECB
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            Every related participant role must be one of the supported source roles.
-
-    - name: consumerProfile
-      data_type: string
-      logical_type: cdr_consumer_profile_json
-      required: true
-      nullable: true
-      accepted:
-        format: JSON_OBJECT
-        required_keys:
+    - property: g3:domainType
+      value: cdr_related_energy_participants_json
+    - property: g3:accepted
+      value:
+        min_items: 1
+        max_items: 3
+        item_role_values:
+        - FRMP
+        - LR
+        - DRSP
+        - ENM
+        - NSP
+        - RECB
+        exact_item_schema_status: TBD_FROM_GENERATOR_CONFIG
+  - name: consumerProfile
+    logicalType: string
+    physicalType: string
+    classification: CONFIDENTIAL
+    logicalTypeOptions:
+      format: JSON_OBJECT
+    examples:
+    - '{"classification":"RESIDENTIAL","threshold":"LOW"}'
+    quality:
+    - id: ESP_CONSUMER_PROFILE_JSON
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: VALID_JSON_OBJECT_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: |
+        consumerProfile must contain a valid JSON object when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: ESP_CONSUMER_PROFILE_REQUIRED_KEYS
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: JSON_REQUIRED_KEYS_IF_PRESENT
+        parameters:
+          keys:
           - classification
           - threshold
-        classification_values:
+      severity: error
+      dimension: conformity
+      description: |
+        consumerProfile must contain classification and threshold.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: ESP_CONSUMER_PROFILE_CLASSIFICATION
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: JSON_FIELD_ACCEPTED_VALUES_IF_PRESENT
+        parameters:
+          path: $.classification
+          values:
           - BUSINESS
           - RESIDENTIAL
-        threshold_values:
+      severity: error
+      dimension: conformity
+      description: |
+        consumerProfile.classification must be BUSINESS or RESIDENTIAL.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: ESP_CONSUMER_PROFILE_THRESHOLD
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: JSON_FIELD_ACCEPTED_VALUES_IF_PRESENT
+        parameters:
+          path: $.threshold
+          values:
           - LOW
           - MEDIUM
           - HIGH
-      example: '{"classification":"RESIDENTIAL","threshold":"LOW"}'
-      sensitivity:
-        classification: CONFIDENTIAL
+      severity: error
+      dimension: conformity
+      description: |
+        consumerProfile.threshold must be LOW, MEDIUM, or HIGH.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
         is_pii: true
         pii_type: ENERGY_CONSUMER_PROFILE
         handling: RESTRICT_OR_GENERALISE
-      quality_rules:
-        - rule_id: ESP_CONSUMER_PROFILE_JSON
-          type: VALID_JSON_OBJECT_IF_PRESENT
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            consumerProfile must contain a valid JSON object when supplied.
-
-        - rule_id: ESP_CONSUMER_PROFILE_REQUIRED_KEYS
-          type: JSON_REQUIRED_KEYS_IF_PRESENT
-          parameters:
-            keys:
-              - classification
-              - threshold
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            consumerProfile must contain classification and threshold.
-
-        - rule_id: ESP_CONSUMER_PROFILE_CLASSIFICATION
-          type: JSON_FIELD_ACCEPTED_VALUES_IF_PRESENT
-          parameters:
-            path: "$.classification"
-            values:
-              - BUSINESS
-              - RESIDENTIAL
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            consumerProfile.classification must be BUSINESS or RESIDENTIAL.
-
-        - rule_id: ESP_CONSUMER_PROFILE_THRESHOLD
-          type: JSON_FIELD_ACCEPTED_VALUES_IF_PRESENT
-          parameters:
-            path: "$.threshold"
-            values:
-              - LOW
-              - MEDIUM
-              - HIGH
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            consumerProfile.threshold must be LOW, MEDIUM, or HIGH.
-
-    - name: meters
-      data_type: string
-      logical_type: cdr_energy_meters_json
-      required: true
-      nullable: true
-      accepted:
-        format: JSON_ARRAY
-        min_items: 1
-        max_items: 2
-        manufacturer_values:
+    - property: g3:domainType
+      value: cdr_consumer_profile_json
+    - property: g3:accepted
+      value:
+        required_keys:
+        - classification
+        - threshold
+        classification_values:
+        - BUSINESS
+        - RESIDENTIAL
+        threshold_values:
+        - LOW
+        - MEDIUM
+        - HIGH
+  - name: meters
+    logicalType: string
+    physicalType: string
+    classification: HIGHLY_CONFIDENTIAL
+    logicalTypeOptions:
+      format: JSON_ARRAY
+    examples:
+    - '[{"type":"SMART","manufacturer":"Itron","status":"ACTIVE"}]'
+    quality:
+    - id: ESP_METERS_JSON
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: VALID_JSON_ARRAY_IF_PRESENT
+      severity: error
+      dimension: conformity
+      description: meters must contain a valid JSON array when supplied.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: ESP_METERS_COUNT
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: JSON_ARRAY_SIZE_IF_PRESENT
+        parameters:
+          min_items: 1
+          max_items: 2
+      severity: error
+      dimension: conformity
+      description: meters must contain one or two meter items.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: ESP_METERS_REQUIRED_KEYS
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: JSON_ARRAY_ITEMS_REQUIRED_KEYS_IF_PRESENT
+        parameters:
+          keys:
+          - type
+          - manufacturer
+          - status
+      severity: error
+      dimension: conformity
+      description: |
+        Every meter item must contain type, manufacturer, and status.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    - id: ESP_METER_MANUFACTURER_ENUM
+      type: custom
+      engine: g3-pipeline
+      implementation:
+        ruleType: JSON_ARRAY_FIELD_ACCEPTED_VALUES_IF_PRESENT
+        parameters:
+          field: manufacturer
+          values:
           - Landis+Gyr
           - Itron
           - Honeywell
           - ABB
-        required_item_keys:
-          - type
-          - manufacturer
-          - status
-        exact_item_schema_status: TBD_FROM_GENERATOR_CONFIG
-      example: '[{"type":"SMART","manufacturer":"Itron","status":"ACTIVE"}]'
-      sensitivity:
-        classification: HIGHLY_CONFIDENTIAL
+      severity: error
+      dimension: conformity
+      description: |
+        Every meter manufacturer must be one of the supported source values.
+      customProperties:
+      - property: g3:action
+        value: QUARANTINE
+    customProperties:
+    - property: g3:sensitivity
+      value:
         is_pii: true
         pii_type: METERING_ASSET_INFORMATION
         handling: REDACT_OR_RESTRICT
-      quality_rules:
-        - rule_id: ESP_METERS_JSON
-          type: VALID_JSON_ARRAY_IF_PRESENT
-          severity: ERROR
-          action: QUARANTINE
-          description: "meters must contain a valid JSON array when supplied."
-
-        - rule_id: ESP_METERS_COUNT
-          type: JSON_ARRAY_SIZE_IF_PRESENT
-          parameters:
-            min_items: 1
-            max_items: 2
-          severity: ERROR
-          action: QUARANTINE
-          description: "meters must contain one or two meter items."
-
-        - rule_id: ESP_METERS_REQUIRED_KEYS
-          type: JSON_ARRAY_ITEMS_REQUIRED_KEYS_IF_PRESENT
-          parameters:
-            keys:
-              - type
-              - manufacturer
-              - status
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            Every meter item must contain type, manufacturer, and status.
-
-        - rule_id: ESP_METER_MANUFACTURER_ENUM
-          type: JSON_ARRAY_FIELD_ACCEPTED_VALUES_IF_PRESENT
-          parameters:
-            field: manufacturer
-            values:
-              - Landis+Gyr
-              - Itron
-              - Honeywell
-              - ABB
-          severity: ERROR
-          action: QUARANTINE
-          description: >
-            Every meter manufacturer must be one of the supported source values.
-
-# -----------------------------------------------------------------------------
-# 6. Dataset-level quality rules
-# -----------------------------------------------------------------------------
-dataset_quality_rules:
-
-  - rule_id: ESP_SERVICE_POINT_ID_UNIQUE
-    type: UNIQUE
-    columns:
-      - servicePointId
-    severity: ERROR
-    action: QUARANTINE
-    description: "servicePointId must be unique across the dataset."
-
-  - rule_id: ESP_NATIONAL_METERING_ID_UNIQUE_IF_PRESENT
-    type: UNIQUE_IF_PRESENT
-    columns:
-      - nationalMeteringId
-    severity: ERROR
-    action: QUARANTINE
-    description: >
-      A populated nationalMeteringId must not be shared by multiple service points.
-
-  - rule_id: ESP_ACCOUNT_LINK_PRESENT
-    type: NOT_NULL
-    columns:
-      - energyAccountId
-    severity: WARNING
-    action: ALLOW_WITH_WARNING
-    description: >
-      A service point should identify its energy account. The physical schema
-      currently permits energyAccountId to be null.
-
-  - rule_id: ESP_CUSTOMER_LINK_PRESENT
-    type: NOT_NULL
-    columns:
-      - global_id
-    severity: WARNING
-    action: ALLOW_WITH_WARNING
-    description: >
-      A service point should identify its customer. The physical schema
-      currently permits global_id to be null.
-
-  - rule_id: ESP_ACCOUNT_CUSTOMER_CONSISTENT
-    type: REFERENCE_PAIR_CONSISTENT
-    parameters:
-      reference_dataset: energy_accounts
-      source_columns:
-        - energyAccountId
-        - global_id
-      reference_columns:
-        - energyAccountId
-        - global_id
-      ignore_nulls: true
-    severity: ERROR
-    action: QUARANTINE
-    description: >
-      energyAccountId and global_id must refer to the same energy account record.
-
-  - rule_id: ESP_VALID_FROM_NOT_IN_FUTURE
-    type: DATE_NOT_IN_FUTURE
-    columns:
-      - validFromDate
-    severity: WARNING
-    action: ALLOW_WITH_WARNING
-    description: >
-      validFromDate should not be later than the pipeline processing date.
-
-  - rule_id: ESP_LAST_UPDATE_NOT_IN_FUTURE
-    type: TIMESTAMP_NOT_IN_FUTURE
-    columns:
-      - lastUpdateDateTime
-    severity: WARNING
-    action: ALLOW_WITH_WARNING
-    description: >
-      lastUpdateDateTime should not be later than the pipeline processing timestamp.
-
-  - rule_id: ESP_LAST_UPDATE_NOT_BEFORE_VALID_FROM
-    type: TIMESTAMP_NOT_BEFORE_DATE
-    parameters:
-      timestamp_column: lastUpdateDateTime
-      date_column: validFromDate
-      ignore_nulls: true
-    severity: WARNING
-    action: ALLOW_WITH_WARNING
-    description: >
-      lastUpdateDateTime should not be earlier than validFromDate.
-
-  - rule_id: ESP_ACTIVE_ACCOUNT_EXPECTED
-    type: REFERENCE_CONDITION_FOR_VALUES
-    parameters:
-      reference_dataset: energy_accounts
-      source_key:
-        energyAccountId: energyAccountId
-      source_column: servicePointStatus
-      source_values:
-        - ACTIVE
-      expected_condition:
-        column: openStatus
-        equals: OPEN
-      ignore_missing_reference: false
-    severity: WARNING
-    action: ALLOW_WITH_WARNING
-    description: >
-      An ACTIVE service point is normally expected to belong to an OPEN energy account.
-
-  - rule_id: ESP_GENERATOR_RATIO_MONITORING
-    type: POPULATION_RATIO_RANGE
-    parameters:
-      column: isGenerator
-      condition:
-        equals: true
-      min_ratio: 0.02
-      max_ratio: 0.10
-      comparison_scope: COMPLETE_SNAPSHOT
-    severity: WARNING
-    action: ALLOW_WITH_WARNING
-    description: >
-      The source generator produces approximately five percent generator service
-      points; a complete-snapshot ratio outside two to ten percent should be investigated.
-
-  - rule_id: ESP_NESTED_CONTEXT_PRESENT
-    type: ANY_NOT_NULL
-    columns:
-      - location
-      - distributionLossFactor
-      - relatedParticipants
-      - consumerProfile
-      - meters
-    severity: WARNING
-    action: ALLOW_WITH_WARNING
-    description: >
-      At least one nested CDR context object should normally be present.
-
-# -----------------------------------------------------------------------------
-# 7. Derived checks for Silver and AI-ready context
-# -----------------------------------------------------------------------------
-derived_quality_checks:
-
+    - property: g3:domainType
+      value: cdr_energy_meters_json
+    - property: g3:accepted
+      value:
+        min_items: 1
+        max_items: 2
+        manufacturer_values:
+        - Landis+Gyr
+        - Itron
+        - Honeywell
+        - ABB
+        required_item_keys:
+        - type
+        - manufacturer
+        - status
+        exact_item_schema_status: TBD_FROM_GENERATOR_CONFIG
+customProperties:
+- property: g3:source
+  value:
+    category: DATABASE
+    system_type: POSTGRESQL
+    source_object: public.energy_service_points
+    authoritative: true
+- property: g3:ingestion
+  value:
+    mechanism: DEBEZIUM_CDC
+    transport: APACHE_KAFKA
+    landing:
+      format: JSONL
+      path_template: s3://<bucket>/bronze/landing/cdc/energy_service_points/
+      immutable: true
+    bronze_target: bronze.cdc_changes
+    cdc:
+      supported_operations:
+      - SNAPSHOT
+      - INSERT
+      - UPDATE
+      - DELETE
+      ordering_metadata:
+      - source_lsn
+      - kafka_partition
+      - kafka_offset
+- property: g3:lifecycle
+  value:
+    owner: TBD
+    approver: TBD
+    effective_from: null
+- property: g3:dataset
+  value:
+    expected_rows_scale_1: 3000
+    physical_schema_ref: dev-tools/datagen/output/master-schema.json#/energy_service_points
+- property: g3:alternateKeys
+  value:
+  - nationalMeteringId
+- property: g3:derivedQualityChecks
+  value:
   - rule_id: ESP_ACTIVE_FLAG_DERIVATION
     type: DERIVED_BOOLEAN
-    expression: "servicePointStatus = 'ACTIVE'"
+    expression: servicePointStatus = 'ACTIVE'
     output_field: is_active
-    description: >
+    description: |
       Silver may derive is_active from servicePointStatus.
-
   - rule_id: ESP_LOCATION_GENERALISATION
     type: PRIVACY_TRANSFORMATION
     source_field: location
     output_fields:
-      - location_state
-      - location_postcode_generalised
+    - location_state
+    - location_postcode_generalised
     prohibited_output:
-      - exact_street_address
-      - exact_unit_number
-    description: >
-      AI-ready outputs may retain approved generalised location context but must
-      not expose the full service-point address.
-
+    - exact_street_address
+    - exact_unit_number
+    description: |
+      AI-ready outputs may retain approved generalised location context but must not expose the full service-point address.
   - rule_id: ESP_METER_SUMMARY_DERIVATION
     type: DERIVED_SUMMARY
     source_field: meters
     output_fields:
-      - meter_count
-      - meter_manufacturers
-    description: >
-      Silver may derive a non-identifying meter summary after the nested meter
-      array has passed validation.
-
-# -----------------------------------------------------------------------------
-# 8. Notes for the team
-# -----------------------------------------------------------------------------
-notes:
-  - >
-    This contract follows the authoritative physical source schema and includes
-    all fifteen fields defined for energy_service_points.
-  - >
-    The exact nested schema for location, relatedParticipants, and meters must
-    be copied from the generator or approved CDR schema before this contract is
-    promoted to APPROVED.
-  - >
-    The source explicitly documents the required distributionLossFactor keys,
-    related-participant role values, consumer-profile values, meter count, and
-    meter manufacturers. The contract validates only those supported details.
-  - >
-    Meter type and meter status accepted values are not listed in the source
-    description, so this contract requires those keys but does not invent an
-    accepted-value list.
-  - >
-    servicePointId, nationalMeteringId, location, consumerProfile, and meters
-    can expose sensitive utility and location context and must be masked,
-    generalised, redacted, or access-restricted before AI consumption.
-  - >
-    The active-account and timestamp-order checks are proposed business
-    consistency warnings. They should be confirmed with the team before the
-    contract is promoted from DRAFT to APPROVED.
+    - meter_count
+    - meter_manufacturers
+    description: |
+      Silver may derive a non-identifying meter summary after the nested meter array has passed validation.
+- property: g3:notes
+  value:
+  - |
+    This contract follows the authoritative physical source schema and includes all fifteen fields defined for energy_service_points.
+  - |
+    The exact nested schema for location, relatedParticipants, and meters must be copied from the generator or approved CDR schema before this contract is promoted to APPROVED.
+  - |
+    The source explicitly documents the required distributionLossFactor keys, related-participant role values, consumer-profile values, meter count, and meter manufacturers. The contract validates only those supported details.
+  - |
+    Meter type and meter status accepted values are not listed in the source description, so this contract requires those keys but does not invent an accepted-value list.
+  - |
+    servicePointId, nationalMeteringId, location, consumerProfile, and meters can expose sensitive utility and location context and must be masked, generalised, redacted, or access-restricted before AI consumption.
+  - The active-account and timestamp-order checks are proposed business consistency warnings. They should be confirmed with
+    the team before the contract is promoted from DRAFT to APPROVED.
