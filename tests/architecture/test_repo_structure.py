@@ -1,5 +1,6 @@
 import json
 import re
+import importlib.util
 import unittest
 from pathlib import Path
 
@@ -161,10 +162,10 @@ class ArchitectureTests(unittest.TestCase):
             for path in sorted((ROOT / "pipelines/bronze").glob("*.py"))
         )
         support = (ROOT / "pipelines/framework/landing_stream_reader.py").read_text(encoding="utf-8")
-        registry = __import__(
-            "pipelines.framework.source_dataset_registry",
-            fromlist=["CDC_DATASETS", "EVENT_DATASETS", "FILE_DATASETS"],
-        )
+        registry_path = ROOT / "pipelines/framework/source_dataset_registry.py"
+        spec = importlib.util.spec_from_file_location("source_dataset_registry", registry_path)
+        registry = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(registry)
         self.assertEqual(len(registry.CDC_DATASETS), 23)
         self.assertEqual(len(registry.EVENT_DATASETS), 5)
         self.assertEqual(len(registry.FILE_DATASETS), 4)
