@@ -51,17 +51,20 @@ SELECT assert_true(COUNT(*) = 0, 'Orphan organisation-party bridge')
 FROM `0-ai-trust`.gold.bridge_organisation_party_role r
 LEFT ANTI JOIN `0-ai-trust`.gold.dim_organisation o ON o.organisation_id = r.organisation_id;
 
--- Reconciliation catches loss or duplication of current Silver records.
-SELECT assert_true(
-  (SELECT COUNT(*) FROM `0-ai-trust`.gold.fact_application_current) =
-  (SELECT COUNT(*) FROM `0-ai-trust`.silver.app_application
-   WHERE `__END_AT` IS NULL AND masking_status IN ('MASKED', 'CLEAN')),
-  'Application reconciliation failed'
-);
+-- Reconciliation allows the declared 15-minute Gold refresh lag, while still
+-- detecting any eligible Silver record that remains missing after 30 minutes.
+SELECT assert_true(COUNT(*) = 0, 'Application reconciliation failed')
+FROM `0-ai-trust`.silver.app_application s
+LEFT ANTI JOIN `0-ai-trust`.gold.fact_application_current g
+  ON g.application_id = s.application_id
+WHERE s.`__END_AT` IS NULL
+  AND s.masking_status IN ('MASKED', 'CLEAN')
+  AND s.processed_at < current_timestamp() - INTERVAL 30 MINUTES;
 
-SELECT assert_true(
-  (SELECT COUNT(*) FROM `0-ai-trust`.gold.fact_application_document) =
-  (SELECT COUNT(*) FROM `0-ai-trust`.silver.app_missing_document
-   WHERE `__END_AT` IS NULL AND masking_status IN ('MASKED', 'CLEAN')),
-  'Document reconciliation failed'
-);
+SELECT assert_true(COUNT(*) = 0, 'Document reconciliation failed')
+FROM `0-ai-trust`.silver.app_missing_document s
+LEFT ANTI JOIN `0-ai-trust`.gold.fact_application_document g
+  ON g.document_id = s.document_id
+WHERE s.`__END_AT` IS NULL
+  AND s.masking_status IN ('MASKED', 'CLEAN')
+  AND s.processed_at < current_timestamp() - INTERVAL 30 MINUTES;

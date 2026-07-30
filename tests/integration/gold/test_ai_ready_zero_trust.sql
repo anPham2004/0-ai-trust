@@ -24,4 +24,7 @@ SELECT assert_true(COUNT(*) = 0, 'Restricted compliance field leaked outside ver
 FROM `0-ai-trust`.information_schema.columns
 WHERE table_schema = 'gold'
   AND LOWER(column_name) IN ('risk_rating', 'pep_status', 'sanctions_check')
+  -- SDP exposes internal MV backing tables in information_schema; they are
+  -- implementation storage for the governed public verification fact.
+  AND table_name NOT RLIKE '^__materialization_'
   AND table_name <> 'fact_verification_current';

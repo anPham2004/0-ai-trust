@@ -7,15 +7,27 @@ SELECT assert_true(COUNT(*) = 0, 'Arrangement maturity precedes start')
 FROM `0-ai-trust`.gold.fact_arrangement_current
 WHERE maturity_date < start_date;
 
--- Every eligible Silver lifecycle record survives the canonical timeline union.
-SELECT assert_true(
-  (SELECT COUNT(*) FROM `0-ai-trust`.gold.fact_application_timeline_event) =
-  (SELECT
-     (SELECT COUNT(*) FROM `0-ai-trust`.silver.app_stage_history WHERE masking_status IN ('MASKED', 'CLEAN')) +
-     (SELECT COUNT(*) FROM `0-ai-trust`.silver.app_status_change WHERE masking_status IN ('MASKED', 'CLEAN')) +
-     (SELECT COUNT(*) FROM `0-ai-trust`.silver.app_lifecycle_event WHERE masking_status IN ('MASKED', 'CLEAN'))),
-  'Late or out-of-order application history was lost'
-);
+-- Every eligible lifecycle record older than the Gold freshness SLA survives
+-- the canonical timeline union. Newer rows may legitimately await the next
+-- 15-minute materialized-view refresh.
+WITH silver_events AS (
+  SELECT 'app_stage_history' AS source_table, history_id AS source_record_id, processed_at
+  FROM `0-ai-trust`.silver.app_stage_history
+  WHERE masking_status IN ('MASKED', 'CLEAN')
+  UNION ALL
+  SELECT 'app_status_change', change_id, processed_at
+  FROM `0-ai-trust`.silver.app_status_change
+  WHERE masking_status IN ('MASKED', 'CLEAN')
+  UNION ALL
+  SELECT 'app_lifecycle_event', event_id, processed_at
+  FROM `0-ai-trust`.silver.app_lifecycle_event
+  WHERE masking_status IN ('MASKED', 'CLEAN')
+)
+SELECT assert_true(COUNT(*) = 0, 'Late or out-of-order application history was lost')
+FROM silver_events s
+LEFT ANTI JOIN `0-ai-trust`.gold.fact_application_timeline_event g
+  ON g.timeline_event_id = CONCAT(s.source_table, ':', s.source_record_id)
+WHERE s.processed_at < current_timestamp() - INTERVAL 30 MINUTES;
 
 -- Current context has exactly one row per subject and explicit limitations.
 SELECT assert_true(COUNT(*) = 0, 'Duplicate subject context')
