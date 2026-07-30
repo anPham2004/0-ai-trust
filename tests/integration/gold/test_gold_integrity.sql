@@ -56,23 +56,35 @@ FROM (
 ) records
 WHERE dq_status = 'FAILED';
 
--- Required AI-facing joins have no orphan parents.
-SELECT assert_true(COUNT(*) = 0, 'Orphan application customer')
-FROM `0-ai-trust`.gold.fact_application_current a
-LEFT ANTI JOIN `0-ai-trust`.gold.dim_customer c ON c.customer_id = a.customer_id
-WHERE a.customer_id IS NOT NULL;
-
-SELECT assert_true(COUNT(*) = 0, 'Orphan application document')
-FROM `0-ai-trust`.gold.fact_application_document d
-LEFT ANTI JOIN `0-ai-trust`.gold.fact_application_current a ON a.application_id = d.application_id;
-
-SELECT assert_true(COUNT(*) = 0, 'Orphan application timeline event')
-FROM `0-ai-trust`.gold.fact_application_timeline_event e
-LEFT ANTI JOIN `0-ai-trust`.gold.fact_application_current a ON a.application_id = e.application_id;
-
-SELECT assert_true(COUNT(*) = 0, 'Orphan organisation-party bridge')
-FROM `0-ai-trust`.gold.bridge_organisation_party_role r
-LEFT ANTI JOIN `0-ai-trust`.gold.dim_organisation o ON o.organisation_id = r.organisation_id;
+-- All 24 physical/optional FK relationships declared by the Gold model have
+-- no orphan child records. Nullable optional keys are excluded when absent.
+SELECT assert_true(COUNT(*) = 0, 'Orphan Gold foreign key')
+FROM (
+  SELECT 'application_customer' relation_name, a.application_id record_id FROM `0-ai-trust`.gold.fact_application_current a LEFT ANTI JOIN `0-ai-trust`.gold.dim_customer p ON p.customer_id = a.customer_id WHERE a.customer_id IS NOT NULL
+  UNION ALL SELECT 'document_application', d.document_id FROM `0-ai-trust`.gold.fact_application_document d LEFT ANTI JOIN `0-ai-trust`.gold.fact_application_current p ON p.application_id = d.application_id WHERE d.application_id IS NOT NULL
+  UNION ALL SELECT 'document_customer', d.document_id FROM `0-ai-trust`.gold.fact_application_document d LEFT ANTI JOIN `0-ai-trust`.gold.dim_customer p ON p.customer_id = d.customer_id WHERE d.customer_id IS NOT NULL
+  UNION ALL SELECT 'timeline_application', e.timeline_event_id FROM `0-ai-trust`.gold.fact_application_timeline_event e LEFT ANTI JOIN `0-ai-trust`.gold.fact_application_current p ON p.application_id = e.application_id WHERE e.application_id IS NOT NULL
+  UNION ALL SELECT 'timeline_customer', e.timeline_event_id FROM `0-ai-trust`.gold.fact_application_timeline_event e LEFT ANTI JOIN `0-ai-trust`.gold.dim_customer p ON p.customer_id = e.customer_id WHERE e.customer_id IS NOT NULL
+  UNION ALL SELECT 'arrangement_customer', a.arrangement_id FROM `0-ai-trust`.gold.fact_arrangement_current a LEFT ANTI JOIN `0-ai-trust`.gold.dim_customer p ON p.customer_id = a.customer_id WHERE a.customer_id IS NOT NULL
+  UNION ALL SELECT 'arrangement_organisation', a.arrangement_id FROM `0-ai-trust`.gold.fact_arrangement_current a LEFT ANTI JOIN `0-ai-trust`.gold.dim_organisation p ON p.organisation_id = a.organisation_id WHERE a.organisation_id IS NOT NULL
+  UNION ALL SELECT 'party_role_organisation', r.relationship_id FROM `0-ai-trust`.gold.bridge_organisation_party_role r LEFT ANTI JOIN `0-ai-trust`.gold.dim_organisation p ON p.organisation_id = r.organisation_id WHERE r.organisation_id IS NOT NULL
+  UNION ALL SELECT 'party_role_customer', r.relationship_id FROM `0-ai-trust`.gold.bridge_organisation_party_role r LEFT ANTI JOIN `0-ai-trust`.gold.dim_customer p ON p.customer_id = r.customer_id WHERE r.customer_id IS NOT NULL
+  UNION ALL SELECT 'organisation_relationship_source', r.relationship_id FROM `0-ai-trust`.gold.bridge_organisation_relationship r LEFT ANTI JOIN `0-ai-trust`.gold.dim_organisation p ON p.organisation_id = r.source_organisation_id WHERE r.source_organisation_id IS NOT NULL
+  UNION ALL SELECT 'organisation_relationship_target', r.relationship_id FROM `0-ai-trust`.gold.bridge_organisation_relationship r LEFT ANTI JOIN `0-ai-trust`.gold.dim_organisation p ON p.organisation_id = r.target_organisation_id WHERE r.target_organisation_id IS NOT NULL
+  UNION ALL SELECT 'authority_application', b.application_id FROM `0-ai-trust`.gold.bridge_application_party_authority b LEFT ANTI JOIN `0-ai-trust`.gold.fact_application_current p ON p.application_id = b.application_id WHERE b.application_id IS NOT NULL
+  UNION ALL SELECT 'authority_organisation', b.application_id FROM `0-ai-trust`.gold.bridge_application_party_authority b LEFT ANTI JOIN `0-ai-trust`.gold.dim_organisation p ON p.organisation_id = b.organisation_id WHERE b.organisation_id IS NOT NULL
+  UNION ALL SELECT 'authority_customer', b.application_id FROM `0-ai-trust`.gold.bridge_application_party_authority b LEFT ANTI JOIN `0-ai-trust`.gold.dim_customer p ON p.customer_id = b.customer_id WHERE b.customer_id IS NOT NULL
+  UNION ALL SELECT 'verification_customer', v.kyc_id FROM `0-ai-trust`.gold.fact_verification_current v LEFT ANTI JOIN `0-ai-trust`.gold.dim_customer p ON p.customer_id = v.customer_id WHERE v.customer_id IS NOT NULL
+  UNION ALL SELECT 'verification_organisation', v.kyc_id FROM `0-ai-trust`.gold.fact_verification_current v LEFT ANTI JOIN `0-ai-trust`.gold.dim_organisation p ON p.organisation_id = v.organisation_id WHERE v.organisation_id IS NOT NULL
+  UNION ALL SELECT 'service_case_customer', c.case_id FROM `0-ai-trust`.gold.fact_service_case_current c LEFT ANTI JOIN `0-ai-trust`.gold.dim_customer p ON p.customer_id = c.customer_id WHERE c.customer_id IS NOT NULL
+  UNION ALL SELECT 'service_case_organisation', c.case_id FROM `0-ai-trust`.gold.fact_service_case_current c LEFT ANTI JOIN `0-ai-trust`.gold.dim_organisation p ON p.organisation_id = c.organisation_id WHERE c.organisation_id IS NOT NULL
+  UNION ALL SELECT 'service_case_application', c.case_id FROM `0-ai-trust`.gold.fact_service_case_current c LEFT ANTI JOIN `0-ai-trust`.gold.fact_application_current p ON p.application_id = c.application_id WHERE c.application_id IS NOT NULL
+  UNION ALL SELECT 'service_activity_customer', a.service_activity_id FROM `0-ai-trust`.gold.fact_service_activity a LEFT ANTI JOIN `0-ai-trust`.gold.dim_customer p ON p.customer_id = a.customer_id WHERE a.customer_id IS NOT NULL
+  UNION ALL SELECT 'service_activity_case', a.service_activity_id FROM `0-ai-trust`.gold.fact_service_activity a LEFT ANTI JOIN `0-ai-trust`.gold.fact_service_case_current p ON p.case_id = a.case_id WHERE a.case_id IS NOT NULL
+  UNION ALL SELECT 'service_activity_application', a.service_activity_id FROM `0-ai-trust`.gold.fact_service_activity a LEFT ANTI JOIN `0-ai-trust`.gold.fact_application_current p ON p.application_id = a.application_id WHERE a.application_id IS NOT NULL
+  UNION ALL SELECT 'context_customer', s.snapshot_id FROM `0-ai-trust`.gold.fact_subject_context_snapshot s LEFT ANTI JOIN `0-ai-trust`.gold.dim_customer p ON p.customer_id = s.customer_id WHERE s.customer_id IS NOT NULL
+  UNION ALL SELECT 'context_organisation', s.snapshot_id FROM `0-ai-trust`.gold.fact_subject_context_snapshot s LEFT ANTI JOIN `0-ai-trust`.gold.dim_organisation p ON p.organisation_id = s.organisation_id WHERE s.organisation_id IS NOT NULL
+) orphans;
 
 -- Reconciliation allows the declared 15-minute Gold refresh lag, while still
 -- detecting any eligible Silver record that remains missing after 30 minutes.

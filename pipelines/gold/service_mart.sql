@@ -132,7 +132,7 @@ UNION ALL
 SELECT
   e.global_id,
   d.customer_id,
-  e.case_id,
+  c.case_id,
   CONCAT('CASE_EVENT:', e.event_id) AS service_activity_id,
   c.application_id,
   e.event_timestamp AS activity_timestamp,
