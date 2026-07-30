@@ -63,9 +63,71 @@ WHERE `__END_AT` IS NULL
   AND masking_status IN ('MASKED', 'CLEAN');
 
 CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`.gold.dim_date
-COMMENT 'Role-playing calendar dimension; weekends are non-business days and holidays require an approved calendar'
+COMMENT 'Role-playing calendar dimension bounded by the minimum and maximum business dates observed in Silver'
 TBLPROPERTIES ('quality' = 'gold', 'data_classification' = 'Internal')
 AS
+WITH business_dates AS (
+  SELECT explode(array(to_date(customer_since), to_date(last_updated_at))) AS business_date
+  FROM `0-ai-trust`.silver.ip_individual
+  UNION ALL
+  SELECT explode(array(establishment_date, to_date(last_updated_at)))
+  FROM `0-ai-trust`.silver.ip_organisation
+  UNION ALL
+  SELECT explode(array(verification_date, last_review_date, next_review_date))
+  FROM `0-ai-trust`.silver.ip_kyc
+  UNION ALL
+  SELECT explode(array(start_date, end_date))
+  FROM `0-ai-trust`.silver.ip_party_relationship
+  UNION ALL
+  SELECT start_date
+  FROM `0-ai-trust`.silver.ip_org_relationship
+  UNION ALL
+  SELECT open_date
+  FROM `0-ai-trust`.silver.arr_banking_arrangement
+  UNION ALL
+  SELECT explode(array(start_date, maturity_date))
+  FROM `0-ai-trust`.silver.arr_loan
+  UNION ALL
+  SELECT start_date
+  FROM `0-ai-trust`.silver.arr_mortgage
+  UNION ALL
+  SELECT issued_date
+  FROM `0-ai-trust`.silver.arr_credit_card
+  UNION ALL
+  SELECT explode(array(to_date(submitted_at), to_date(last_updated_at)))
+  FROM `0-ai-trust`.silver.app_application
+  UNION ALL
+  SELECT explode(array(to_date(entered_at), to_date(exited_at), to_date(sla_deadline)))
+  FROM `0-ai-trust`.silver.app_stage_history
+  UNION ALL
+  SELECT to_date(changed_at)
+  FROM `0-ai-trust`.silver.app_status_change
+  UNION ALL
+  SELECT to_date(event_timestamp)
+  FROM `0-ai-trust`.silver.app_lifecycle_event
+  UNION ALL
+  SELECT explode(array(to_date(requested_at), to_date(received_at), expiry_date, to_date(last_reminder_at)))
+  FROM `0-ai-trust`.silver.app_missing_document
+  UNION ALL
+  SELECT issued_at
+  FROM `0-ai-trust`.silver.app_accepted_loan
+  UNION ALL
+  SELECT application_date
+  FROM `0-ai-trust`.silver.app_rejected_application
+  UNION ALL
+  SELECT explode(array(to_date(sla_deadline), to_date(created_at), to_date(resolved_at)))
+  FROM `0-ai-trust`.silver.evt_service_case
+  UNION ALL
+  SELECT to_date(interaction_timestamp)
+  FROM `0-ai-trust`.silver.evt_support_interaction
+  UNION ALL
+  SELECT to_date(event_timestamp)
+  FROM `0-ai-trust`.silver.evt_case_event
+), date_bounds AS (
+  SELECT MIN(business_date) AS min_date, MAX(business_date) AS max_date
+  FROM business_dates
+  WHERE business_date IS NOT NULL
+)
 SELECT
   CAST(date_format(full_date, 'yyyyMMdd') AS INT) AS date_key,
   full_date,
@@ -76,7 +138,8 @@ SELECT
   year(full_date) AS year,
   dayofweek(full_date) NOT IN (1, 7) AS is_business_day
 FROM (
-  SELECT explode(sequence(DATE '1900-01-01', DATE '2100-12-31', INTERVAL 1 DAY)) AS full_date
+  SELECT explode(sequence(min_date, max_date, INTERVAL 1 DAY)) AS full_date
+  FROM date_bounds
 );
 
 CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`.gold.dim_stage_action_policy
