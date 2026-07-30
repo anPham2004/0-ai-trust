@@ -1,41 +1,53 @@
 product: ai_ready_context
-version: 1.0.0
+version: 2.0.0
 owner: banker-assist-domain
 producer: gold-context-workstream
-contract_status: DRAFT_PENDING_SILVER
+contract_status: ACTIVE
 physical_layer:
-  type: EXTERNAL_DELTA_STAR_SCHEMA
-  refresh_mode: IDEMPOTENT_MICROBATCH
+  type: LAKEFLOW_MATERIALIZED_VIEWS
+  storage: UNITY_CATALOG_MANAGED_S3
+  refresh_mode: CONTINUOUS_PIPELINE_MICROBATCH
   refresh_target: 15 minutes
-semantic_layer:
-  type: LOGICAL_VIEW
-  required_metadata:
-    - usage_restriction
-    - context_version
-    - last_refreshed_at
-    - pipeline_run_id
-    - dq_status
-  prohibited_fields:
+outputs:
+  dimensions:
+    - dim_customer
+    - dim_organisation
+    - dim_date
+    - dim_stage_action_policy
+  service:
+    - fact_service_activity
+    - fact_service_case_current
+  arrangement:
+    - fact_arrangement_current
+  party_and_verification:
+    - bridge_organisation_party_role
+    - bridge_organisation_relationship
+    - bridge_application_party_authority
+    - fact_verification_current
+  application:
+    - fact_application_current
+    - fact_application_document
+    - fact_application_timeline_event
+  ai_ready_context:
+    - fact_subject_context_snapshot
+zero_trust:
+  prohibited_raw_fields:
     - email
     - phone_number
     - tfn
     - card_number
     - raw_payload
-outputs:
-  banker_only:
-    - aiv_banker_customer_360
-    - aiv_banker_org_360
-    - aiv_banker_org_party_summary
-    - aiv_banker_kyb_status
-    - aiv_banker_org_arrangement_summary
-  customer_safe:
-    - aiv_customer_self_profile
-  shared:
-    - aiv_shared_application_status
-    - aiv_shared_application_timeline
-    - aiv_shared_document_checklist
-    - aiv_shared_service_summary
+  restricted_fields:
+    - risk_rating
+    - pep_status
+    - sanctions_check
+  required_context_fields:
+    - dq_status
+    - masking_status
+    - warning_codes
 known_limitations:
-  - Identity-to-party row entitlement is not present in the supplied Silver schema.
-  - Unity Catalog grants and banker-assist-users membership are deployment responsibilities.
-  - Gold execution remains disabled until the Silver hand-off tests pass.
+  - Application authority is derived from organisation-level roles and is not an application-specific mandate.
+  - Mortgage activity and maturity are inferred because the source has no explicit lifecycle status.
+  - Organisation communication preferences are unavailable in the supplied source data.
+  - Approved stage-action wording has not been supplied; the policy dimension returns POLICY_NOT_CONFIGURED without invented instructions.
+  - Metric Views and user-specific entitlements are publication concerns and are not physical Gold pipeline datasets.

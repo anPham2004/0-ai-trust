@@ -136,10 +136,7 @@ Gold is deliberately outside the Spark Declarative Pipeline source glob. Its SQL
 │   ├── bootstrap/              versioned Unity Catalog DDL migrations
 │   ├── bronze/                 implemented ingestion pipeline
 │   ├── silver/                 approved 19-entity incremental model
-│   ├── gold-sql/
-│   │   ├── star-schema/        idempotent Silver-to-Gold MERGE statements
-│   │   └── ai-ready/           role-aware denormalized logical views
-│   └── gold/                   intentionally contains no SDP definitions
+│   └── gold/                   declarative SQL dimensions, marts, and AI-ready context
 ├── infrastructure/aws/         Terraform for EC2, IAM, S3, and monitoring
 └── tests/
     ├── architecture/           repository and ingestion invariants
@@ -283,7 +280,7 @@ PostgreSQL and Kafka Connect ports bind only to EC2 loopback and are not exposed
 
 ## Initialize Unity Catalog
 
-Run `v001_create_external_objects.sql` once through Databricks SQL Editor as the storage owner. `v002_remove_legacy_bronze_objects.sql` removes the superseded shared Bronze model. When replacing the old Silver MVs, stop the pipeline and run `v004_rebuild_silver_streaming_tables.sql` once; it does not touch Bronze or Landing. Do not run `v003_create_gold_external_tables.sql` until Silver deployment evidence is complete.
+Run `v001_create_external_objects.sql` once through Databricks SQL Editor as the storage owner. `v002_remove_legacy_bronze_objects.sql` removes the superseded shared Bronze model. When replacing the old Silver MVs, stop the pipeline and run `v004_rebuild_silver_streaming_tables.sql` once; it does not touch Bronze or Landing. Gold objects are pipeline-managed materialized views and therefore require no separate table bootstrap migration.
 
 - catalog `0-ai-trust`
 - schemas `bronze`, `silver`, and `gold`
@@ -302,13 +299,13 @@ ORDER BY table_schema, table_name;
 
 ## Configure and run the pipelines
 
-After repository changes are merged into `develop`, the GitHub workflow tests and syncs them into `/Shared/0-ai-trust`. The single `0-ai-trust-medallion` pipeline runs Bronze continuously and processes Silver every 15 minutes. Gold SQL is outside the pipeline source glob and cannot execute accidentally. Its root directory is:
+After repository changes are merged into `develop`, the GitHub workflow tests and syncs them into `/Shared/0-ai-trust`. The single `0-ai-trust-medallion` pipeline runs Bronze continuously and processes Silver and Gold every 15 minutes. Its root directory is:
 
 ```text
 Root folder: /Workspace/Shared/0-ai-trust/pipelines
 ```
 
-The Bronze flows use Spark Structured Streaming and Auto Loader with a one-minute trigger. Silver uses streaming CDF reads with the shared 15-minute trigger. Twelve mutable entities use native AUTO CDC SCD2 with timestamp `__START_AT` and nullable `__END_AT`; seven immutable entities append incrementally. Hard DQ failures are dropped from Silver and counted in pipeline expectation metrics. No Silver quarantine tables or external Databricks Job are required.
+The Bronze flows use Spark Structured Streaming and Auto Loader with a one-minute trigger. Silver uses streaming CDF reads with the shared 15-minute trigger. Twelve mutable entities use native AUTO CDC SCD2 with timestamp `__START_AT` and nullable `__END_AT`; seven immutable entities append incrementally. Hard DQ failures are excluded from canonical Silver and retained in the dedicated quarantine schema. Gold uses declarative SQL materialized views on the same 15-minute trigger. No external Databricks Job is required.
 
 The shared refresh policy is applied explicitly:
 
@@ -373,28 +370,24 @@ feature branch -> pull request -> develop -> GitHub Action -> Databricks Git Fol
 - No PII or raw payload values may be written to application logs.
 - Every source is ingested; business relevance is decided only after Silver contracts are approved.
 - Silver implements config-driven native expectations, SCD2/append history, masking/tokenisation, and L1 lineage. Rejected rows remain replayable from Bronze; aggregate failures are recorded in the pipeline event log.
-- Gold SQL implements purpose-bound views, no raw PII projection, quality evidence, known limitations, and AI-ready context. Unity Catalog grants and the `banker-assist-users` group must still be provisioned before deployment.
+- Gold materialized views implement purpose-bound marts, no raw PII projection, quality evidence, explicit limitations, and AI-ready subject context. Unity Catalog grants and user-specific entitlements remain publication responsibilities.
 - AI must never make credit approval or fraud decisions and must not receive raw Highly Confidential fields.
 
-## Gold execution order after Silver is ready
+## Gold execution after Silver is ready
 
-1. Run `pipelines/bootstrap/v003_create_gold_external_tables.sql`.
-2. Run the SQL files in `pipelines/gold-sql/star-schema` in this dependency order: party/KYC/organisation dimensions, arrangement/application/document dimensions, application/service facts, then arrangement snapshots.
-3. Run every file in `pipelines/gold-sql/ai-ready`; these statements are idempotent logical-view replacements.
-4. Execute `tests/integration/gold/test_required_silver_schema.sql` before refresh, then the remaining Gold SQL tests after refresh.
-5. Only after a clean manual end-to-end run, configure a non-overlapping 15-minute Gold refresh Job.
+Gold is declared entirely in `pipelines/gold`. Add that folder to the existing medallion pipeline; SDP resolves dependencies from Silver through the domain materialized views to `fact_subject_context_snapshot`. Every Gold flow uses a 15-minute trigger interval inside the continuous pipeline, so no separate Gold Job or manual `MERGE` order is required.
 
-The Gold `MERGE` statements are rerunnable. Additive Silver columns are tolerated because projections are explicit. Removing, renaming, or changing the type of a required Silver field is a breaking change detected by the schema test.
+Execute `tests/integration/gold/test_required_silver_schema.sql` before the first refresh and the remaining Gold SQL tests after refresh. Additive Silver columns are tolerated because Gold projections are explicit. Removing, renaming, or changing a required Silver field is a breaking change detected by the schema test.
 
 ## Assignment readiness and remaining gaps
 
-Prepared in this repository: three ingestion mechanisms, immutable Bronze evidence, more than eight contract-defined DQ rules, external Gold star modelling, hybrid AI-ready views, role-aware restricted fields, lineage/quality/version metadata, reconciliation tests, and tests for duplicates, foreign keys, late data, date ordering, idempotency, schema evolution, freshness limitations, and PII leakage.
+Prepared in this repository: three ingestion mechanisms, immutable Bronze evidence, more than eight contract-defined DQ rules, pipeline-managed Gold marts on customer-owned S3, a denormalised AI-ready subject context, restricted compliance fields, lineage/quality metadata, reconciliation tests, and tests for duplicates, foreign keys, late data, date ordering, schema evolution, freshness limitations, and PII leakage.
 
-Still blocked on downstream deployment evidence:
-- Unity Catalog grants and membership of `banker-assist-users`;
+Still blocked on downstream publication evidence:
+- Unity Catalog grants and approved Genie user entitlements;
 - identity-to-party entitlements or row filters for customer-specific access, which are absent from the supplied Silver schema;
 - sample AI answers, missing/unsafe/refusal cases, and screenshot evidence;
-- clean-state end-to-end rerun, measured freshness/reconciliation results, and the final 15-minute Gold Job;
+- measured Genie-answer evidence and final business-owner approval of stage-action policy text;
 - final runbook values and submitted output extracts.
 
-No Gold SQL, test, migration, grant, Job, or pipeline update is executed by this change.
+Gold physical datasets are maintained by the existing medallion pipeline; semantic Metric Views and Genie configuration are deliberately published only after access policy approval.

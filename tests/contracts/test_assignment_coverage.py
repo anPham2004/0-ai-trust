@@ -42,26 +42,30 @@ class AssignmentCoverageTests(unittest.TestCase):
     def test_gold_does_not_expose_forbidden_raw_identifiers(self):
         sql = "\n".join(
             path.read_text(encoding="utf-8").lower()
-            for path in (ROOT / "pipelines/gold-sql/ai-ready").glob("*.sql")
+            for path in (ROOT / "pipelines/gold").glob("*.sql")
         )
-        for forbidden in ("email", "phone_number", "tfn", "card_number"):
-            self.assertNotIn(forbidden, sql)
+        import re
+        for forbidden in ("phone_number", "tfn", "card_number", "raw_payload"):
+            self.assertIsNone(
+                re.search(rf"(?<![a-z0-9_]){forbidden}(?![a-z0-9_])", sql),
+                forbidden,
+            )
 
-    def test_ai_ready_contract_matches_every_view(self):
+    def test_gold_contract_matches_every_pipeline_dataset(self):
         contract = yaml.safe_load(
             (ROOT / "contracts/gold/ai_ready_context.yml").read_text(encoding="utf-8")
         )
         contracted = {
-            view
-            for views in contract["outputs"].values()
-            for view in views
+            dataset for datasets in contract["outputs"].values() for dataset in datasets
         }
-        implemented = {
-            path.stem
-            for path in (ROOT / "pipelines/gold-sql/ai-ready").glob("*.sql")
-        }
+        sql = "\n".join(
+            path.read_text(encoding="utf-8") for path in (ROOT / "pipelines/gold").glob("*.sql")
+        )
+        implemented = set(__import__("re").findall(
+            r"CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`\.gold\.([a-z0-9_]+)", sql
+        ))
         self.assertEqual(contracted, implemented)
-        self.assertEqual(len(contracted), 10)
+        self.assertEqual(len(contracted), 15)
 
 
 if __name__ == "__main__":

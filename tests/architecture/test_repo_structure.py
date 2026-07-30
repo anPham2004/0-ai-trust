@@ -235,46 +235,34 @@ class ArchitectureTests(unittest.TestCase):
             definitions,
         )
 
-    def test_gold_has_external_star_tables_and_ai_ready_views(self):
-        star = sorted((ROOT / "pipelines/gold-sql/star-schema").glob("*.sql"))
-        ai_ready = sorted((ROOT / "pipelines/gold-sql/ai-ready").glob("*.sql"))
-        self.assertEqual(len(star), 10)
-        self.assertEqual(len(ai_ready), 10)
-
-        for path in star:
-            sql = path.read_text(encoding="utf-8").upper()
-            self.assertIn("MERGE INTO `0-AI-TRUST`.GOLD.", sql)
-            self.assertNotIn("CREATE MATERIALIZED VIEW", sql)
-            self.assertNotIn("CREATE STREAMING TABLE", sql)
-
-        for path in ai_ready:
-            sql = path.read_text(encoding="utf-8").upper()
-            self.assertIn("CREATE OR REPLACE VIEW `0-AI-TRUST`.GOLD.AIV_", sql)
-            self.assertNotIn("CREATE MATERIALIZED VIEW", sql)
-
-    def test_all_gold_physical_tables_are_external_delta(self):
-        setup = (ROOT / "pipelines/bootstrap/v003_create_gold_external_tables.sql").read_text(
-            encoding="utf-8"
-        )
-        self.assertEqual(setup.count("CREATE TABLE IF NOT EXISTS `0-ai-trust`.gold."), 10)
-        self.assertEqual(setup.count("USING DELTA"), 10)
+    def test_gold_is_one_declarative_sql_component(self):
+        gold = ROOT / "pipelines/gold"
+        self.assertTrue(gold.is_dir())
+        self.assertFalse((ROOT / "pipelines/gold-sql").exists())
+        sql_files = sorted(gold.glob("*.sql"))
         self.assertEqual(
-            setup.count("LOCATION 's3://g3-assignment/g3/0-ai-trust/gold/tables/"),
-            10,
+            {path.name for path in sql_files},
+            {
+                "application_mart.sql", "arrangement_mart.sql", "context_mart.sql",
+                "dimensions.sql", "party_verification_mart.sql", "service_mart.sql",
+            },
         )
+        definitions = "\n".join(path.read_text(encoding="utf-8") for path in sql_files)
+        self.assertEqual(definitions.count("CREATE OR REFRESH MATERIALIZED VIEW"), 15)
+        self.assertEqual(definitions.count("SET pipelines.trigger.interval=15 minutes;"), 6)
+        self.assertNotIn("MERGE INTO", definitions.upper())
+        self.assertNotIn("CREATE STREAMING TABLE", definitions.upper())
+        self.assertNotIn("LOCATION 's3://", definitions)
 
-    def test_ai_ready_views_carry_zero_trust_context(self):
+    def test_gold_carries_zero_trust_context(self):
         definitions = "\n".join(
             path.read_text(encoding="utf-8")
-            for path in sorted((ROOT / "pipelines/gold-sql/ai-ready").glob("*.sql"))
+            for path in sorted((ROOT / "pipelines/gold").glob("*.sql"))
         )
-        for field in (
-            "dq_status", "pipeline_run_id", "last_refreshed_at",
-            "context_version", "usage_restriction",
-        ):
+        for field in ("dq_status", "masking_status", "warning_codes", "source_max_processed_at"):
             self.assertIn(field, definitions)
-        self.assertIn("is_account_group_member('banker-assist-users')", definitions)
-        self.assertNotRegex(definitions.lower(), r"\b(email|phone_number|tfn|card_number)\b")
+        self.assertIn("POLICY_NOT_CONFIGURED", definitions)
+        self.assertNotRegex(definitions.lower(), r"\b(phone_number|tfn|card_number)\b")
 
     def test_periodic_database_kafka_and_file_activity_exists(self):
         activity = (ROOT / "source-simulator/activity-generator/activity.py").read_text(encoding="utf-8")
