@@ -1,6 +1,32 @@
 SET pipelines.trigger.interval=15 minutes;
 
-CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`.gold.fact_application_document
+CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`.gold.fact_application_document (
+  document_id STRING NOT NULL,
+  application_id STRING NOT NULL,
+  customer_id STRING NOT NULL,
+  global_id STRING,
+  document_type STRING,
+  document_status STRING,
+  requested_at TIMESTAMP,
+  received_at TIMESTAMP,
+  expiry_date DATE,
+  is_missing BOOLEAN,
+  is_received BOOLEAN,
+  is_rejected BOOLEAN,
+  is_expired BOOLEAN,
+  is_invalid_or_expired BOOLEAN,
+  reminders_sent INT,
+  last_reminder_at TIMESTAMP,
+  rejection_reason STRING,
+  dq_status STRING,
+  processed_at TIMESTAMP,
+  pipeline_run_id STRING,
+  CONSTRAINT pk_fact_application_document PRIMARY KEY (document_id),
+  CONSTRAINT fk_fact_application_document_application FOREIGN KEY (application_id)
+    REFERENCES `0-ai-trust`.gold.fact_application_current (application_id),
+  CONSTRAINT fk_fact_application_document_customer FOREIGN KEY (customer_id)
+    REFERENCES `0-ai-trust`.gold.dim_customer (customer_id)
+)
 COMMENT 'Current application document checklist with deterministic status flags'
 TBLPROPERTIES ('quality' = 'gold', 'data_classification' = 'Confidential')
 AS
@@ -32,7 +58,37 @@ LEFT JOIN `0-ai-trust`.gold.dim_customer c ON c.global_id = d.global_id
 WHERE d.`__END_AT` IS NULL
   AND d.masking_status IN ('MASKED', 'CLEAN');
 
-CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`.gold.fact_application_timeline_event
+CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`.gold.fact_application_timeline_event (
+  global_id STRING,
+  timeline_event_id STRING NOT NULL,
+  application_id STRING NOT NULL,
+  customer_id STRING NOT NULL,
+  event_timestamp TIMESTAMP,
+  event_sequence INT,
+  event_family STRING,
+  event_type STRING,
+  from_value STRING,
+  to_value STRING,
+  stage STRING,
+  status STRING,
+  concept_name STRING,
+  lifecycle_transition STRING,
+  event_origin STRING,
+  action STRING,
+  assigned_team STRING,
+  pending_action_party STRING,
+  recorded_reason STRING,
+  source_table STRING,
+  source_record_id STRING,
+  source_pipeline_run_id STRING,
+  dq_status STRING,
+  masking_status STRING,
+  CONSTRAINT pk_fact_application_timeline_event PRIMARY KEY (timeline_event_id),
+  CONSTRAINT fk_fact_application_timeline_application FOREIGN KEY (application_id)
+    REFERENCES `0-ai-trust`.gold.fact_application_current (application_id),
+  CONSTRAINT fk_fact_application_timeline_customer FOREIGN KEY (customer_id)
+    REFERENCES `0-ai-trust`.gold.dim_customer (customer_id)
+)
 COMMENT 'Canonical ordered stage, status, and lifecycle application history with record-level lineage'
 TBLPROPERTIES ('quality' = 'gold', 'data_classification' = 'Confidential')
 AS
@@ -120,7 +176,46 @@ SELECT
 FROM sequenced e
 LEFT JOIN `0-ai-trust`.gold.dim_customer c ON c.global_id = e.global_id;
 
-CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`.gold.fact_application_current
+CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`.gold.fact_application_current (
+  global_id STRING,
+  application_id STRING NOT NULL,
+  customer_id STRING NOT NULL,
+  is_business_application BOOLEAN,
+  loan_goal STRING,
+  application_type STRING,
+  submitted_at TIMESTAMP,
+  last_updated_at TIMESTAMP,
+  requested_amount_masked STRING,
+  final_outcome STRING,
+  current_stage STRING,
+  current_stage_entered_at TIMESTAMP,
+  previous_stage STRING,
+  assigned_team STRING,
+  pending_action_party STRING,
+  stage_sla_deadline TIMESTAMP,
+  days_in_current_stage INT,
+  is_stage_sla_breached BOOLEAN,
+  latest_status STRING,
+  status_last_changed_at TIMESTAMP,
+  recorded_reason STRING,
+  customer_action_required_flag BOOLEAN,
+  internal_action_required_flag BOOLEAN,
+  required_document_count BIGINT,
+  missing_document_count BIGINT,
+  received_document_count BIGINT,
+  rejected_document_count BIGINT,
+  expired_document_count BIGINT,
+  total_reminders_sent BIGINT,
+  latest_activity_at TIMESTAMP,
+  is_inactive_over_14_days BOOLEAN,
+  dq_status STRING,
+  masking_status STRING,
+  last_refreshed_at TIMESTAMP,
+  pipeline_run_id STRING,
+  CONSTRAINT pk_fact_application_current PRIMARY KEY (application_id),
+  CONSTRAINT fk_fact_application_current_customer FOREIGN KEY (customer_id)
+    REFERENCES `0-ai-trust`.gold.dim_customer (customer_id)
+)
 COMMENT 'One denormalised current row per application with stage, status, SLA, document, and inactivity context'
 TBLPROPERTIES ('quality' = 'gold', 'data_classification' = 'Confidential')
 AS

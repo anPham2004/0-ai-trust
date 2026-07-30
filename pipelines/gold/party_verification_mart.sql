@@ -1,6 +1,24 @@
 SET pipelines.trigger.interval=15 minutes;
 
-CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`.gold.bridge_organisation_party_role
+CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`.gold.bridge_organisation_party_role (
+  global_id STRING,
+  relationship_id STRING NOT NULL,
+  organisation_id STRING NOT NULL,
+  customer_id STRING NOT NULL,
+  party_role STRING,
+  authority_level STRING,
+  is_active BOOLEAN,
+  start_date DATE,
+  end_date DATE,
+  dq_status STRING,
+  pipeline_run_id STRING,
+  processed_at TIMESTAMP,
+  CONSTRAINT pk_bridge_organisation_party_role PRIMARY KEY (relationship_id),
+  CONSTRAINT fk_bridge_organisation_party_role_organisation FOREIGN KEY (organisation_id)
+    REFERENCES `0-ai-trust`.gold.dim_organisation (organisation_id),
+  CONSTRAINT fk_bridge_organisation_party_role_customer FOREIGN KEY (customer_id)
+    REFERENCES `0-ai-trust`.gold.dim_customer (customer_id)
+)
 COMMENT 'Current person-to-organisation role and authority relationships'
 TBLPROPERTIES ('quality' = 'gold', 'data_classification' = 'Confidential')
 AS
@@ -22,7 +40,22 @@ LEFT JOIN `0-ai-trust`.gold.dim_customer c ON c.global_id = r.global_id
 WHERE r.`__END_AT` IS NULL
   AND r.masking_status IN ('MASKED', 'CLEAN');
 
-CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`.gold.bridge_organisation_relationship
+CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`.gold.bridge_organisation_relationship (
+  relationship_id STRING NOT NULL,
+  source_organisation_id STRING NOT NULL,
+  target_organisation_id STRING NOT NULL,
+  relationship_type STRING,
+  is_active BOOLEAN,
+  start_date DATE,
+  dq_status STRING,
+  pipeline_run_id STRING,
+  processed_at TIMESTAMP,
+  CONSTRAINT pk_bridge_organisation_relationship PRIMARY KEY (relationship_id),
+  CONSTRAINT fk_bridge_organisation_relationship_source FOREIGN KEY (source_organisation_id)
+    REFERENCES `0-ai-trust`.gold.dim_organisation (organisation_id),
+  CONSTRAINT fk_bridge_organisation_relationship_target FOREIGN KEY (target_organisation_id)
+    REFERENCES `0-ai-trust`.gold.dim_organisation (organisation_id)
+)
 COMMENT 'Current organisation-to-organisation relationships'
 TBLPROPERTIES ('quality' = 'gold', 'data_classification' = 'Internal')
 AS
@@ -40,7 +73,24 @@ FROM `0-ai-trust`.silver.ip_org_relationship
 WHERE `__END_AT` IS NULL
   AND masking_status IN ('MASKED', 'CLEAN');
 
-CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`.gold.bridge_application_party_authority
+CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`.gold.bridge_application_party_authority (
+  application_id STRING NOT NULL,
+  organisation_id STRING NOT NULL,
+  customer_id STRING NOT NULL,
+  party_role STRING NOT NULL,
+  authority_level STRING,
+  is_active BOOLEAN,
+  derivation_method STRING,
+  limitation_code STRING,
+  CONSTRAINT pk_bridge_application_party_authority
+    PRIMARY KEY (application_id, organisation_id, customer_id, party_role),
+  CONSTRAINT fk_bridge_application_party_authority_application FOREIGN KEY (application_id)
+    REFERENCES `0-ai-trust`.gold.fact_application_current (application_id),
+  CONSTRAINT fk_bridge_application_party_authority_organisation FOREIGN KEY (organisation_id)
+    REFERENCES `0-ai-trust`.gold.dim_organisation (organisation_id),
+  CONSTRAINT fk_bridge_application_party_authority_customer FOREIGN KEY (customer_id)
+    REFERENCES `0-ai-trust`.gold.dim_customer (customer_id)
+)
 COMMENT 'Application authority derived from organisation-level roles; not proof of an application-specific mandate'
 TBLPROPERTIES ('quality' = 'gold', 'data_classification' = 'Confidential')
 AS
@@ -61,7 +111,33 @@ WHERE a.`__END_AT` IS NULL
   AND a.masking_status IN ('MASKED', 'CLEAN')
 GROUP BY a.application_id, a.organisation_id, r.customer_id, r.party_role;
 
-CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`.gold.fact_verification_current
+CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`.gold.fact_verification_current (
+  kyc_id STRING NOT NULL,
+  customer_id STRING NOT NULL,
+  organisation_id STRING,
+  record_type STRING,
+  verification_status STRING,
+  verification_method STRING,
+  verification_date DATE,
+  last_review_date DATE,
+  next_review_date DATE,
+  review_overdue_flag BOOLEAN,
+  document_types STRING,
+  abn_verified BOOLEAN,
+  asic_check_status STRING,
+  beneficial_ownership_verified BOOLEAN,
+  risk_rating STRING,
+  pep_status BOOLEAN,
+  sanctions_check STRING,
+  dq_status STRING,
+  masking_status STRING,
+  processed_at TIMESTAMP,
+  CONSTRAINT pk_fact_verification_current PRIMARY KEY (kyc_id),
+  CONSTRAINT fk_fact_verification_customer FOREIGN KEY (customer_id)
+    REFERENCES `0-ai-trust`.gold.dim_customer (customer_id),
+  CONSTRAINT fk_fact_verification_organisation FOREIGN KEY (organisation_id)
+    REFERENCES `0-ai-trust`.gold.dim_organisation (organisation_id)
+)
 COMMENT 'Current KYC or KYB verification state; restricted compliance fields require separate grants'
 TBLPROPERTIES ('quality' = 'gold', 'data_classification' = 'Highly Confidential')
 AS

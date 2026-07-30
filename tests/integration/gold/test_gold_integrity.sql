@@ -4,17 +4,40 @@ FROM (
   SELECT customer_id FROM `0-ai-trust`.gold.dim_customer GROUP BY customer_id HAVING COUNT(*) > 1
   UNION ALL SELECT organisation_id FROM `0-ai-trust`.gold.dim_organisation GROUP BY organisation_id HAVING COUNT(*) > 1
   UNION ALL SELECT CAST(date_key AS STRING) FROM `0-ai-trust`.gold.dim_date GROUP BY date_key HAVING COUNT(*) > 1
+  UNION ALL SELECT CONCAT(stage, ':', pending_action_party, ':', effective_from) FROM `0-ai-trust`.gold.dim_stage_action_policy GROUP BY stage, pending_action_party, effective_from HAVING COUNT(*) > 1
   UNION ALL SELECT service_activity_id FROM `0-ai-trust`.gold.fact_service_activity GROUP BY service_activity_id HAVING COUNT(*) > 1
   UNION ALL SELECT case_id FROM `0-ai-trust`.gold.fact_service_case_current GROUP BY case_id HAVING COUNT(*) > 1
   UNION ALL SELECT CONCAT(arrangement_type, ':', arrangement_id) FROM `0-ai-trust`.gold.fact_arrangement_current GROUP BY arrangement_type, arrangement_id HAVING COUNT(*) > 1
   UNION ALL SELECT relationship_id FROM `0-ai-trust`.gold.bridge_organisation_party_role GROUP BY relationship_id HAVING COUNT(*) > 1
   UNION ALL SELECT relationship_id FROM `0-ai-trust`.gold.bridge_organisation_relationship GROUP BY relationship_id HAVING COUNT(*) > 1
+  UNION ALL SELECT CONCAT(application_id, ':', organisation_id, ':', customer_id, ':', party_role) FROM `0-ai-trust`.gold.bridge_application_party_authority GROUP BY application_id, organisation_id, customer_id, party_role HAVING COUNT(*) > 1
   UNION ALL SELECT kyc_id FROM `0-ai-trust`.gold.fact_verification_current GROUP BY kyc_id HAVING COUNT(*) > 1
   UNION ALL SELECT application_id FROM `0-ai-trust`.gold.fact_application_current GROUP BY application_id HAVING COUNT(*) > 1
   UNION ALL SELECT document_id FROM `0-ai-trust`.gold.fact_application_document GROUP BY document_id HAVING COUNT(*) > 1
   UNION ALL SELECT timeline_event_id FROM `0-ai-trust`.gold.fact_application_timeline_event GROUP BY timeline_event_id HAVING COUNT(*) > 1
   UNION ALL SELECT snapshot_id FROM `0-ai-trust`.gold.fact_subject_context_snapshot GROUP BY snapshot_id HAVING COUNT(*) > 1
 ) duplicates;
+
+-- Informational Unity Catalog primary keys are not enforced, so nullability is
+-- verified explicitly before the optimizer or semantic consumers rely on them.
+SELECT assert_true(COUNT(*) = 0, 'Null Gold primary key component')
+FROM (
+  SELECT customer_id AS key_value FROM `0-ai-trust`.gold.dim_customer WHERE customer_id IS NULL
+  UNION ALL SELECT organisation_id FROM `0-ai-trust`.gold.dim_organisation WHERE organisation_id IS NULL
+  UNION ALL SELECT CAST(date_key AS STRING) FROM `0-ai-trust`.gold.dim_date WHERE date_key IS NULL
+  UNION ALL SELECT stage FROM `0-ai-trust`.gold.dim_stage_action_policy WHERE stage IS NULL OR pending_action_party IS NULL OR effective_from IS NULL
+  UNION ALL SELECT application_id FROM `0-ai-trust`.gold.fact_application_current WHERE application_id IS NULL
+  UNION ALL SELECT document_id FROM `0-ai-trust`.gold.fact_application_document WHERE document_id IS NULL
+  UNION ALL SELECT timeline_event_id FROM `0-ai-trust`.gold.fact_application_timeline_event WHERE timeline_event_id IS NULL
+  UNION ALL SELECT arrangement_id FROM `0-ai-trust`.gold.fact_arrangement_current WHERE arrangement_id IS NULL OR arrangement_type IS NULL
+  UNION ALL SELECT relationship_id FROM `0-ai-trust`.gold.bridge_organisation_party_role WHERE relationship_id IS NULL
+  UNION ALL SELECT relationship_id FROM `0-ai-trust`.gold.bridge_organisation_relationship WHERE relationship_id IS NULL
+  UNION ALL SELECT application_id FROM `0-ai-trust`.gold.bridge_application_party_authority WHERE application_id IS NULL OR organisation_id IS NULL OR customer_id IS NULL OR party_role IS NULL
+  UNION ALL SELECT kyc_id FROM `0-ai-trust`.gold.fact_verification_current WHERE kyc_id IS NULL
+  UNION ALL SELECT case_id FROM `0-ai-trust`.gold.fact_service_case_current WHERE case_id IS NULL
+  UNION ALL SELECT service_activity_id FROM `0-ai-trust`.gold.fact_service_activity WHERE service_activity_id IS NULL
+  UNION ALL SELECT snapshot_id FROM `0-ai-trust`.gold.fact_subject_context_snapshot WHERE snapshot_id IS NULL
+) null_keys;
 
 -- Canonical Gold cannot contain records rejected before Silver publication.
 SELECT assert_true(COUNT(*) = 0, 'Hard-failed records leaked into Gold')

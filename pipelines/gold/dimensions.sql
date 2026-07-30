@@ -1,6 +1,27 @@
 SET pipelines.trigger.interval=15 minutes;
 
-CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`.gold.dim_customer
+CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`.gold.dim_customer (
+  global_id STRING,
+  customer_id STRING NOT NULL,
+  customer_type STRING,
+  name_token STRING,
+  age_band STRING,
+  state STRING,
+  occupation_code STRING,
+  email_masked STRING,
+  phone_masked STRING,
+  preferred_contact_channel STRING,
+  preferred_language STRING,
+  marketing_opt_in BOOLEAN,
+  satisfaction_score STRING,
+  customer_since TIMESTAMP,
+  profile_last_updated_at TIMESTAMP,
+  dq_status STRING,
+  masking_status STRING,
+  pipeline_run_id STRING,
+  processed_at TIMESTAMP,
+  CONSTRAINT pk_dim_customer PRIMARY KEY (customer_id)
+)
 COMMENT 'Current masked customer profile; one row per customer_id'
 TBLPROPERTIES ('quality' = 'gold', 'data_classification' = 'Confidential')
 AS
@@ -37,7 +58,25 @@ FROM `0-ai-trust`.silver.ip_individual
 WHERE `__END_AT` IS NULL
   AND masking_status IN ('MASKED', 'CLEAN');
 
-CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`.gold.dim_organisation
+CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`.gold.dim_organisation (
+  global_id STRING,
+  organisation_id STRING NOT NULL,
+  business_name STRING,
+  legal_name STRING,
+  short_name STRING,
+  organisation_type STRING,
+  industry_code STRING,
+  industry_code_version STRING,
+  abn_masked STRING,
+  acn_masked STRING,
+  establishment_date DATE,
+  profile_last_updated_at TIMESTAMP,
+  dq_status STRING,
+  masking_status STRING,
+  pipeline_run_id STRING,
+  processed_at TIMESTAMP,
+  CONSTRAINT pk_dim_organisation PRIMARY KEY (organisation_id)
+)
 COMMENT 'Current masked organisation profile; one row per organisation_id'
 TBLPROPERTIES ('quality' = 'gold', 'data_classification' = 'Confidential')
 AS
@@ -62,7 +101,17 @@ FROM `0-ai-trust`.silver.ip_organisation
 WHERE `__END_AT` IS NULL
   AND masking_status IN ('MASKED', 'CLEAN');
 
-CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`.gold.dim_date
+CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`.gold.dim_date (
+  date_key INT NOT NULL,
+  full_date DATE,
+  day_of_week STRING,
+  week_of_year INT,
+  month INT,
+  quarter INT,
+  year INT,
+  is_business_day BOOLEAN,
+  CONSTRAINT pk_dim_date PRIMARY KEY (date_key)
+)
 COMMENT 'Role-playing calendar dimension bounded by the minimum and maximum business dates observed in Silver'
 TBLPROPERTIES ('quality' = 'gold', 'data_classification' = 'Internal')
 AS
@@ -142,7 +191,20 @@ FROM (
   FROM date_bounds
 );
 
-CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`.gold.dim_stage_action_policy
+CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`.gold.dim_stage_action_policy (
+  stage STRING NOT NULL,
+  pending_action_party STRING NOT NULL,
+  next_action_code STRING,
+  banker_action_text STRING,
+  customer_safe_action_text STRING,
+  default_sla_days INT,
+  is_terminal_stage BOOLEAN,
+  effective_from DATE NOT NULL,
+  effective_to DATE,
+  policy_owner STRING,
+  CONSTRAINT pk_dim_stage_action_policy
+    PRIMARY KEY (stage, pending_action_party, effective_from)
+)
 COMMENT 'Observed stage/action combinations; approved wording remains unavailable until supplied by the policy owner'
 TBLPROPERTIES ('quality' = 'gold', 'data_classification' = 'Internal')
 AS

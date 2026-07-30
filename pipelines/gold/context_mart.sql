@@ -1,6 +1,49 @@
 SET pipelines.trigger.interval=15 minutes;
 
-CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`.gold.fact_subject_context_snapshot
+CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`.gold.fact_subject_context_snapshot (
+  snapshot_id STRING NOT NULL,
+  entity_id STRING,
+  entity_type STRING,
+  customer_id STRING,
+  organisation_id STRING,
+  snapshot_timestamp TIMESTAMP,
+  preferred_contact_channel STRING,
+  preferred_language STRING,
+  marketing_opt_in BOOLEAN,
+  satisfaction_score_current STRING,
+  last_support_contact_at TIMESTAMP,
+  last_support_channel STRING,
+  recent_support_interaction_count_30d BIGINT,
+  top_case_type_90d STRING,
+  open_case_count BIGINT,
+  sla_breached_case_count BIGINT,
+  open_application_count BIGINT,
+  latest_application_id STRING,
+  latest_application_status STRING,
+  latest_application_stage STRING,
+  latest_pending_action_party STRING,
+  latest_assigned_team STRING,
+  missing_document_count BIGINT,
+  rejected_document_count BIGINT,
+  expired_document_count BIGINT,
+  total_reminders_sent BIGINT,
+  active_arrangement_count BIGINT,
+  active_account_count BIGINT,
+  active_loan_count BIGINT,
+  active_mortgage_count BIGINT,
+  active_credit_card_count BIGINT,
+  verification_status STRING,
+  verification_review_overdue_flag BOOLEAN,
+  active_authorised_representative_count BIGINT,
+  active_director_count BIGINT,
+  warning_codes ARRAY<STRING>,
+  source_max_processed_at TIMESTAMP,
+  CONSTRAINT pk_fact_subject_context_snapshot PRIMARY KEY (snapshot_id),
+  CONSTRAINT fk_fact_subject_context_customer FOREIGN KEY (customer_id)
+    REFERENCES `0-ai-trust`.gold.dim_customer (customer_id),
+  CONSTRAINT fk_fact_subject_context_organisation FOREIGN KEY (organisation_id)
+    REFERENCES `0-ai-trust`.gold.dim_organisation (organisation_id)
+)
 COMMENT 'Deterministic AI-ready customer and organisation context as of the latest contributing Gold record'
 TBLPROPERTIES ('quality' = 'gold', 'data_classification' = 'Confidential')
 AS

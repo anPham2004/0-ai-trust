@@ -377,6 +377,8 @@ feature branch -> pull request -> develop -> GitHub Action -> Databricks Git Fol
 
 Gold is declared entirely in `pipelines/gold`. Add that folder to the existing medallion pipeline; SDP resolves dependencies from Silver through the domain materialized views to `fact_subject_context_snapshot`. Every Gold flow uses a 15-minute trigger interval inside the continuous pipeline, so no separate Gold Job or manual `MERGE` order is required.
 
+Gold primary and foreign keys are declared in the materialized-view definitions rather than applied by a one-off `ALTER TABLE` script. Unity Catalog therefore retains the relationship metadata as source-controlled pipeline state. These constraints are informational, so the Gold integrity tests continue to validate key uniqueness, nullability, and orphan relationships.
+
 Execute `tests/integration/gold/test_required_silver_schema.sql` before the first refresh and the remaining Gold SQL tests after refresh. Additive Silver columns are tolerated because Gold projections are explicit. Removing, renaming, or changing a required Silver field is a breaking change detected by the schema test.
 
 ## Assignment readiness and remaining gaps

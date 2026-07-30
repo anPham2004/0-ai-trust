@@ -250,6 +250,14 @@ class ArchitectureTests(unittest.TestCase):
         )
         definitions = "\n".join(path.read_text(encoding="utf-8") for path in sql_files)
         self.assertEqual(definitions.count("CREATE OR REFRESH MATERIALIZED VIEW"), 15)
+        self.assertEqual(definitions.count(" PRIMARY KEY ("), 15)
+        self.assertEqual(definitions.count(" FOREIGN KEY ("), 24)
+        self.assertIn("PRIMARY KEY (arrangement_id, arrangement_type)", definitions)
+        self.assertIn(
+            "PRIMARY KEY (stage, pending_action_party, effective_from)",
+            definitions,
+        )
+        self.assertNotIn("FOREIGN KEY (parent_account_id)", definitions)
         self.assertNotIn("DATE '1900-01-01'", definitions)
         self.assertNotIn("DATE '2100-12-31'", definitions)
         self.assertIn("MIN(business_date) AS min_date", definitions)

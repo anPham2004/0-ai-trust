@@ -1,9 +1,44 @@
 SET pipelines.trigger.interval=15 minutes;
 
-CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`.gold.fact_arrangement_current
+CREATE OR REFRESH MATERIALIZED VIEW `0-ai-trust`.gold.fact_arrangement_current (
+  global_id STRING,
+  arrangement_id STRING NOT NULL,
+  arrangement_type STRING NOT NULL,
+  parent_account_id STRING,
+  customer_id STRING NOT NULL,
+  organisation_id STRING,
+  is_business_arrangement BOOLEAN,
+  arrangement_subtype STRING,
+  arrangement_status STRING,
+  is_active BOOLEAN,
+  start_date DATE,
+  maturity_date DATE,
+  days_to_maturity INT,
+  interest_type STRING,
+  repayment_frequency STRING,
+  term_months INT,
+  balance_band STRING,
+  available_balance_band STRING,
+  original_amount_band STRING,
+  loan_amount_band STRING,
+  credit_limit_band STRING,
+  currency STRING,
+  masked_identifier STRING,
+  dq_status STRING,
+  masking_status STRING,
+  processed_at TIMESTAMP,
+  CONSTRAINT pk_fact_arrangement_current
+    PRIMARY KEY (arrangement_id, arrangement_type),
+  CONSTRAINT fk_fact_arrangement_customer FOREIGN KEY (customer_id)
+    REFERENCES `0-ai-trust`.gold.dim_customer (customer_id),
+  CONSTRAINT fk_fact_arrangement_organisation FOREIGN KEY (organisation_id)
+    REFERENCES `0-ai-trust`.gold.dim_organisation (organisation_id)
+)
 COMMENT 'Current canonical banking-account, loan, mortgage, and credit-card portfolio'
 TBLPROPERTIES ('quality' = 'gold', 'data_classification' = 'Confidential')
 AS
+-- parent_account_id remains the documented semantic self-reference. A physical
+-- FK also needs parent_arrangement_type because the parent PK is composite.
 SELECT
   a.global_id,
   a.account_id AS arrangement_id,
