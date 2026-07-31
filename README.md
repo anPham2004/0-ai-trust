@@ -244,7 +244,7 @@ ssh -i ~/.ssh/g3-assignment "ubuntu@$HOST" 'cd /opt/0-ai-trust/source-simulator 
 ssh -i ~/.ssh/g3-assignment "ubuntu@$HOST" 'cd /opt/0-ai-trust/source-simulator && sudo docker compose ps'
 ```
 
-The activity service inserts and updates PostgreSQL applications and publishes meaningful Kafka events every minute. Every hour it drops a new file version. The exporter drains backlog in bounded 5,000-record chunks, then flushes available CDC, Kafka, and file data to S3 every 60 seconds. The continuous Bronze pipeline discovers new landing objects with Auto Loader. Logs contain only operational counts and error types, never payload values or credentials.
+The activity service inserts and updates PostgreSQL applications and publishes meaningful Kafka events every minute. The `dirty-data-generator` emits one source-owned application with `loanGoal = NULL` 30 seconds after startup and every 60 seconds thereafter; this intentionally violates Silver hard rule `LOAN_GOAL_NULL` and demonstrates record-level quarantine without regenerating the clean dataset. Every hour the activity service drops a new file version. The exporter drains backlog in bounded 5,000-record chunks, then flushes available CDC, Kafka, and file data to S3 every 60 seconds. The continuous Bronze pipeline discovers new landing objects with Auto Loader. Logs contain only operational counts and error types, never payload values or credentials.
 
 Inspect health without printing source payloads:
 

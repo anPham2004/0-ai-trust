@@ -125,6 +125,19 @@ services:
     mem_limit: 256m
     cpus: 0.25
 
+  dirty-data-generator:
+    build: ./dirty-data-generator
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-nab_app}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-nab_sources}
+      DIRTY_DATA_INTERVAL_SECONDS: ${DIRTY_DATA_INTERVAL_SECONDS:-60}
+      DIRTY_DATA_INITIAL_DELAY_SECONDS: ${DIRTY_DATA_INITIAL_DELAY_SECONDS:-30}
+    depends_on:
+      cdc-connector-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: 0.15
+
   landing-exporter:
     build: ./landing-exporter
     environment:
