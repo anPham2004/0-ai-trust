@@ -1,0 +1,5 @@
+pytest==8.4.1
+PyYAML==6.0.2
+pyspark==4.2.0
+datacontract-cli==1.0.14
+databricks-sql-connector==4.4.0

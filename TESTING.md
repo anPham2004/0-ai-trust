@@ -151,8 +151,9 @@ For transparency, this pass does **not** cover:
 ## 5. How to Run All of This
 
 ```bash
-# Everything that runs without a live Databricks connection
-# (this is what CI already runs on every push):
+# Everything that runs without a live Databricks connection.
+# The command installs the same dependencies used by Sync to Databricks CI:
+python -m pip install -r tests/requirements.txt
 make test
 
 # The live DQ checks specifically, once you have Databricks credentials:

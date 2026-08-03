@@ -26,6 +26,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
       - name: Verify live DQ credentials are configured
         env:
           DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_SERVER_HOSTNAME }}
@@ -40,7 +45,38 @@ jobs:
           done
 
       - name: Install test dependencies
-        run: python -m pip install pytest pyyaml databricks-sql-connector
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r tests/requirements.txt
+
+      - uses: databricks/setup-cli@main
+
+      - name: Verify pipeline is running and Silver is fresh
+        env:
+          DATABRICKS_HOST: https://${{ secrets.DATABRICKS_SERVER_HOSTNAME }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_SERVER_HOSTNAME }}
+          DATABRICKS_HTTP_PATH: ${{ secrets.DATABRICKS_HTTP_PATH }}
+          PIPELINE_ID: 7c670140-0765-4e53-baf9-d55762835a15
+          REPO_ID: 1237804683921450
+          EXPECTED_COMMIT: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [ -n "$EXPECTED_COMMIT" ]; then
+            repo_json="$(databricks repos get "$REPO_ID" -o json)"
+            repo_commit="$(echo "$repo_json" | jq -r '.head_commit_id // .head_commit // empty')"
+            if [ "$repo_commit" != "$EXPECTED_COMMIT" ]; then
+              echo "::error::Databricks Git Folder is at ${repo_commit:-unknown}, expected $EXPECTED_COMMIT. Silver checks are blocked until sync catches up."
+              exit 1
+            fi
+          fi
+          pipeline_json="$(databricks pipelines get "$PIPELINE_ID" -o json)"
+          pipeline_state="$(echo "$pipeline_json" | jq -r '.state')"
+          latest_update_state="$(echo "$pipeline_json" | jq -r '.latest_updates[0].state')"
+          if [ "$pipeline_state" != "RUNNING" ] || [ "$latest_update_state" != "RUNNING" ]; then
+            echo "::error::Pipeline state is $pipeline_state and latest update state is $latest_update_state. Live DQ would otherwise test stale data."
+            exit 1
+          fi
+          python scripts/ci/check_live_silver_freshness.py
 
       - name: Run live Silver DQ checks
         env:
