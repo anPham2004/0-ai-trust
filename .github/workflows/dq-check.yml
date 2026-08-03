@@ -58,7 +58,7 @@ jobs:
           DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_SERVER_HOSTNAME }}
           DATABRICKS_HTTP_PATH: ${{ secrets.DATABRICKS_HTTP_PATH }}
           PIPELINE_ID: 7c670140-0765-4e53-baf9-d55762835a15
-          REPO_ID: 1237804683921450
+          REPO_ID: "1237804683921450"
           EXPECTED_COMMIT: ${{ github.event.workflow_run.head_sha }}
         run: |
           if [ -n "$EXPECTED_COMMIT" ]; then
