@@ -1,0 +1,50 @@
+name: Live Silver DQ Check
+
+# Runs the assert_true() DQ suite (tests/integration/silver) against the
+# already-synced, already-running Silver pipeline right after develop is
+# synced to the Databricks Git Folder — this is what makes category-2 "DQ
+# runs as part of every pipeline run" an enforced, CI-visible gate instead of
+# a README instruction nobody runs. Silver's own refresh cycle is 15 minutes,
+# so a DQ regression may not be visible until the next refresh completes;
+# this workflow reports what the live tables show at the time it runs, not a
+# guarantee that the very latest commit has already been reprocessed.
+
+on:
+  workflow_run:
+    workflows: ["Sync to Databricks"]
+    types: [completed]
+  workflow_dispatch: {}
+
+jobs:
+  live-dq:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify live DQ credentials are configured
+        env:
+          DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_SERVER_HOSTNAME }}
+          DATABRICKS_HTTP_PATH: ${{ secrets.DATABRICKS_HTTP_PATH }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          for var in DATABRICKS_SERVER_HOSTNAME DATABRICKS_HTTP_PATH DATABRICKS_TOKEN; do
+            if [ -z "${!var}" ]; then
+              echo "::error::$var repository secret is not set; live_dq tests would silently skip instead of running."
+              exit 1
+            fi
+          done
+
+      - name: Install test dependencies
+        run: python -m pip install pytest pyyaml databricks-sql-connector
+
+      - name: Run live Silver DQ checks
+        env:
+          DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_SERVER_HOSTNAME }}
+          DATABRICKS_HTTP_PATH: ${{ secrets.DATABRICKS_HTTP_PATH }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: python -m pytest tests -v -m live_dq

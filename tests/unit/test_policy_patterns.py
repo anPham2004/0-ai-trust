@@ -1,10 +1,6 @@
-import re
 import unittest
 
-
-EMAIL = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
-AU_MOBILE = re.compile(r"(?<!\d)(?:\+?61[ -]?4|04)[ -]?\d{2}[ -]?\d{3}[ -]?\d{3}(?!\d)")
-TFN_LIKE = re.compile(r"(?<!\d)\d{3}[ -]?\d{3}[ -]?\d{3}(?!\d)")
+from framework.pii_patterns import AU_MOBILE, EMAIL, TFN_LIKE
 
 
 class PolicyPatternTests(unittest.TestCase):
@@ -23,4 +19,3 @@ class PolicyPatternTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -35,6 +35,8 @@ spark = SparkSession.getActiveSession()
 if spark is None:
     raise RuntimeError("Silver model registration requires an active Spark session")
 dbutils = DBUtils(spark)
+
+
 def _latest_by(dataframe: DataFrame, keys: list[str], ordering: list) -> DataFrame:
     order_columns = [F.col(column) if isinstance(column, str) else column for column in ordering]
     rank = Window.partitionBy(*keys).orderBy(
