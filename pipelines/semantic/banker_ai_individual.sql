@@ -15,20 +15,6 @@ AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.dim_customer"
   comment: "Customer profile, preferences, and cross-domain activity snapshot for Banker.AI (B1, B4, B5, B12, B24)"
-  synonyms:
-    - customer profile
-    - customer summary
-    - customer overview
-    - pre-call briefing
-    - customer context
-    - customer details
-    - customer information
-  sample_questions:
-    - "Give me a summary of customer CUST-00711 before my call"
-    - "What are the preferred contact details for this customer?"
-    - "How many open cases does this customer have?"
-    - "What is the KYC verification status for this customer?"
-    - "How many active products does this customer hold?"
   joins:
     - name: ctx
       source: "`0-ai-trust`.gold.fact_subject_context_snapshot"
@@ -119,20 +105,6 @@ AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.fact_application_current"
   comment: "Current application status, stage, and action flags for Banker.AI (B6, B9, B14-B17, B22, B23)"
-  synonyms:
-    - application status
-    - loan application status
-    - application details
-    - application pipeline
-    - loan status
-    - application tracker
-    - application progress
-  sample_questions:
-    - "What is the current status of application APP-000245?"
-    - "Which applications have been inactive for more than 14 days?"
-    - "Which applications have breached their SLA?"
-    - "How many days has this application been in Document Verification?"
-    - "Which applications are awaiting customer action?"
   dimensions:
     - name: Application ID
       expr: application_id
@@ -239,19 +211,6 @@ AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.fact_application_document"
   comment: "Document checklist and status per application for Banker.AI (B7, B11, B13, B20, B21)"
-  synonyms:
-    - application documents
-    - document checklist
-    - required documents
-    - document status
-    - document list
-    - document tracker
-  sample_questions:
-    - "What documents are still missing for application APP-000245?"
-    - "Which documents have been rejected for this application?"
-    - "How many documents are expired and need to be re-uploaded?"
-    - "Have we sent the customer any document reminders?"
-    - "Has the customer submitted their payslip yet?"
   dimensions:
     - name: Application ID
       expr: application_id
@@ -331,20 +290,6 @@ AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.fact_application_timeline_event"
   comment: "Full audit trail of application state changes for Banker.AI (B8, B10, B18, B19)"
-  synonyms:
-    - application history
-    - application audit trail
-    - application events
-    - application timeline
-    - stage history
-    - application log
-    - what happened to the application
-  sample_questions:
-    - "Show me the full history of application APP-000245"
-    - "When did this application move to the Assessment stage?"
-    - "Why was this application returned?"
-    - "What stage was the application in before the current one?"
-    - "When was the application last updated?"
   dimensions:
     - name: Application ID
       expr: application_id
@@ -411,19 +356,6 @@ AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.fact_service_case_current"
   comment: "Open and resolved service cases per customer for Banker.AI (B3, B4, B13)"
-  synonyms:
-    - service cases
-    - support cases
-    - customer cases
-    - open cases
-    - customer complaints
-    - customer issues
-    - tickets
-  sample_questions:
-    - "What open service cases does customer CUST-00711 have?"
-    - "Has this customer had any cases breach SLA?"
-    - "Is there an open case linked to this application?"
-    - "What types of issues has this customer raised historically?"
   dimensions:
     - name: Case ID
       expr: case_id
@@ -500,20 +432,6 @@ AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.fact_service_activity"
   comment: "Customer interaction and support activity log for Banker.AI (B2)"
-  synonyms:
-    - customer contacts
-    - contact history
-    - interaction history
-    - customer interactions
-    - support history
-    - recent contacts
-    - communication history
-    - when did the customer last call
-  sample_questions:
-    - "Has this customer contacted us recently?"
-    - "When did customer CUST-00711 last call us?"
-    - "What topics did this customer contact us about in the last 30 days?"
-    - "What channel does this customer usually use to contact us?"
   dimensions:
     - name: Customer ID
       expr: customer_id
@@ -575,21 +493,6 @@ AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.fact_application_current"
   comment: "Approved next-action wording from stage-action policy for Banker.AI (B22, B24). dim_stage_action_policy currently returns POLICY_NOT_CONFIGURED — pending business owner approval."
-  synonyms:
-    - next action
-    - what should happen next
-    - next step for banker
-    - banker guidance
-    - action required
-    - stage action
-    - handover notes
-    - next steps
-    - what to tell the customer
-  sample_questions:
-    - "What is the next action the banker should take for this application?"
-    - "What should I tell the customer about their next step?"
-    - "Who needs to act next on this application?"
-    - "What are the approved handover notes for this stage?"
   joins:
     - name: policy
       source: "`0-ai-trust`.gold.dim_stage_action_policy"

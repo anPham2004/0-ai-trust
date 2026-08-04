@@ -18,17 +18,6 @@ AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.dim_customer"
   comment: "Customer contact preferences and opt-in settings for Customer.AI self-service (C1, C2, C3). Row-Level Security restricts this view to the logged-in customer only."
-  synonyms:
-    - my profile
-    - my details
-    - my contact preferences
-    - how I prefer to be contacted
-    - my settings
-    - my communication preferences
-  sample_questions:
-    - "What are my contact preferences?"
-    - "Am I signed up for marketing emails?"
-    - "What language are my communications set to?"
   dimensions:
     - name: Customer ID
       expr: customer_id
@@ -59,20 +48,6 @@ AS $$
   comment: "Customer-facing application status for Customer.AI self-service (C8, C10, C13). Internal routing, SLA fields, and recorded_reason excluded per CR2 compliance."
   # Excluded: assigned_team, pending_action_party, is_stage_sla_breached, internal_action_required_flag
   # Excluded: recorded_reason — internal decline/return reason must not be exposed to customer (CR2)
-  synonyms:
-    - my application status
-    - my loan application
-    - how is my application going
-    - application progress
-    - application update
-    - what is happening with my application
-    - where is my application
-  sample_questions:
-    - "What is the status of my application?"
-    - "What stage is my application at?"
-    - "Has anything changed with my application recently?"
-    - "Do I need to do anything for my application?"
-    - "Why has my application not moved recently?"
   dimensions:
     - name: Application ID
       expr: application_id
@@ -144,20 +119,6 @@ AS $$
   source: "`0-ai-trust`.gold.fact_application_document"
   comment: "Customer-facing document status for Customer.AI self-service (C9, C11). rejection_reason excluded per CR2 compliance."
   # Excluded: rejection_reason — internal assessor note, not safe to surface to customer (CR2)
-  synonyms:
-    - my documents
-    - documents I need to submit
-    - my application documents
-    - document status
-    - what documents do I still need
-    - outstanding documents
-    - document checklist
-  sample_questions:
-    - "What documents do I still need to submit?"
-    - "Have I submitted all my required documents?"
-    - "Has my payslip been received?"
-    - "How many reminders have been sent to me?"
-    - "Do I have any documents that have expired?"
   dimensions:
     - name: Application ID
       expr: application_id
@@ -233,19 +194,6 @@ AS $$
   comment: "Customer-facing application event history for Customer.AI self-service (C10, C12). Internal routing fields and recorded_reason excluded per CR2."
   # Excluded: assigned_team, pending_action_party, event_origin, source_table, source_record_id
   # Excluded: recorded_reason — internal reason for status change must not be exposed to customer (CR2)
-  synonyms:
-    - my application history
-    - what happened with my application
-    - application timeline
-    - application events
-    - my application updates
-    - application log
-    - when did things change
-  sample_questions:
-    - "What has happened with my application so far?"
-    - "When did my application move to the current stage?"
-    - "Has my application status changed recently?"
-    - "Why does my application seem delayed?"
   dimensions:
     - name: Application ID
       expr: application_id
@@ -301,20 +249,6 @@ AS $$
   source: "`0-ai-trust`.gold.fact_service_case_current"
   comment: "Customer-facing case status for Customer.AI self-service (C4, C5). SLA and assignment details excluded."
   # Excluded: assigned_team, sla_deadline, is_sla_breached, resolution_summary
-  synonyms:
-    - my support cases
-    - my complaints
-    - my service requests
-    - open cases
-    - my issues
-    - support history
-    - cases I have raised
-  sample_questions:
-    - "What support cases do I currently have open?"
-    - "What happened to my previous support request?"
-    - "Has my complaint been resolved?"
-    - "What cases have I raised in the past?"
-    - "Is my card dispute still open?"
   dimensions:
     - name: Case ID
       expr: case_id
@@ -372,20 +306,6 @@ AS $$
   source: "`0-ai-trust`.gold.fact_service_activity"
   comment: "Customer-facing interaction history for Customer.AI self-service (C6, C7). Internal ops fields excluded."
   # Excluded: is_internal_activity, follow_up_required_flag, escalated_flag, description, case_event_type
-  synonyms:
-    - my contact history
-    - when I last contacted
-    - my interaction history
-    - support interactions
-    - my calls and chats
-    - when did I last call
-    - my communication history
-  sample_questions:
-    - "When did I last contact NAB support?"
-    - "How many times have I contacted NAB?"
-    - "What channel did I use to contact NAB last time?"
-    - "Can you summarize my recent support history?"
-    - "What did I contact the bank about recently?"
   dimensions:
     - name: Customer ID
       expr: customer_id
@@ -427,19 +347,6 @@ AS $$
   source: "`0-ai-trust`.gold.fact_application_current"
   comment: "Customer-facing next-action wording for Customer.AI self-service (C13). Internal fields excluded: pending_action_party, banker_action_text. dim_stage_action_policy currently returns POLICY_NOT_CONFIGURED."
   # Excluded: pending_action_party, assigned_team, banker_action_text (internal ops — not safe for customer)
-  synonyms:
-    - what is my next step
-    - what do I need to do
-    - my next action
-    - what should I do now
-    - next step for me
-    - action required
-    - what does the bank need from me
-  sample_questions:
-    - "What is my next step for my application?"
-    - "What do I need to do now?"
-    - "Is there anything I need to submit?"
-    - "What does the bank need from me?"
   joins:
     - name: policy
       source: "`0-ai-trust`.gold.dim_stage_action_policy"
