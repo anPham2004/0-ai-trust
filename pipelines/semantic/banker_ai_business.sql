@@ -17,20 +17,6 @@ AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.dim_organisation"
   comment: "Organisation profile and cross-domain activity snapshot for Banker.AI Business (BB1-BB5)"
-  synonyms:
-    - business overview
-    - organisation profile
-    - company profile
-    - business details
-    - business summary
-    - organisation context
-    - business customer profile
-  sample_questions:
-    - "Give me an overview of organisation ORG-00066"
-    - "What industry does this business operate in?"
-    - "How long has this organisation been a customer of the bank?"
-    - "What is the KYB status of this business?"
-    - "How many active banking products does this organisation have?"
   joins:
     - name: ctx
       source: "`0-ai-trust`.gold.fact_subject_context_snapshot"
@@ -114,20 +100,6 @@ AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.fact_arrangement_current"
   comment: "Business loan and arrangement portfolio for Banker.AI Business (BB13-BB17)"
-  synonyms:
-    - business loans
-    - business products
-    - arrangement portfolio
-    - banking products
-    - business accounts
-    - loan portfolio
-    - products held by the business
-  sample_questions:
-    - "What banking products does this organisation currently hold?"
-    - "How many active loans does this business have?"
-    - "Are there any arrangements approaching maturity?"
-    - "Does this business have any fixed rate loans?"
-    - "How long has this business been a customer based on their first arrangement?"
   dimensions:
     - name: Arrangement ID
       expr: arrangement_id
@@ -199,24 +171,6 @@ AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.bridge_organisation_party_role"
   comment: "Person-to-organisation roles for Banker.AI Business: directors, authorised reps, beneficial owners (BB6-BB10)"
-  synonyms:
-    - directors
-    - authorised representatives
-    - signatories
-    - who can speak for the business
-    - organisation representatives
-    - business representatives
-    - party roles
-    - beneficial owners
-    - who is on the account
-    - who can sign
-    - authorised contacts
-  sample_questions:
-    - "Who are the directors of this organisation?"
-    - "Who is authorised to discuss this account?"
-    - "Does this organisation have any authorised representatives?"
-    - "Are any of the representatives no longer active?"
-    - "Who is a beneficial owner of this business?"
   dimensions:
     - name: Customer ID
       expr: customer_id
@@ -269,21 +223,6 @@ AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.bridge_organisation_relationship"
   comment: "Organisation-to-organisation relationships with resolved names for Banker.AI Business (BB8, BB9, BB10)"
-  synonyms:
-    - related businesses
-    - subsidiary companies
-    - parent company
-    - business relationships
-    - affiliated organisations
-    - connected entities
-    - corporate structure
-    - group structure
-  sample_questions:
-    - "Is this business a subsidiary of another company?"
-    - "Does this organisation have any related businesses?"
-    - "What is the corporate structure of this business group?"
-    - "Is there a parent company for this organisation?"
-    - "Are there any affiliated businesses linked to this organisation?"
   joins:
     - name: source_org
       source: "`0-ai-trust`.gold.dim_organisation"
@@ -331,19 +270,6 @@ AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.bridge_application_party_authority"
   comment: "Application signing authority by organisation and party for Banker.AI Business (BB7, BB21, BB22)"
-  synonyms:
-    - who can discuss this application
-    - application authority
-    - authorised persons on this application
-    - who can sign
-    - application signatories
-    - who has authority
-    - authorised representatives for this application
-  sample_questions:
-    - "Who is authorised to discuss this application?"
-    - "Who can sign for this application?"
-    - "Does this person have authority on this application?"
-    - "How many authorised parties are on this application?"
   dimensions:
     - name: Application ID
       expr: application_id
@@ -391,22 +317,6 @@ AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.fact_verification_current"
   comment: "KYC/KYB verification status for Banker.AI Business (BB11, BB12). Zero-trust exclusions: risk_rating, pep_status, sanctions_check are never surfaced."
-  synonyms:
-    - KYB status
-    - KYC status
-    - identity verification
-    - business verification
-    - compliance status
-    - verification outcome
-    - AML check
-    - who has been verified
-    - is the customer verified
-  sample_questions:
-    - "Is this organisation KYB verified?"
-    - "Has the organisation ABN been verified?"
-    - "When is the next verification review due for this business?"
-    - "Is the verification review overdue?"
-    - "Has the beneficial ownership been confirmed?"
   dimensions:
     - name: Customer ID
       expr: customer_id
