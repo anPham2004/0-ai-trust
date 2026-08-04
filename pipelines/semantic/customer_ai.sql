@@ -2,22 +2,33 @@
 -- Audience: Customers viewing their own data (C1-C13)
 -- Internal ops fields excluded: assigned_team, pending_action_party, rejection_reason, etc.
 -- 7 metric views deployed to `0-ai-trust`.semantic
--- Submit each statement separately via: databricks experimental aitools tools statement submit --file <file> --warehouse <ID>
+-- Submit via: databricks experimental aitools tools statement submit --file <file> --warehouse <ID>
 --
--- Patches applied over base Opus output:
---   [1] Added field-level comment: annotations tracing each field to a business question ID (C1-C13)
+-- Enrichment history:
+--   [1] Added field-level comments: annotations tracing each field to a business question ID (C1-C13)
 --   [2] entity_type filter already present in joins — verified correct
 --   [3] REMOVED recorded_reason from mv_self_application_status — potential CR2 violation
 --       (internal decline reason must not be shown to customers)
 --   [4] REMOVED recorded_reason from mv_self_application_timeline — same CR2 concern
+--   [5] Added synonyms and sample_questions to all views for Genie Ontology snippet extraction
 
 CREATE OR REPLACE VIEW `0-ai-trust`.semantic.mv_self_profile
-WITH METRICS
-LANGUAGE YAML
+WITH METRICS LANGUAGE YAML
 AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.dim_customer"
-  comment: "Customer contact preferences and opt-in settings (C1, C2, C3)"
+  comment: "Customer contact preferences and opt-in settings for Customer.AI self-service (C1, C2, C3). Row-Level Security restricts this view to the logged-in customer only."
+  synonyms:
+    - my profile
+    - my details
+    - my contact preferences
+    - how I prefer to be contacted
+    - my settings
+    - my communication preferences
+  sample_questions:
+    - "What are my contact preferences?"
+    - "Am I signed up for marketing emails?"
+    - "What language are my communications set to?"
   dimensions:
     - name: Customer ID
       expr: customer_id
@@ -25,12 +36,15 @@ AS $$
     - name: Preferred Contact Channel
       expr: preferred_contact_channel
       comment: "How the customer prefers to be contacted: phone, email, branch (C1)"
+      synonyms: [contact preference, how to contact me, preferred channel, my preferred contact]
     - name: Preferred Language
       expr: preferred_language
       comment: "Customer's preferred communication language (C2)"
+      synonyms: [language preference, my language, communications language]
     - name: Marketing Opt In
       expr: marketing_opt_in
       comment: "Whether the customer is currently subscribed to marketing notifications (C3)"
+      synonyms: [marketing consent, am I subscribed, marketing preference, opt in, marketing notifications]
   measures:
     - name: Record Count
       expr: COUNT(1)
@@ -38,14 +52,27 @@ AS $$
 $$;
 
 CREATE OR REPLACE VIEW `0-ai-trust`.semantic.mv_self_application_status
-WITH METRICS
-LANGUAGE YAML
+WITH METRICS LANGUAGE YAML
 AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.fact_application_current"
-  comment: "Customer-facing application status without internal routing and SLA fields (C8, C10, C13)"
+  comment: "Customer-facing application status for Customer.AI self-service (C8, C10, C13). Internal routing, SLA fields, and recorded_reason excluded per CR2 compliance."
   # Excluded: assigned_team, pending_action_party, is_stage_sla_breached, internal_action_required_flag
   # Excluded: recorded_reason — internal decline/return reason must not be exposed to customer (CR2)
+  synonyms:
+    - my application status
+    - my loan application
+    - how is my application going
+    - application progress
+    - application update
+    - what is happening with my application
+    - where is my application
+  sample_questions:
+    - "What is the status of my application?"
+    - "What stage is my application at?"
+    - "Has anything changed with my application recently?"
+    - "Do I need to do anything for my application?"
+    - "Why has my application not moved recently?"
   dimensions:
     - name: Application ID
       expr: application_id
@@ -56,24 +83,29 @@ AS $$
     - name: Loan Goal
       expr: loan_goal
       comment: "Purpose of the application, e.g. HOME_PURCHASE, REFINANCE — customer-facing context (C8)"
+      synonyms: [loan purpose, why I applied, reason for application]
     - name: Application Type
       expr: application_type
       comment: "Product type, e.g. HOME_LOAN, PERSONAL_LOAN — customer-facing context (C8)"
+      synonyms: [product type, type of application, what kind of loan]
     - name: Application Month
       expr: "DATE_TRUNC('MONTH', submitted_at)"
       comment: "Month the application was submitted — timeline context"
     - name: Current Stage
       expr: current_stage
       comment: "The stage the application is currently in, e.g. DOCUMENT_VERIFICATION — C8, C10"
+      synonyms: [current step, where is my application, application stage, what stage am I in]
     - name: Previous Stage
       expr: previous_stage
       comment: "The stage immediately before the current one — provides context for C12 delay explanations"
     - name: Latest Status
       expr: latest_status
       comment: "Current status label visible to the customer, e.g. UNDER_ASSESSMENT, APPROVED (C8, C12)"
+      synonyms: [my application status, current status, status update, is my application approved]
     - name: Final Outcome
       expr: final_outcome
       comment: "Terminal result if the application is closed — APPROVED, WITHDRAWN, etc. (C8)"
+      synonyms: [application outcome, final decision, end result]
     - name: Status Last Changed At
       expr: status_last_changed_at
       comment: "When the status most recently changed — customer can see how recently things moved (C10)"
@@ -83,6 +115,7 @@ AS $$
     - name: Customer Action Required
       expr: customer_action_required_flag
       comment: "TRUE when the next step requires the customer to do something, e.g. upload a document (C13)"
+      synonyms: [do I need to do something, action needed, customer needs to act, task for me, is there something I need to do]
     - name: Is Inactive Over 14 Days
       expr: is_inactive_over_14_days
       comment: "TRUE if there has been no update for more than 14 days — helpful for C12 delay context"
@@ -97,19 +130,34 @@ AS $$
     - name: Missing Document Count
       expr: SUM(missing_document_count)
       comment: "Number of documents the customer still needs to provide — C9"
+      synonyms: [how many documents needed, outstanding documents, documents I still need to upload, missing docs]
     - name: Total Reminders Sent
       expr: SUM(total_reminders_sent)
       comment: "How many document reminder notifications have been sent to the customer — C11"
+      synonyms: [reminders sent to me, how many reminders, notifications about documents]
 $$;
 
 CREATE OR REPLACE VIEW `0-ai-trust`.semantic.mv_self_application_documents
-WITH METRICS
-LANGUAGE YAML
+WITH METRICS LANGUAGE YAML
 AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.fact_application_document"
-  comment: "Customer-facing document status without rejection reasons (C9, C11)"
+  comment: "Customer-facing document status for Customer.AI self-service (C9, C11). rejection_reason excluded per CR2 compliance."
   # Excluded: rejection_reason — internal assessor note, not safe to surface to customer (CR2)
+  synonyms:
+    - my documents
+    - documents I need to submit
+    - my application documents
+    - document status
+    - what documents do I still need
+    - outstanding documents
+    - document checklist
+  sample_questions:
+    - "What documents do I still need to submit?"
+    - "Have I submitted all my required documents?"
+    - "Has my payslip been received?"
+    - "How many reminders have been sent to me?"
+    - "Do I have any documents that have expired?"
   dimensions:
     - name: Application ID
       expr: application_id
@@ -120,24 +168,31 @@ AS $$
     - name: Document Type
       expr: document_type
       comment: "What document is required, e.g. PAYSLIP, BANK_STATEMENT, PROOF_OF_ADDRESS (C9)"
+      synonyms: [type of document, what document is needed, document name, required document]
     - name: Document Status
       expr: document_status
       comment: "Current status: REQUESTED, RECEIVED, EXPIRED, VALIDATED — visible to customer (C9)"
+      synonyms: [is the document received, document state, status of my document]
     - name: Is Missing
       expr: is_missing
       comment: "TRUE if the document is still outstanding — drives 'What documents am I still missing?' (C9)"
+      synonyms: [outstanding, not yet submitted, document not received, do I still need to upload this]
     - name: Is Received
       expr: is_received
       comment: "TRUE if the customer has successfully uploaded this document (C9)"
+      synonyms: [document received, successfully uploaded, has been submitted]
     - name: Is Rejected
       expr: is_rejected
       comment: "TRUE if a document was uploaded but not accepted — note: rejection_reason is excluded (CR2)"
+      synonyms: [document rejected, not accepted, was my document rejected]
     - name: Is Expired
       expr: is_expired
       comment: "TRUE if a previously valid document has since expired and needs re-upload (C9)"
+      synonyms: [document expired, no longer valid, expired document, needs re-upload]
     - name: Is Invalid or Expired
       expr: is_invalid_or_expired
       comment: "Combined flag — TRUE for rejected OR expired; customer sees this as 'needs attention' (C9)"
+      synonyms: [needs attention, problem with document, document issue]
     - name: Requested At
       expr: requested_at
       comment: "When the document was first requested — timeline context"
@@ -147,6 +202,7 @@ AS $$
     - name: Expiry Date
       expr: expiry_date
       comment: "Document expiry date — customer can see if a previously uploaded document has expired (C9)"
+      synonyms: [when does it expire, document expiry, expiry]
   measures:
     - name: Total Documents
       expr: COUNT(1)
@@ -154,26 +210,42 @@ AS $$
     - name: Missing Count
       expr: COUNT_IF(is_missing)
       comment: "Documents still outstanding — primary measure for C9"
+      synonyms: [how many documents still needed, outstanding count, documents missing]
     - name: Received Count
       expr: COUNT_IF(is_received)
       comment: "Documents successfully received — C9"
+      synonyms: [how many received, submitted documents, documents uploaded]
     - name: Expired Count
       expr: COUNT_IF(is_expired)
       comment: "Documents that have expired and need re-uploading — C9"
+      synonyms: [expired documents, how many expired, documents needing re-upload]
     - name: Total Reminders Sent
       expr: SUM(reminders_sent)
       comment: "How many reminders have been sent for this document — C11"
+      synonyms: [reminders sent, how many reminders, number of reminders for this document]
 $$;
 
 CREATE OR REPLACE VIEW `0-ai-trust`.semantic.mv_self_application_timeline
-WITH METRICS
-LANGUAGE YAML
+WITH METRICS LANGUAGE YAML
 AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.fact_application_timeline_event"
-  comment: "Customer-facing application event history without internal routing fields (C10, C12)"
+  comment: "Customer-facing application event history for Customer.AI self-service (C10, C12). Internal routing fields and recorded_reason excluded per CR2."
   # Excluded: assigned_team, pending_action_party, event_origin, source_table, source_record_id
   # Excluded: recorded_reason — internal reason for status change must not be exposed to customer (CR2)
+  synonyms:
+    - my application history
+    - what happened with my application
+    - application timeline
+    - application events
+    - my application updates
+    - application log
+    - when did things change
+  sample_questions:
+    - "What has happened with my application so far?"
+    - "When did my application move to the current stage?"
+    - "Has my application status changed recently?"
+    - "Why does my application seem delayed?"
   dimensions:
     - name: Application ID
       expr: application_id
@@ -184,27 +256,34 @@ AS $$
     - name: Event Day
       expr: "DATE_TRUNC('DAY', event_timestamp)"
       comment: "Calendar day of the event — 'When did my application move to this stage?' (C10)"
+      synonyms: [when did this happen, date of event, event date]
     - name: Event Sequence
       expr: event_sequence
       comment: "Sequential order of events — ORDER BY this to show the customer a chronological history"
     - name: Event Family
       expr: event_family
       comment: "High-level event category: STAGE_CHANGE, STATUS_CHANGE, DOCUMENT_EVENT (C10, C12)"
+      synonyms: [type of update, category of event, what kind of change]
     - name: Event Type
       expr: event_type
       comment: "Specific event, e.g. STAGE_ENTERED, STATUS_RETURNED, DOCUMENT_RECEIVED — C10, C12"
+      synonyms: [what happened, what changed, specific event]
     - name: From Value
       expr: from_value
       comment: "Previous stage or status before this event — shows the customer what changed (C10)"
+      synonyms: [previous stage, before this change, from]
     - name: To Value
       expr: to_value
       comment: "New stage or status after this event — shows what the application moved to (C10)"
+      synonyms: [new stage, moved to, current stage, after this change]
     - name: Stage
       expr: stage
       comment: "Stage at the time of this event — 'When did my application move to Document Verification?' (C10)"
+      synonyms: [what stage was it, application stage at this point]
     - name: Status
       expr: status
       comment: "Status at the time of this event — customer-visible status at each point in history (C12)"
+      synonyms: [what was the status, application status then]
     # recorded_reason intentionally excluded — internal assessor reason must not be shown to customer (CR2)
   measures:
     - name: Event Count
@@ -216,13 +295,26 @@ AS $$
 $$;
 
 CREATE OR REPLACE VIEW `0-ai-trust`.semantic.mv_self_service_cases
-WITH METRICS
-LANGUAGE YAML
+WITH METRICS LANGUAGE YAML
 AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.fact_service_case_current"
-  comment: "Customer-facing case status without SLA and assignment details (C4, C5)"
+  comment: "Customer-facing case status for Customer.AI self-service (C4, C5). SLA and assignment details excluded."
   # Excluded: assigned_team, sla_deadline, is_sla_breached, resolution_summary
+  synonyms:
+    - my support cases
+    - my complaints
+    - my service requests
+    - open cases
+    - my issues
+    - support history
+    - cases I have raised
+  sample_questions:
+    - "What support cases do I currently have open?"
+    - "What happened to my previous support request?"
+    - "Has my complaint been resolved?"
+    - "What cases have I raised in the past?"
+    - "Is my card dispute still open?"
   dimensions:
     - name: Case ID
       expr: case_id
@@ -233,15 +325,19 @@ AS $$
     - name: Case Type
       expr: case_type
       comment: "Category of the case, e.g. CARD_DISPUTE, ADDRESS_CHANGE, DOCUMENT_QUERY — C4, C7"
+      synonyms: [type of issue, what is the case about, type of complaint]
     - name: Case Status
       expr: case_status
       comment: "Current case state: OPEN, PENDING, RESOLVED, CLOSED — C4, C5"
+      synonyms: [is my case still open, case state, is it resolved]
     - name: Priority
       expr: priority
       comment: "Case priority indicator — customer-visible urgency level (C4)"
+      synonyms: [how urgent, urgency, priority level]
     - name: Is Open
       expr: is_open
       comment: "TRUE if the case is still active — 'What support cases do I currently have open?' (C4)"
+      synonyms: [active case, still open, unresolved, not closed]
     - name: Application Related
       expr: application_related_flag
       comment: "TRUE if this case is linked to an active application — context for C7"
@@ -251,6 +347,7 @@ AS $$
     - name: Resolved At
       expr: resolved_at
       comment: "When the case was resolved — 'What happened to my previous support request?' (C5)"
+      synonyms: [when was it resolved, resolution date, when was it closed]
   measures:
     - name: Total Cases
       expr: COUNT(1)
@@ -258,22 +355,37 @@ AS $$
     - name: Open Cases
       expr: COUNT_IF(is_open)
       comment: "Currently open support cases — C4"
+      synonyms: [number of open cases, active cases, how many open issues]
     - name: Resolved Cases
       expr: "COUNT_IF(resolved_at IS NOT NULL)"
       comment: "Cases that have been resolved — C5"
+      synonyms: [closed cases, resolved issues, how many resolved]
     - name: Avg Case Age Days
       expr: AVG(case_age_days)
       comment: "How long cases have been open on average — context for C4, C5"
 $$;
 
 CREATE OR REPLACE VIEW `0-ai-trust`.semantic.mv_self_service_activity
-WITH METRICS
-LANGUAGE YAML
+WITH METRICS LANGUAGE YAML
 AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.fact_service_activity"
-  comment: "Customer-facing interaction history without internal ops fields (C6, C7)"
+  comment: "Customer-facing interaction history for Customer.AI self-service (C6, C7). Internal ops fields excluded."
   # Excluded: is_internal_activity, follow_up_required_flag, escalated_flag, description, case_event_type
+  synonyms:
+    - my contact history
+    - when I last contacted
+    - my interaction history
+    - support interactions
+    - my calls and chats
+    - when did I last call
+    - my communication history
+  sample_questions:
+    - "When did I last contact NAB support?"
+    - "How many times have I contacted NAB?"
+    - "What channel did I use to contact NAB last time?"
+    - "Can you summarize my recent support history?"
+    - "What did I contact the bank about recently?"
   dimensions:
     - name: Customer ID
       expr: customer_id
@@ -281,15 +393,19 @@ AS $$
     - name: Activity Month
       expr: "DATE_TRUNC('MONTH', activity_timestamp)"
       comment: "Month of the interaction — 'Can you summarize my recent support history?' (C6, C7)"
+      synonyms: [month of contact, when I contacted, time of interaction]
     - name: Activity Type
       expr: activity_type
       comment: "Type of interaction: CALL, CHAT, EMAIL, BRANCH_VISIT — C7"
+      synonyms: [how I contacted, type of contact, interaction type, channel type]
     - name: Channel
       expr: channel
       comment: "Communication channel used — 'When did I last contact NAB support, and through what channel?' (C6)"
+      synonyms: [what channel, how I contacted, communication method]
     - name: Topic
       expr: topic
       comment: "What the interaction was about — customer-facing topic label for C7"
+      synonyms: [what was discussed, reason for contact, topic of call, what I contacted about]
     - name: Is Customer Contact
       expr: is_customer_contact
       comment: "TRUE if this was a direct customer interaction (vs. internal activity) — C6"
@@ -297,19 +413,33 @@ AS $$
     - name: Customer Contact Count
       expr: COUNT_IF(is_customer_contact)
       comment: "Number of direct customer contacts — 'How many times have I contacted NAB?' (C6)"
+      synonyms: [how many times I contacted, number of contacts, total contacts, contact count]
     - name: Total Duration Minutes
       expr: SUM(duration_minutes)
       comment: "Total time spent in interactions — engagement history context (C7)"
+      synonyms: [total call time, time spent, how long I contacted]
 $$;
 
 CREATE OR REPLACE VIEW `0-ai-trust`.semantic.mv_self_application_next_action
-WITH METRICS
-LANGUAGE YAML
+WITH METRICS LANGUAGE YAML
 AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.fact_application_current"
-  comment: "Customer-facing next-action wording from stage-action policy (C13). Data pending — dim_stage_action_policy currently returns POLICY_NOT_CONFIGURED."
+  comment: "Customer-facing next-action wording for Customer.AI self-service (C13). Internal fields excluded: pending_action_party, banker_action_text. dim_stage_action_policy currently returns POLICY_NOT_CONFIGURED."
   # Excluded: pending_action_party, assigned_team, banker_action_text (internal ops — not safe for customer)
+  synonyms:
+    - what is my next step
+    - what do I need to do
+    - my next action
+    - what should I do now
+    - next step for me
+    - action required
+    - what does the bank need from me
+  sample_questions:
+    - "What is my next step for my application?"
+    - "What do I need to do now?"
+    - "Is there anything I need to submit?"
+    - "What does the bank need from me?"
   joins:
     - name: policy
       source: "`0-ai-trust`.gold.dim_stage_action_policy"
@@ -327,12 +457,15 @@ AS $$
     - name: Customer Action Required
       expr: source.customer_action_required_flag
       comment: "TRUE when the next step requires customer action — precondition for showing action text (C13)"
+      synonyms: [do I need to do something, is action needed, customer action needed, is there a task for me]
     - name: Is Terminal Stage
       expr: policy.is_terminal_stage
       comment: "TRUE if the application is in a final stage (APPROVED, DENIED) — no next action in this case (C13)"
+      synonyms: [is my application finished, is the application closed, is it approved or denied]
     - name: Customer Safe Action Text
       expr: policy.customer_safe_action_text
       comment: "Policy-approved wording safe to display to the customer — primary answer for C13 'What is my next step?'"
+      synonyms: [next step message, what to do next, action message, my next action text, what I need to do, guidance for me]
   measures:
     - name: Application Count
       expr: COUNT(1)
