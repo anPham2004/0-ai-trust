@@ -113,10 +113,10 @@ ALTER MATERIALIZED VIEW `0-ai-trust`.gold.fact_service_activity
 -- VERIFICATION QUERY
 -- Run after to confirm table-level comments were applied.
 -- ============================================================
-SELECT table_name, tblproperties['comment'] AS table_comment
+SELECT table_name, comment AS table_comment
 FROM `0-ai-trust`.information_schema.tables
 WHERE table_schema = 'gold'
-  AND tblproperties['comment'] IS NOT NULL
+  AND comment IS NOT NULL
 ORDER BY table_name;
 
 -- ============================================================
