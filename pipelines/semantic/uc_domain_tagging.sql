@@ -197,7 +197,7 @@ ALTER TABLE `0-ai-trust`.semantic.mv_self_application_next_action
 
 -- ── Verification ──────────────────────────────────────────────
 -- Run after to confirm tags were applied correctly
-SELECT table_schema, table_name, tag_name, tag_value
+SELECT schema_name, table_name, tag_name, tag_value
 FROM `0-ai-trust`.information_schema.table_tags
-WHERE table_schema IN ('gold', 'semantic')
-ORDER BY table_schema, table_name, tag_name;
+WHERE schema_name IN ('gold', 'semantic')
+ORDER BY schema_name, table_name, tag_name;
