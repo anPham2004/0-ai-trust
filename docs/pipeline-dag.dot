@@ -1,0 +1,98 @@
+digraph ai_trust_pipeline_detail {
+  graph [rankdir=LR, newrank=true, compound=true, splines=ortho,
+         nodesep=0.55, ranksep=0.95, pad=0.25, bgcolor="white"];
+  node [shape=box, style="rounded,filled", fontname="Arial", fontsize=10,
+        margin="0.16,0.10", color="#334155", penwidth=1.2];
+  edge [color="#64748b", arrowsize=0.7, penwidth=1.1];
+
+  subgraph cluster_landing {
+    label="1. Landing"; color="#4f46e5"; fontname="Arial Bold";
+    db_landing [label="Database CDC\nDebezium/HVR envelope", fillcolor="#eef2ff"];
+    event_landing [label="Business events\nKafka envelope", fillcolor="#eef2ff"];
+    file_landing [label="Source files\nCSV or JSON", fillcolor="#eef2ff"];
+    manifest_landing [label="Manifest files\nchecksum, count, offset", fillcolor="#eef2ff"];
+  }
+
+  subgraph cluster_bronze {
+    label="2. Bronze streaming tables"; color="#ea580c"; fontname="Arial Bold";
+    cdc_bronze [label="cdc_*\nDatabase datasets\nappend-only + CDF", fillcolor="#fff7ed"];
+    event_bronze [label="event_*\nEvent datasets\nappend-only + CDF", fillcolor="#fff7ed"];
+    file_bronze [label="file_*\nFile datasets\nappend-only + CDF", fillcolor="#fff7ed"];
+    control_bronze [label="control_ingestion_manifests", fillcolor="#fff7ed"];
+    transport_q [label="ingestion_quarantine\nMalformed transport or rescued schema", fillcolor="#fff1f2", color="#be123c"];
+  }
+
+  subgraph cluster_contracts {
+    label="3. Contract gates"; color="#b91c1c"; fontname="Arial Bold";
+    source_gate [label="Source contract gate\nrequired fields and schema", fillcolor="#fef2f2"];
+    silver_gate [label="Silver contract gate\npre-transform expectations", fillcolor="#fef2f2"];
+    record_q [label="quarantine.record_failures\nrule, record, reason, provenance", fillcolor="#fff1f2", color="#be123c"];
+  }
+
+  subgraph cluster_silver {
+    label="4. Silver canonical entities"; color="#059669"; fontname="Arial Bold";
+    party [label="INVOLVED PARTY\nip_individual\nip_organisation\nip_kyc\nip_party_relationship\nip_org_relationship", fillcolor="#ecfdf5"];
+    application [label="APPLICATION\napp_application\napp_stage_history\napp_status_change\napp_missing_document\napp_lifecycle_event\napp_accepted_loan\napp_rejected_application", fillcolor="#ecfdf5"];
+    arrangement [label="ARRANGEMENT\narr_banking_arrangement\narr_loan\narr_mortgage\narr_credit_card", fillcolor="#ecfdf5"];
+    service [label="EVENT AND SERVICE\nevt_service_case\nevt_support_interaction\nevt_case_event", fillcolor="#ecfdf5"];
+    silver_controls [label="Silver processing\nAUTO CDC SCD2\nappend-only + watermark\nmasked fields + audit columns", fillcolor="#ecfdf5"];
+  }
+
+  subgraph cluster_gold {
+    label="5. Gold SQL marts"; color="#7c3aed"; fontname="Arial Bold";
+    dimensions [label="dimensions.sql\ndim_customer\ndim_organisation\ndim_date\ndim_stage_action_policy", fillcolor="#f5f3ff"];
+    application_mart [label="application_mart.sql\napplication lifecycle\ndocuments and timeline", fillcolor="#f5f3ff"];
+    arrangement_mart [label="arrangement_mart.sql\naccount and loan portfolio", fillcolor="#f5f3ff"];
+    party_mart [label="party_verification_mart.sql\nroles and KYC/KYB", fillcolor="#f5f3ff"];
+    service_mart [label="service_mart.sql\ncases and activities", fillcolor="#f5f3ff"];
+    context [label="context_mart.sql\nAI-ready subject context", fillcolor="#f5f3ff"];
+    context_inputs [label="context joins\nparty + application + arrangement + service", fillcolor="#ede9fe"];
+  }
+
+  dependency_q [label="quarantine.dependency_violations\nmissing parent, lifecycle gap, late dependency", fillcolor="#fff1f2", color="#be123c"];
+
+  { rank=same; db_landing; event_landing; file_landing; manifest_landing; }
+  { rank=same; cdc_bronze; event_bronze; file_bronze; control_bronze; }
+  { rank=same; source_gate; silver_gate; }
+  { rank=same; party; application; arrangement; service; }
+  { rank=same; dimensions; application_mart; arrangement_mart; party_mart; service_mart; context_inputs; }
+
+  db_landing -> cdc_bronze;
+  event_landing -> event_bronze;
+  file_landing -> file_bronze;
+  manifest_landing -> control_bronze;
+
+  cdc_bronze -> source_gate;
+  event_bronze -> source_gate;
+  file_bronze -> source_gate;
+  cdc_bronze -> transport_q [style=dashed, label="parse/schema"];
+  event_bronze -> transport_q [style=dashed, label="parse/schema"];
+  file_bronze -> transport_q [style=dashed, label="parse/schema"];
+
+  source_gate -> silver_gate;
+  silver_gate -> party;
+  silver_gate -> application;
+  silver_gate -> arrangement;
+  silver_gate -> service;
+  silver_gate -> record_q [style=dashed, label="hard rule"];
+  party -> silver_controls [style=dotted, arrowhead=none];
+  application -> silver_controls [style=dotted, arrowhead=none];
+  arrangement -> silver_controls [style=dotted, arrowhead=none];
+  service -> silver_controls [style=dotted, arrowhead=none];
+
+  party -> dimensions;
+  application -> application_mart;
+  arrangement -> arrangement_mart;
+  party -> party_mart;
+  service -> service_mart;
+  party -> context_inputs;
+  application -> context_inputs;
+  arrangement -> context_inputs;
+  service -> context_inputs;
+  context_inputs -> context;
+
+  party -> dependency_q [style=dashed, label="cross-entity DQ"];
+  application -> dependency_q [style=dashed];
+  arrangement -> dependency_q [style=dashed];
+  service -> dependency_q [style=dashed];
+}

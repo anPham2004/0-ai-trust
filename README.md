@@ -1,395 +1,177 @@
 # 0 AI Trust
 
-This repository simulates a NAB-style data platform for the Banker Assist assignment. Bronze ingestion and the approved 19-entity Silver model are implemented. Gold remains outside the active pipeline until Silver deployment evidence is complete and its former row-level `dq_status` dependency is replaced by the agreed metrics-only quality interface.
+0 AI Trust is a complete data platform demonstration for a banking customer and banker-assistance use case. It shows how heterogeneous operational data is collected, retained as auditable raw history, validated against data contracts, modelled into trusted Silver entities, and exposed through governed Gold and semantic products for AI.
 
-## Outcome
+The project deliberately includes unrelated topics such as energy and insurance in the ingestion boundary. This reflects a real enterprise platform: ingestion is source-led and does not decide business scope. Scope, quality, relationships, privacy, and AI eligibility are decided downstream through contracts, modelling, Unity Catalog governance, and semantic views.
 
-Databricks is used for serverless compute, incremental processing, lineage, and Unity Catalog governance. All source files and all Delta table data are stored in the team-owned AWS account:
+The project uses synthetic data only. No real customer names, account numbers, phone numbers, email addresses, or confidential banking information are used. The implementation is designed to be demonstrable on Databricks Free Edition with the source simulator hosted on AWS.
 
-```text
-PostgreSQL transaction log ── Debezium (HVR analogue) ─┐
-Apache Kafka business events ──────────────────────────┼─> S3 native landing
-Periodic vendor/reference files ───────────────────────┘          │
-                                                                  │ Auto Loader
-                                                                  v
-                                                   External Delta Bronze tables
-                                                                  │
-                                                   Unity Catalog governance
-```
+## 1. Executive overview
 
-No business data is written to Databricks-managed table storage. Databricks necessarily retains control-plane metadata, pipeline state, lineage, and deployed source code. Those are platform metadata, not source or business table data.
+The platform follows a source-to-serving flow:
 
-## Unity Catalog and S3 layout
+~~~text
+Operational sources -> AWS S3 Landing -> Bronze -> Silver -> Gold -> Semantic views -> Genie
+                         immutable       raw       trusted    serving    governed AI context
+~~~
 
-`0-ai-trust` is the catalog. The only project schemas are `bronze`, `silver`, and `gold`. Because the catalog contains a hyphen, SQL must quote it with backticks.
+Landing is the replay boundary and keeps source-native envelopes or file content. Bronze is an append-only, source-aligned Delta history. Silver applies contracts, quality rules, dependency checks, deduplication, masking, and canonical modelling. Gold provides dimensions, facts, bridges, and denormalised context products. The semantic layer exposes only audience-appropriate metric views.
 
-Databricks also exposes the read-only `information_schema` system namespace automatically. It is platform metadata, not a project layer. The automatically created `default` schema is removed by setup.
+## 2. Technology stack
 
-```text
-`0-ai-trust`
-├── bronze
-│   ├── landing                         external volume
-│   ├── cdc_<dataset>                   23 source-aligned streaming tables
-│   ├── event_<dataset>                 5 source-aligned streaming tables
-│   ├── file_<dataset>                  4 row-level CSV streaming tables
-│   ├── ingestion_quarantine            malformed/rescued records
-│   └── control_ingestion_manifests     reconciliation control table
-├── silver
-│   ├── 12 SCD2 streaming tables        mutable CDC-backed entities
-│   └── 7 append-only streaming tables  event/history/file entities
-└── gold
-    ├── 10 external Delta star tables
-    └── 10 AI-ready logical views
-```
+| Concern | Technology | Role |
+|---|---|---|
+| Source simulation | Python, PostgreSQL, Debezium, Apache Kafka | Generates database changes, business events, invalid records, duplicates, stale records, and relationship violations |
+| Cloud boundary | AWS EC2, Amazon S3, IAM, Terraform | Hosts the simulator and provides the landing boundary |
+| File ingestion | Databricks Auto Loader | Detects new landing files incrementally and supports schema evolution |
+| Processing engine | Apache Spark Structured Streaming | Processes Bronze and downstream micro-batches with checkpoints and watermarks |
+| Pipeline API | Spark Declarative Pipelines, using from pyspark import pipelines as dp | Declares streaming tables, materialized views, and AUTO CDC flows |
+| Storage | Delta Lake | Provides ACID tables, history, Change Data Feed, and replayable state |
+| Governance | Unity Catalog | Controls schemas, grants, lineage, tags, column masks, and storage |
+| Contracts | ODCS YAML | Defines schema, ownership, lineage, quality rules, classification, and AI policy |
+| Serving | Gold Delta tables and SQL metric views | Publishes marts and AI-ready context |
+| AI interface | Databricks Genie | Queries the governed semantic layer |
+| Validation | Pytest, contract validators, SQL checks, GitHub Actions | Runs unit, contract, architecture, and live quality checks |
 
-```text
-s3://g3-assignment/g3/0-ai-trust/
-├── bronze/
-│   ├── landing/
-│   │   ├── cdc/<dataset>/              nested CDC envelope and record image
-│   │   ├── event/<dataset>/            nested event envelope and record
-│   │   ├── file/<dataset>/             source files, byte-for-byte
-│   │   ├── quarantine/<source>/        malformed transport records
-│   │   └── manifests/                  heartbeat and reconciliation receipts
-│   └── __managed/                      UC-managed Bronze streaming tables
-├── silver/__managed/                   reserved Silver managed root
-├── gold/
-│   ├── __managed/                      reserved Gold managed root
-│   └── tables/<table>/                 future external Delta star tables
-└── __managed/                          catalog-level managed metadata
-```
+## 3. Dataset topics and source allocation
 
-The former top-level `landing/` layout is legacy and must not receive new objects.
+The project has six topic families. Customer, arrangement, application, and service are the primary banking scope. Energy and insurance are intentionally retained as unrelated enterprise data to demonstrate that Bronze can ingest broad source inventories without leaking out-of-scope data into Silver or AI products.
 
-Dropping an external table removes Unity Catalog metadata but does not delete its S3 files. S3 lifecycle and deletion are therefore an AWS owner responsibility. Direct S3 access bypasses Unity Catalog controls and must remain restricted to infrastructure roles.
+| Topic family | Example datasets | Ingestion category |
+|---|---|---|
+| Customer and organisation | customers, organisations, customer references, physical addresses, organisation relationships, party relationships, KYC records | Database CDC |
+| Arrangement and banking | banking accounts, loan accounts, mortgage accounts, credit card accounts | Database CDC |
+| Application and lending | loan applications, application stage history, status history, missing documents, application events, accepted loans, rejected applications | Database CDC, event, and file |
+| Service and support | service cases, support interactions, service case events | Database CDC and event |
+| Energy | energy accounts, usage or provider reference data when present in the source inventory | File or event, retained as out-of-scope Bronze data |
+| Insurance | policy or claim reference data when present in the source inventory | File or event, retained as out-of-scope Bronze data |
 
-## Bronze semantics
+The authoritative routing file is [contracts/source/source_inventory.yml](contracts/source/source_inventory.yml). The complete field inventory and relationships are documented in [SCHEMA.md](SCHEMA.md).
 
-The native S3 landing is the immutable, schema-on-read audit trail and is the rerun boundary.
+There are exactly three ingestion categories:
 
-Bronze is logical raw and source-aligned. It structurally parses source records without applying business casts, masking, deduplication, or merge logic:
+~~~text
+Database = PostgreSQL transaction-log changes transported through Debezium
+Event    = Apache Kafka business events written to the Landing boundary
+File     = S3 reference or legacy files delivered in batch or micro-batch
+~~~
 
-- `cdc_<dataset>` flattens the Debezium `after` image, or `before` for deletes, and retains operation, LSN, Kafka offset, commit time, and `_load_type`.
-- `event_<dataset>` exposes source event fields with event ID, type, correlation, Kafka transport metadata, and `_load_type`.
-- `file_<dataset>` parses CSV into rows while leaving source columns as strings. The original CSV remains byte-for-byte in Landing.
-- `_rescued_data` prevents schema mismatches from being dropped; affected rows also appear in `ingestion_quarantine`.
-- `control_ingestion_manifests` makes checksum, record-count, freshness, LSN, and offset evidence queryable.
+Kafka, CDC, and file micro-batches are transport mechanisms, not additional business topics.
 
-All Bronze business tables are append-only. Initial and incremental records share a table and are distinguished by `_load_type`. Silver owns deduplication, current-state merge, SCD, typing, and business validation. Initial database onboarding follows the HVR pattern: complete the initial snapshot, retain its source position, then continue from the same LSN without a gap.
+## 4. End-to-end architecture
 
-Never run a full refresh casually. It resets streaming state and replays the immutable landing. Use it only for an intentional, audited Bronze rebuild.
+### 4.1 Ingestion and Landing
 
-Do not rename or change `zero_ai_trust_landing` after Auto Loader has checkpointed it. Managed file events bind continuation state to its queue. A deliberate queue replacement requires a stopped pipeline and a clean replay from immutable landing.
+~~~text
+Database transaction log -> Debezium -> S3 Landing cdc/<dataset>/
+Kafka business event     -> exporter -> S3 Landing event/<dataset>/
+Reference or legacy file -> exporter -> S3 Landing file/<dataset>/
+Manifest heartbeat                  -> S3 Landing manifests/
+~~~
 
-## Source allocation
+Landing preserves source-native envelopes, operation metadata, offsets, LSNs, checksums, and file content. It is immutable so failed downstream transformations can be replayed without re-querying the source.
 
-The 32 generated datasets are intentionally broader than the Banker Assist use case. Banking, energy, and insurance records remain in Bronze so that Silver modelling must explicitly select scope rather than inheriting ingestion bias.
+### 4.2 Bronze
 
-- Database source: 23 mutable authoritative datasets, ingested from PostgreSQL transaction logs through Debezium CDC.
-- Event source: 5 true event/history datasets, transported through Apache Kafka.
-- File source: 4 legacy/reference/history datasets, delivered as S3 micro-batches.
+Bronze uses one source-aligned table per dataset. It parses the transport envelope while retaining the business record and ingestion metadata. It does not apply business masking, current-state merging, or Silver joins.
 
-These are the only three ingestion source categories. CDC, Apache Kafka, and S3 micro-batch are mechanisms used by those categories, not additional source types.
+~~~text
+cdc_<dataset>                 database CDC history, append-only, Delta CDF enabled
+event_<dataset>               immutable event and history records, Delta CDF enabled
+file_<dataset>                source-file records, Delta CDF enabled
+control_ingestion_manifests   checksum, count, freshness, LSN, and offset evidence
+ingestion_quarantine          malformed transport or rescued-schema records
+~~~
 
-The authoritative routing mapping is `contracts/source/source_inventory.yml`. See [SCHEMA.md](SCHEMA.md) for the complete dataset reference, entity relationships, row counts, and the data carried by each ingestion source. The machine-generated physical schema remains in `dev-tools/datagen/output/master-schema.json`.
+Bronze runs continuously with a one-minute trigger. The load type distinguishes initial and incremental records. Source LSN, Kafka offset, commit timestamp, source file, and ingestion timestamp preserve replay and lineage evidence.
 
-The simulator uses Debezium because HVR/Precisely is proprietary. It reproduces the relevant contract: initial snapshot, transaction-log CDC, source LSN, operation type, deletes, and continuous continuation. It must be described as an HVR analogue, not as HVR itself.
+### 4.3 Silver
 
-## Declarative pipeline terminology
+Silver reads Bronze Delta Change Data Feed through readStream. Source contracts validate transport and source schema. Silver contracts apply hard and warning expectations, type conversion, deduplication, masking, canonical modelling, and cross-entity dependency checks.
 
-The pipeline uses the successor Spark Declarative Pipelines interface, `from pyspark import pipelines as dp`, Spark Structured Streaming, and Auto Loader. It does not use the legacy `dlt` Python module, Lakeflow Connect managed database connectors, or direct outbound database/Kafka connections from Free Edition.
+Mutable CDC entities use create_auto_cdc_flow for SCD2 history. Immutable events and file records use streaming tables with watermark-based deduplication. Joined current-state entities use a controlled snapshot flow. Hard failures go to quarantine.record_failures; missing parents and incomplete lifecycle dependencies go to quarantine.dependency_violations.
 
-Databricks renamed Delta Live Tables to Lakeflow Spark Declarative Pipelines. The pipeline runs continuously and owns the Auto Loader and Silver checkpoints. Bronze flows run every minute. Silver reads Bronze Delta CDF with `readStream` and runs in 15-minute micro-batches inside the same pipeline.
+Spark evaluates rules over distributed micro-batches. The logic is record-oriented, but it does not loop through records in Python.
 
-Gold is deliberately outside the Spark Declarative Pipeline source glob. Its SQL is not activated by this change because the previous draft expects row-level `dq_status`, which no longer belongs in canonical Silver. Gold quality context must be sourced from aggregate pipeline metrics or a later approved control interface before orchestration is enabled.
+### 4.4 Gold and semantic serving
 
-## Repository structure
+Gold contains dimensions, facts, bridges, and a denormalised subject-context snapshot. The semantic schema contains 20 deployed metric views: 13 for Banker.AI and 7 for Customer.AI.
 
-```text
-.
-├── README.md
-├── SCHEMA.md                    dataset schema and ingestion source reference
-├── Makefile                    single entry point for common operations
-├── .github/workflows/
-│   └── sync-databricks.yml     sync develop into the shared Databricks Git Folder
-├── contracts/
-│   ├── source/                 source routing and ingestion mechanism
-│   ├── bronze/                 intentionally empty; raw retention has no business contract
-    │   ├── silver/                 19 active entity schema/DQ contracts
-│   └── gold/                   CDE classification, scope, masking, and AI consumption
-├── dev-tools/
-│   └── datagen/
-│       ├── requirements.txt
-│       ├── scripts/            deterministic data generation
-│       ├── reference-schemas/  upstream schema references
-│       └── output/             generated schema contract; row files are ignored
-├── source-simulator/
-│   ├── .env                    local runtime configuration; ignored by Git
-│   ├── compose.yaml            EC2 runtime boundary
-│   ├── postgres/               authoritative database source
-│   ├── bootstrap-loader/       initial bulk load before CDC continuation
-│   ├── cdc-connector-init/     Debezium registration
-│   ├── activity-generator/     periodic database, Kafka, and file activity
-│   ├── landing-exporter/       S3 micro-batch exporter
-│   └── credit-monitor/         AWS credit guard
-├── pipelines/
-│   ├── bootstrap/              versioned Unity Catalog DDL migrations
-│   ├── bronze/                 implemented ingestion pipeline
-│   ├── silver/                 approved 19-entity incremental model
-│   └── gold/                   declarative SQL dimensions, marts, and AI-ready context
-├── infrastructure/aws/         Terraform for EC2, IAM, S3, and monitoring
-└── tests/
-    ├── architecture/           repository and ingestion invariants
-    ├── unit/                   isolated policy tests
-    ├── contracts/              reserved for contract validation
-    └── integration/
-        ├── silver/             Silver SCD2, DQ, and hand-off acceptance tests
-        └── gold/               Gold integrity and AI-ready edge-case tests
-```
+~~~text
+Gold dimensions and facts
+  -> Banker.AI views for authorised internal banker use
+  -> Customer.AI views with identity-aware self-service scope
+  -> Genie system prompt ontology and query-routing rules
+~~~
 
-Naming is deterministic: deployable component directories use `kebab-case`; Python, test, contract, and Terraform identifiers use `snake_case`; SQL migrations use `vNNN_description.sql` and run in lexical order. Do not introduce version suffixes such as `nab-v2` into resource names.
+Unity Catalog grants, row filters, and column masks remain authoritative. The Genie prompt is an interpretation and routing layer, not a security boundary.
 
-Contract ownership follows the data lifecycle. `source/source_inventory.yml` routes all 32 datasets into ingestion. Bronze intentionally has no transform contract because it retains every native record. Silver owns one active contract per approved entity; hard rules compile to native drop expectations and warning rules compile to metrics-only expectations. Gold owns CDE classification and Banker Assist consumption scope.
+## 5. Governance, quality, and zero trust
 
-There are no PowerShell deployment scripts. Commands below use standard Terraform, Docker, AWS, Databricks, SSH, and Git CLIs and work from any operating system that provides those tools.
+ODCS contracts define dataset identity, ownership, lineage, schema, critical data elements, quality rules, tolerances, classification, and AI policy. Bronze remains source-aligned and does not contain business-quality assertions. Silver is the trusted quality boundary. Gold contracts define serving scope and audience restrictions.
 
-## Prerequisites
+~~~text
+Malformed envelope or rescued schema -> bronze.ingestion_quarantine
+Record-level hard rule failure        -> quarantine.record_failures
+Missing parent or lifecycle failure   -> quarantine.dependency_violations
+Warning rule                           -> expectation metrics and warning metadata
+~~~
 
-- AWS CLI profile `g3-aws`
-- Databricks CLI profile `g3-databricks`
-- Terraform
-- Docker for local validation
-- OpenSSH
-- GNU Make
-- Python 3.12+
-- Storage credential `zero_ai_trust_storage_credential`; narrowly scoped external locations for catalog/schema managed roots, Bronze landing, and future Gold tables.
+Sensitive fields are masked, tokenised, bucketed, or removed before AI serving. Raw email, phone, TFN, card number, raw payload, risk rating, PEP status, sanctions status, internal notes, and unrestricted operational reasons are excluded from AI-ready context.
 
-Confirm identity before changing infrastructure:
+## 6. Runtime and deployment
 
-```bash
-aws sts get-caller-identity --profile g3-aws
+Databricks uses serverless Spark Declarative Pipelines and Unity Catalog. The active resource is 0-ai-trust-medallion; its source directories are pipelines/bronze, pipelines/silver, and pipelines/gold. The project does not use the legacy dlt import, Lakeflow Connect managed ingestion, or direct outbound source connections from Free Edition.
+
+AWS hosts the source simulator and S3 landing boundary. Terraform provisions EC2, IAM, S3, monitoring, and the budget guard. Databricks control-plane metadata and pipeline state remain platform metadata; source and business data are governed through Unity Catalog storage configuration.
+
+Local validation:
+
+~~~bash
+python -m pip install -r tests/requirements.txt
+python -m pytest tests -q
+~~~
+
+Databricks CLI:
+
+~~~bash
+databricks auth login --host https://dbc-00affa79-1317.cloud.databricks.com --profile g3-databricks
 databricks current-user me --profile g3-databricks
-```
-
-Check remaining AWS credit:
-
-```bash
-aws freetier get-account-plan-state --region us-east-1 --profile g3-aws
-```
-
-## Generate and test data
-
-The committed schema is generated from the synthetic data project. Generated row files are local artefacts and are ignored by Git.
-
-```bash
-python -m pip install -r dev-tools/datagen/requirements.txt
-python dev-tools/datagen/scripts/run_all.py
-make test
-python -m compileall pipelines source-simulator dev-tools/datagen/scripts
-make validate
-```
-
-## Provision AWS
-
-Maintain the real, Git-ignored `infrastructure/aws/terraform.tfvars` locally with the administrator `/32` CIDRs, SSH public key, and alert email. Never commit this file.
-
-```bash
-export AWS_PROFILE=g3-aws
-terraform -chdir=infrastructure/aws init
-terraform -chdir=infrastructure/aws fmt -check
-terraform -chdir=infrastructure/aws validate
-terraform -chdir=infrastructure/aws plan -out=plan.tfplan
-terraform -chdir=infrastructure/aws apply plan.tfplan
-```
-
-The SNS subscription sends a confirmation email. The remaining-credit alert is inactive until that subscription is confirmed.
-
-Get runtime values:
-
-```bash
-terraform -chdir=infrastructure/aws output
-```
-
-## Deploy the source simulator
-
-Start the instance if required and obtain its public DNS:
-
-```bash
-INSTANCE_ID=$(terraform -chdir=infrastructure/aws output -raw instance_id)
-REGION=$(terraform -chdir=infrastructure/aws output -raw region)
-aws ec2 start-instances --instance-ids "$INSTANCE_ID" --region "$REGION" --profile g3-aws
-aws ec2 wait instance-running --instance-ids "$INSTANCE_ID" --region "$REGION" --profile g3-aws
-HOST=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --region "$REGION" --profile g3-aws --query 'Reservations[0].Instances[0].PublicDnsName' --output text)
-```
-
-Package only deployable files and upload them:
-
-```bash
-tar --exclude='__pycache__' --exclude='*.pyc' --exclude='.env' -czf 0-ai-trust-runtime.tgz source-simulator
-scp -i ~/.ssh/g3-assignment 0-ai-trust-runtime.tgz "ubuntu@$HOST:/tmp/"
-ssh -i ~/.ssh/g3-assignment "ubuntu@$HOST" 'sudo mkdir -p /opt/0-ai-trust && sudo tar -xzf /tmp/0-ai-trust-runtime.tgz -C /opt/0-ai-trust'
-```
-
-`source-simulator/.env` is the single runtime configuration source and is ignored by Git because it contains the real database password and alert ARN. Transfer it separately and restrict it to root:
-
-```bash
-scp -i ~/.ssh/g3-assignment source-simulator/.env "ubuntu@$HOST:/tmp/0-ai-trust.env"
-ssh -i ~/.ssh/g3-assignment "ubuntu@$HOST" 'sudo install -m 600 -o root -g root /tmp/0-ai-trust.env /opt/0-ai-trust/source-simulator/.env && rm /tmp/0-ai-trust.env'
-```
-
-Start the continuously running simulator:
-
-```bash
-ssh -i ~/.ssh/g3-assignment "ubuntu@$HOST" 'cd /opt/0-ai-trust/source-simulator && sudo docker compose up -d --build --remove-orphans'
-ssh -i ~/.ssh/g3-assignment "ubuntu@$HOST" 'cd /opt/0-ai-trust/source-simulator && sudo docker compose ps'
-```
-
-The activity service inserts and updates PostgreSQL applications and publishes meaningful Kafka events every minute. The `dirty-data-generator` emits one source-owned application with `loanGoal = NULL` 30 seconds after startup and every 60 seconds thereafter; this intentionally violates Silver hard rule `LOAN_GOAL_NULL` and demonstrates record-level quarantine without regenerating the clean dataset. Every hour the activity service drops a new file version. The exporter drains backlog in bounded 5,000-record chunks, then flushes available CDC, Kafka, and file data to S3 every 60 seconds. The continuous Bronze pipeline discovers new landing objects with Auto Loader. Logs contain only operational counts and error types, never payload values or credentials.
-
-Inspect health without printing source payloads:
-
-```bash
-ssh -i ~/.ssh/g3-assignment "ubuntu@$HOST" 'cd /opt/0-ai-trust/source-simulator && sudo docker compose logs --tail=50 activity-generator landing-exporter credit-monitor'
-```
-
-Emergency stop:
-
-```bash
-aws ec2 stop-instances --instance-ids "$INSTANCE_ID" --region "$REGION" --profile g3-aws
-```
-
-## Connect DataGrip through SSH
-
-Keep this tunnel open:
-
-```bash
-ssh -i ~/.ssh/g3-assignment -N -L 15432:127.0.0.1:5432 "ubuntu@$HOST"
-```
-
-DataGrip settings:
-
-```text
-Host: 127.0.0.1
-Port: 15432
-Database: g3_sources
-User: g3_app
-Password: value from EC2 `/opt/0-ai-trust/source-simulator/.env`
-```
-
-PostgreSQL and Kafka Connect ports bind only to EC2 loopback and are not exposed publicly.
-
-## Initialize Unity Catalog
-
-Run `v001_create_external_objects.sql` once through Databricks SQL Editor as the storage owner. `v002_remove_legacy_bronze_objects.sql` removes the superseded shared Bronze model. When replacing the old Silver MVs, stop the pipeline and run `v004_rebuild_silver_streaming_tables.sql` once; it does not touch Bronze or Landing. Gold objects are pipeline-managed materialized views and therefore require no separate table bootstrap migration.
-
-- catalog `0-ai-trust`
-- schemas `bronze`, `silver`, and `gold`
-- external landing volume
-- 32 source-aligned Bronze streaming tables plus shared quarantine and manifest control tables
-- the Bronze schema managed location is the team-owned S3 prefix `bronze/__managed`
-
-Confirm that every physical object resolves to the team-owned S3 hierarchy. Unity Catalog does not allow an explicit `path` on a pipeline streaming table; it places the table under the schema's S3 managed location. A streaming table is reported as `STREAMING_TABLE`; its storage path proves storage ownership:
-
-```sql
-SELECT table_schema, table_name, table_type, data_source_format, storage_path
-FROM `0-ai-trust`.information_schema.tables
-WHERE table_schema IN ('bronze', 'silver', 'gold')
-ORDER BY table_schema, table_name;
-```
-
-## Configure and run the pipelines
-
-After repository changes are merged into `develop`, the GitHub workflow tests and syncs them into `/Shared/0-ai-trust`. The single `0-ai-trust-medallion` pipeline runs Bronze continuously and processes Silver and Gold every 15 minutes. Its root directory is:
-
-```text
-Root folder: /Workspace/Shared/0-ai-trust/pipelines
-```
-
-The Bronze flows use Spark Structured Streaming and Auto Loader with a one-minute trigger. Silver uses streaming CDF reads with the shared 15-minute trigger. Twelve mutable entities use native AUTO CDC SCD2 with timestamp `__START_AT` and nullable `__END_AT`; seven immutable entities append incrementally. Hard DQ failures are excluded from canonical Silver and retained in the dedicated quarantine schema. Gold uses declarative SQL materialized views on the same 15-minute trigger. No external Databricks Job is required.
-
-The shared refresh policy is applied explicitly:
-
-```python
-from pyspark import pipelines as dp
-from framework.refresh_policy import downstream_microbatch_spark_conf
-
-dp.create_streaming_table(
-    name="`0-ai-trust`.silver.ip_individual",
-    spark_conf=downstream_microbatch_spark_conf(),
-)
-```
-
-Useful Databricks CLI operations:
-
-```bash
-# Confirm the synchronized Git Folder and locate the pipeline/job IDs.
-databricks repos get 1237804683921450 --profile g3-databricks
 databricks pipelines list-pipelines --profile g3-databricks
-databricks jobs list --profile g3-databricks
+~~~
 
-# Validate all continuous pipeline definitions without writing data.
-databricks pipelines start-update <pipeline-id-from-list> \
-  --validate-only --profile g3-databricks
+Do not run a full refresh casually. A full refresh resets streaming state and replays immutable Landing data; use it only with reconciliation evidence.
 
-# Start continuous processing. Use --full-refresh only for an intentional rebuild.
-databricks pipelines start-update <pipeline-id-from-list> \
-  --profile g3-databricks
+## 7. Repository structure
 
-```
+~~~text
+contracts/              ODCS source, Silver, and Gold contracts
+dev-tools/datagen/      deterministic synthetic data and reference schemas
+source-simulator/       PostgreSQL, Debezium, Kafka, exporter, and dirty-data generator
+pipelines/bootstrap/    Unity Catalog DDL migrations
+pipelines/bronze/       source-aligned ingestion declarations
+pipelines/framework/    contract, DQ, masking, quarantine, and dependency code
+pipelines/silver/       canonical Silver model registrations
+pipelines/gold/         Gold SQL dimensions, marts, and context products
+pipelines/semantic/     Banker.AI and Customer.AI metric views and tags
+infrastructure/aws/     Terraform for the AWS simulator boundary
+tests/                  architecture, unit, contract, Silver, and Gold tests
+docs/                   focused deep dives and visual pipeline documentation
+~~~
 
-Validate representative Bronze tables:
+## 8. Validation results
 
-```sql
-SELECT _load_type, _operation, COUNT(*)
-FROM `0-ai-trust`.bronze.cdc_customers
-GROUP BY ALL;
+The local test suite currently reports 108 passed tests. A further 51 live tests are skipped when Databricks runtime credentials are unavailable; these are environment-gated checks rather than silently passing assertions. Contract validation, architecture checks, unit tests, Silver tests, and Gold tests are separated so failures identify the affected boundary.
 
-SELECT _load_type, COUNT(*)
-FROM `0-ai-trust`.bronze.event_loan_application_events
-GROUP BY ALL;
+The deployed semantic layer currently contains 20 metric views, split between 13 Banker.AI views and 7 Customer.AI views. Live evidence must include the latest successful pipeline update, Silver freshness, passed and failed rule counts, quarantined record counts, and representative failure samples. A pipeline object remaining in RUNNING state is not sufficient evidence when Free Edition rejects a newer update because of its daily resource limit.
 
-SELECT COUNT(*) FROM `0-ai-trust`.bronze.file_accepted_loans;
-SELECT failure_reason, COUNT(*)
-FROM `0-ai-trust`.bronze.ingestion_quarantine
-GROUP BY failure_reason;
-```
+## 9. Additional documentation
 
-## GitHub and Databricks collaboration
+Read this README first. Use the following focused documents only when deeper detail is needed:
 
-GitHub is the source of truth. Each developer works on a feature branch and opens a pull request into `develop`. Do not edit the shared Databricks Git Folder directly.
-
-```text
-feature branch -> pull request -> develop -> GitHub Action -> Databricks Git Folder
-```
-
-`.github/workflows/sync-databricks.yml` runs when `develop` changes and calls `databricks repos update` for the shared Git Folder `/Shared/0-ai-trust`. It syncs source code only and does not start the pipeline. Configure repository secrets `DATABRICKS_HOST` and `DATABRICKS_TOKEN` before enabling it.
-
-## Zero Trust boundaries
-
-- Bronze is Protected data. It is not an AI or Genie source.
-- No PII or raw payload values may be written to application logs.
-- Every source is ingested; business relevance is decided only after Silver contracts are approved.
-- Silver implements config-driven native expectations, SCD2/append history, masking/tokenisation, and L1 lineage. Rejected rows remain replayable from Bronze; aggregate failures are recorded in the pipeline event log.
-- Gold materialized views implement purpose-bound marts, no raw PII projection, quality evidence, explicit limitations, and AI-ready subject context. Unity Catalog grants and user-specific entitlements remain publication responsibilities.
-- AI must never make credit approval or fraud decisions and must not receive raw Highly Confidential fields.
-
-## Gold execution after Silver is ready
-
-Gold is declared entirely in `pipelines/gold`. Add that folder to the existing medallion pipeline; SDP resolves dependencies from Silver through the domain materialized views to `fact_subject_context_snapshot`. Every Gold flow uses a 15-minute trigger interval inside the continuous pipeline, so no separate Gold Job or manual `MERGE` order is required.
-
-Gold primary and foreign keys are declared in the materialized-view definitions rather than applied by a one-off `ALTER TABLE` script. Unity Catalog therefore retains the relationship metadata as source-controlled pipeline state. These constraints are informational, so the Gold integrity tests continue to validate key uniqueness, nullability, and orphan relationships.
-
-Execute `tests/integration/gold/test_required_silver_schema.sql` before the first refresh and the remaining Gold SQL tests after refresh. Additive Silver columns are tolerated because Gold projections are explicit. Removing, renaming, or changing a required Silver field is a breaking change detected by the schema test.
-
-## Assignment readiness and remaining gaps
-
-Prepared in this repository: three ingestion mechanisms, immutable Bronze evidence, more than eight contract-defined DQ rules, pipeline-managed Gold marts on customer-owned S3, a denormalised AI-ready subject context, restricted compliance fields, lineage/quality metadata, reconciliation tests, and tests for duplicates, foreign keys, late data, date ordering, schema evolution, freshness limitations, and PII leakage.
-
-Still blocked on downstream publication evidence:
-- Unity Catalog grants and approved Genie user entitlements;
-- identity-to-party entitlements or row filters for customer-specific access, which are absent from the supplied Silver schema;
-- sample AI answers, missing/unsafe/refusal cases, and screenshot evidence;
-- measured Genie-answer evidence and final business-owner approval of stage-action policy text;
-- final runbook values and submitted output extracts.
-
-Gold physical datasets are maintained by the existing medallion pipeline; semantic Metric Views and Genie configuration are deliberately published only after access policy approval.
+- [SCHEMA.md](SCHEMA.md): complete generated dataset inventory, fields, source routing, and relationships.
+- [docs/pipeline-architecture.md](docs/pipeline-architecture.md): Bronze, Silver, Gold, CDF, AUTO CDC, and runtime dependencies.
+- [docs/data-contracts.md](docs/data-contracts.md): ODCS structure, executable rules, lineage, and AI policy.
+- [docs/testing-and-evidence.md](docs/testing-and-evidence.md): local tests, live DQ checks, evidence capture, and CI.
+- [docs/genie-system-prompt.md](docs/genie-system-prompt.md): copy-ready ontology and system prompt aligned with deployed semantic views.
+- [docs/pipeline-dag.md](docs/pipeline-dag.md): readable dependency map. docs/pipeline-dag.dot is the editable Graphviz source; SVG and PNG are rendered outputs.
