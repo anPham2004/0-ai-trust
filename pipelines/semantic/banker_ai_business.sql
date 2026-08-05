@@ -21,7 +21,7 @@ AS $$
     - name: ctx
       source: "`0-ai-trust`.gold.fact_subject_context_snapshot"
       on: "ctx.entity_id = source.organisation_id AND ctx.entity_type = 'ORGANISATION'"
-  dimensions:
+  fields:
     - name: Organisation ID
       expr: source.organisation_id
       comment: "Primary lookup key — filter here to scope all BB questions to a specific organisation (BB1)"
@@ -100,7 +100,7 @@ AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.fact_arrangement_current"
   comment: "Business loan and arrangement portfolio for Banker.AI Business (BB13-BB17)"
-  dimensions:
+  fields:
     - name: Arrangement ID
       expr: arrangement_id
       comment: "Unique banking arrangement identifier"
@@ -171,7 +171,7 @@ AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.bridge_organisation_party_role"
   comment: "Person-to-organisation roles for Banker.AI Business: directors, authorised reps, beneficial owners (BB6-BB10)"
-  dimensions:
+  fields:
     - name: Customer ID
       expr: customer_id
       comment: "Individual person (director, authorised rep, etc.) — person-level identifier (BB6, BB8)"
@@ -230,7 +230,7 @@ AS $$
     - name: target_org
       source: "`0-ai-trust`.gold.dim_organisation"
       on: "target_org.organisation_id = source.target_organisation_id"
-  dimensions:
+  fields:
     - name: Source Organisation ID
       expr: source.source_organisation_id
       comment: "The primary organisation in the relationship — filter here with the org you are researching (BB10)"
@@ -270,7 +270,7 @@ AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.bridge_application_party_authority"
   comment: "Application signing authority by organisation and party for Banker.AI Business (BB7, BB21, BB22)"
-  dimensions:
+  fields:
     - name: Application ID
       expr: application_id
       comment: "Filter to a specific application to answer 'Who is authorised to discuss this application?' (BB7)"
@@ -317,7 +317,7 @@ AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.fact_verification_current"
   comment: "KYC/KYB verification status for Banker.AI Business (BB11, BB12). Zero-trust exclusions: risk_rating, pep_status, sanctions_check are never surfaced."
-  dimensions:
+  fields:
     - name: Customer ID
       expr: customer_id
       comment: "Individual person being verified — for KYC records (individuals within the organisation)"
@@ -353,6 +353,9 @@ AS $$
     - name: Document Types
       expr: document_types
       comment: "Comma-separated list of document categories on record, e.g. PASSPORT,BUSINESS_REG — BB12"
+    - name: Document Type Count
+      expr: "SIZE(SPLIT(document_types, ','))"
+      comment: "Number of distinct document type categories on record — computed as a dimension since it is a per-row expression, not an aggregate (BB12)"
     - name: ABN Verified
       expr: abn_verified
       comment: "TRUE if the organisation's ABN has been verified against ATO records — BB11"
@@ -382,7 +385,7 @@ AS $$
       expr: COUNT_IF(review_overdue_flag)
       comment: "Verification records where review is overdue — BB12"
       synonyms: [overdue verifications, missed reviews, reviews past due]
-    - name: Verified Document Type Count
-      expr: "SIZE(SPLIT(document_types, ','))"
-      comment: "Count of document type categories on record; entity-level only — not per-document rows (BB12)"
+    - name: Verified Record Count
+      expr: "COUNT_IF(verification_status IS NOT NULL)"
+      comment: "Count of all verification records in scope regardless of status — BB12"
 $$;

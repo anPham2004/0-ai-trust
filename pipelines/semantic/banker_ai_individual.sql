@@ -19,7 +19,7 @@ AS $$
     - name: ctx
       source: "`0-ai-trust`.gold.fact_subject_context_snapshot"
       on: "ctx.entity_id = source.customer_id AND ctx.entity_type = 'CUSTOMER'"
-  dimensions:
+  fields:
     - name: Customer ID
       expr: source.customer_id
       comment: "Primary lookup key — filter here to scope all Banker.AI questions to a specific customer (B1, B12, B24)"
@@ -105,7 +105,7 @@ AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.fact_application_current"
   comment: "Current application status, stage, and action flags for Banker.AI (B6, B9, B14-B17, B22, B23)"
-  dimensions:
+  fields:
     - name: Application ID
       expr: application_id
       comment: "Unique application identifier — primary filter for single-application questions (B14, B16, B17, B22, B23)"
@@ -211,7 +211,7 @@ AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.fact_application_document"
   comment: "Document checklist and status per application for Banker.AI (B7, B11, B13, B20, B21)"
-  dimensions:
+  fields:
     - name: Application ID
       expr: application_id
       comment: "Application this document belongs to — filter for single-application document queries (B20, B21)"
@@ -290,7 +290,7 @@ AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.fact_application_timeline_event"
   comment: "Full audit trail of application state changes for Banker.AI (B8, B10, B18, B19)"
-  dimensions:
+  fields:
     - name: Application ID
       expr: application_id
       comment: "Filter to a single application ID to retrieve its complete stage history (B8)"
@@ -356,7 +356,7 @@ AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.fact_service_case_current"
   comment: "Open and resolved service cases per customer for Banker.AI (B3, B4, B13)"
-  dimensions:
+  fields:
     - name: Case ID
       expr: case_id
       comment: "Unique service case identifier"
@@ -432,7 +432,7 @@ AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.fact_service_activity"
   comment: "Customer interaction and support activity log for Banker.AI (B2)"
-  dimensions:
+  fields:
     - name: Customer ID
       expr: customer_id
       comment: "Customer involved in this activity — filter to answer 'Has this customer contacted us recently?' (B2)"
@@ -497,7 +497,7 @@ AS $$
     - name: policy
       source: "`0-ai-trust`.gold.dim_stage_action_policy"
       on: "policy.stage = source.current_stage AND policy.pending_action_party = source.pending_action_party AND current_date() >= policy.effective_from AND (policy.effective_to IS NULL OR current_date() <= policy.effective_to)"
-  dimensions:
+  fields:
     - name: Application ID
       expr: source.application_id
       comment: "Filter to a specific application to retrieve its policy-governed next action (B22)"

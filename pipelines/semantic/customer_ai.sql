@@ -18,7 +18,7 @@ AS $$
   version: 1.1
   source: "`0-ai-trust`.gold.dim_customer"
   comment: "Customer contact preferences and opt-in settings for Customer.AI self-service (C1, C2, C3). Row-Level Security restricts this view to the logged-in customer only."
-  dimensions:
+  fields:
     - name: Customer ID
       expr: customer_id
       comment: "Customer identifier — Row-Level Security MUST be applied to restrict this to the logged-in customer only"
@@ -48,7 +48,7 @@ AS $$
   comment: "Customer-facing application status for Customer.AI self-service (C8, C10, C13). Internal routing, SLA fields, and recorded_reason excluded per CR2 compliance."
   # Excluded: assigned_team, pending_action_party, is_stage_sla_breached, internal_action_required_flag
   # Excluded: recorded_reason — internal decline/return reason must not be exposed to customer (CR2)
-  dimensions:
+  fields:
     - name: Application ID
       expr: application_id
       comment: "The customer's application identifier — C8"
@@ -119,7 +119,7 @@ AS $$
   source: "`0-ai-trust`.gold.fact_application_document"
   comment: "Customer-facing document status for Customer.AI self-service (C9, C11). rejection_reason excluded per CR2 compliance."
   # Excluded: rejection_reason — internal assessor note, not safe to surface to customer (CR2)
-  dimensions:
+  fields:
     - name: Application ID
       expr: application_id
       comment: "Application this document belongs to — C9"
@@ -194,7 +194,7 @@ AS $$
   comment: "Customer-facing application event history for Customer.AI self-service (C10, C12). Internal routing fields and recorded_reason excluded per CR2."
   # Excluded: assigned_team, pending_action_party, event_origin, source_table, source_record_id
   # Excluded: recorded_reason — internal reason for status change must not be exposed to customer (CR2)
-  dimensions:
+  fields:
     - name: Application ID
       expr: application_id
       comment: "Filter to retrieve the full history of one application — C10"
@@ -249,7 +249,7 @@ AS $$
   source: "`0-ai-trust`.gold.fact_service_case_current"
   comment: "Customer-facing case status for Customer.AI self-service (C4, C5). SLA and assignment details excluded."
   # Excluded: assigned_team, sla_deadline, is_sla_breached, resolution_summary
-  dimensions:
+  fields:
     - name: Case ID
       expr: case_id
       comment: "Unique service case identifier"
@@ -306,7 +306,7 @@ AS $$
   source: "`0-ai-trust`.gold.fact_service_activity"
   comment: "Customer-facing interaction history for Customer.AI self-service (C6, C7). Internal ops fields excluded."
   # Excluded: is_internal_activity, follow_up_required_flag, escalated_flag, description, case_event_type
-  dimensions:
+  fields:
     - name: Customer ID
       expr: customer_id
       comment: "Customer identifier — Row-Level Security MUST restrict to the logged-in customer"
@@ -351,7 +351,7 @@ AS $$
     - name: policy
       source: "`0-ai-trust`.gold.dim_stage_action_policy"
       on: "policy.stage = source.current_stage AND policy.pending_action_party = source.pending_action_party AND current_date() >= policy.effective_from AND (policy.effective_to IS NULL OR current_date() <= policy.effective_to)"
-  dimensions:
+  fields:
     - name: Application ID
       expr: source.application_id
       comment: "Filter to a specific application to retrieve the next action for the customer — C13"
